@@ -7,3 +7,4 @@ i am assuming je notun project banaile oitar shbkichu always saved thakbe
 
 collaborator
 
+ pnpm dlx shadcn@latest add skeleton

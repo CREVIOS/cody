@@ -1,17 +1,15 @@
 "use client";
 
-// NavigationWrapper.tsx
 import { useState } from "react";
 import EntryPageComponent from "@/components/Entrypage";
 import ProjectPromptComponent from "@/components/ProjectPrompt";
 import LayoutComponent from "@/components/Layout";
 
-// This is a navigation controller component that doesn't use hooks in conditional logic
 export default function NavigationWrapper() {
   const [currentView, setCurrentView] = useState("entry");
   const [projectName, setProjectName] = useState("");
+  const [showTerminal, setShowTerminal] = useState(false); // ✅ NEW
 
-  // Functions to pass down to child components
   const goToPrompt = () => setCurrentView("prompt");
   const goToEntry = () => setCurrentView("entry");
   const goToLayout = (name: string) => {
@@ -19,12 +17,18 @@ export default function NavigationWrapper() {
     setCurrentView("layout");
   };
 
-  // Render the appropriate component based on currentView
   switch (currentView) {
     case "prompt":
       return <ProjectPromptComponent onCancel={goToEntry} onSubmit={goToLayout} />;
     case "layout":
-      return <LayoutComponent projectName={projectName} onHome={goToEntry} />;
+      return (
+        <LayoutComponent
+          projectName={projectName}
+          onHome={goToEntry}
+          onTerminalClick={() => setShowTerminal((prev) => !prev)} // ✅ pass handler
+          showTerminal={showTerminal} // ✅ pass toggle state
+        />
+      );
     case "entry":
     default:
       return <EntryPageComponent onNewProject={goToPrompt} />;

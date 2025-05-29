@@ -36,6 +36,17 @@ function EntryPage({ onNewProject }) {
     ]);
     const [menuOpen, setMenuOpen] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const menuRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(null);
+    const [loading, setLoading] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(true);
+    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "EntryPage.useEffect": ()=>{
+            const timer = setTimeout({
+                "EntryPage.useEffect.timer": ()=>setLoading(false)
+            }["EntryPage.useEffect.timer"], 1500); // simulate 1.5s delay
+            return ({
+                "EntryPage.useEffect": ()=>clearTimeout(timer)
+            })["EntryPage.useEffect"];
+        }
+    }["EntryPage.useEffect"], []);
     // Close dropdown on outside click
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "EntryPage.useEffect": ()=>{
@@ -78,12 +89,12 @@ function EntryPage({ onNewProject }) {
                                 clipRule: "evenodd"
                             }, void 0, false, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 89,
+                                lineNumber: 97,
                                 columnNumber: 15
                             }, this)
                         }, void 0, false, {
                             fileName: "[project]/app/components/Entrypage.tsx",
-                            lineNumber: 88,
+                            lineNumber: 96,
                             columnNumber: 13
                         }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("svg", {
                             className: "w-5 h-5",
@@ -93,17 +104,17 @@ function EntryPage({ onNewProject }) {
                                 d: "M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"
                             }, void 0, false, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 93,
+                                lineNumber: 105,
                                 columnNumber: 15
                             }, this)
                         }, void 0, false, {
                             fileName: "[project]/app/components/Entrypage.tsx",
-                            lineNumber: 92,
+                            lineNumber: 104,
                             columnNumber: 13
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/app/components/Entrypage.tsx",
-                        lineNumber: 80,
+                        lineNumber: 86,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -121,17 +132,17 @@ function EntryPage({ onNewProject }) {
                                 d: "M5.121 17.804A4 4 0 017 17h10a4 4 0 011.879.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"
                             }, void 0, false, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 109,
+                                lineNumber: 121,
                                 columnNumber: 13
                             }, this)
                         }, void 0, false, {
                             fileName: "[project]/app/components/Entrypage.tsx",
-                            lineNumber: 102,
+                            lineNumber: 114,
                             columnNumber: 11
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/app/components/Entrypage.tsx",
-                        lineNumber: 98,
+                        lineNumber: 110,
                         columnNumber: 9
                     }, this),
                     menuOpen && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -148,7 +159,7 @@ function EntryPage({ onNewProject }) {
                                     children: "Profile"
                                 }, void 0, false, {
                                     fileName: "[project]/app/components/Entrypage.tsx",
-                                    lineNumber: 129,
+                                    lineNumber: 143,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("li", {
@@ -156,7 +167,7 @@ function EntryPage({ onNewProject }) {
                                     children: "Settings"
                                 }, void 0, false, {
                                     fileName: "[project]/app/components/Entrypage.tsx",
-                                    lineNumber: 130,
+                                    lineNumber: 146,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("li", {
@@ -164,24 +175,24 @@ function EntryPage({ onNewProject }) {
                                     children: "Log out"
                                 }, void 0, false, {
                                     fileName: "[project]/app/components/Entrypage.tsx",
-                                    lineNumber: 131,
+                                    lineNumber: 149,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/components/Entrypage.tsx",
-                            lineNumber: 128,
+                            lineNumber: 142,
                             columnNumber: 13
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/app/components/Entrypage.tsx",
-                        lineNumber: 119,
+                        lineNumber: 131,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/components/Entrypage.tsx",
-                lineNumber: 78,
+                lineNumber: 84,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -193,7 +204,7 @@ function EntryPage({ onNewProject }) {
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
                                 className: `text-5xl font-bold mb-8 transition-colors ${theme === "dark" ? "text-[#E0E0E0]" : "text-[#2D2D2D]"}`,
                                 style: {
-                                    textShadow: theme === "dark" ? "0 0 15px rgba(139, 92, 246, 0.8), 0 0 30px rgba(139, 92, 246, 0.4)" : "0 0 15px rgba(79, 70, 229, 0.6), 0 0 30px rgba(79, 70, 229, 0.3)"
+                                    textShadow: theme === "dark" ? "0 0 15px rgba(139, 92, 246, 0.8), 0 0 30px rgba(139, 92, 246, 0.4)" : "0 0 15px rgba(232, 232, 239, 0.6), 0 0 30px rgba(228, 227, 237, 0.3)"
                                 },
                                 children: [
                                     "Welcome back, ",
@@ -201,7 +212,7 @@ function EntryPage({ onNewProject }) {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 143,
+                                lineNumber: 167,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -219,25 +230,25 @@ function EntryPage({ onNewProject }) {
                                             clipRule: "evenodd"
                                         }, void 0, false, {
                                             fileName: "[project]/app/components/Entrypage.tsx",
-                                            lineNumber: 166,
+                                            lineNumber: 190,
                                             columnNumber: 15
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/app/components/Entrypage.tsx",
-                                        lineNumber: 160,
+                                        lineNumber: 184,
                                         columnNumber: 13
                                     }, this),
                                     "Create New Project"
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 156,
+                                lineNumber: 180,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/components/Entrypage.tsx",
-                        lineNumber: 142,
+                        lineNumber: 166,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -246,56 +257,71 @@ function EntryPage({ onNewProject }) {
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
                                 className: "text-xl font-semibold mb-3 mx-auto",
                                 style: {
-                                    textShadow: theme === "dark" ? "0 0 10px rgba(139, 92, 246, 0.8), 0 0 20px rgba(139, 92, 246, 0.4)" : "0 0 10px rgba(79, 70, 229, 0.6), 0 0 20px rgba(79, 70, 229, 0.3)"
+                                    textShadow: theme === "dark" ? "0 0 10px rgba(139, 92, 246, 0.8), 0 0 20px rgba(139, 92, 246, 0.4)" : "0 0 10px rgba(240, 239, 248, 0.6), 0 0 20px rgba(241, 240, 245, 0.3)"
                                 },
                                 children: "Your Projects"
                             }, void 0, false, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 178,
+                                lineNumber: 202,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 className: `w-full ${cardBgClass} rounded-xl shadow-lg p-6 overflow-y-auto max-h-[70vh] border ${borderClass}`,
-                                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("ul", {
+                                children: loading ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    className: "space-y-4 animate-pulse h-[65vh] overflow-hidden",
+                                    children: [
+                                        ...Array(10)
+                                    ].map((_, idx)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            className: "h-12 rounded-lg bg-gray-300 dark:bg-gray-700 w-full"
+                                        }, idx, false, {
+                                            fileName: "[project]/app/components/Entrypage.tsx",
+                                            lineNumber: 219,
+                                            columnNumber: 19
+                                        }, this))
+                                }, void 0, false, {
+                                    fileName: "[project]/app/components/Entrypage.tsx",
+                                    lineNumber: 217,
+                                    columnNumber: 15
+                                }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("ul", {
                                     className: "space-y-2",
                                     children: projects.map((project, index)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("li", {
                                             className: `p-3 rounded-lg ${projectItemClass} transition-colors cursor-pointer`,
                                             children: project
                                         }, index, false, {
                                             fileName: "[project]/app/components/Entrypage.tsx",
-                                            lineNumber: 194,
-                                            columnNumber: 17
+                                            lineNumber: 228,
+                                            columnNumber: 19
                                         }, this))
                                 }, void 0, false, {
                                     fileName: "[project]/app/components/Entrypage.tsx",
-                                    lineNumber: 192,
-                                    columnNumber: 13
+                                    lineNumber: 226,
+                                    columnNumber: 15
                                 }, this)
                             }, void 0, false, {
                                 fileName: "[project]/app/components/Entrypage.tsx",
-                                lineNumber: 189,
+                                lineNumber: 213,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/components/Entrypage.tsx",
-                        lineNumber: 177,
+                        lineNumber: 201,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/components/Entrypage.tsx",
-                lineNumber: 140,
+                lineNumber: 164,
                 columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/components/Entrypage.tsx",
-        lineNumber: 76,
+        lineNumber: 82,
         columnNumber: 5
     }, this);
 }
-_s(EntryPage, "JE9NddOIsMGy+ohQxHJXdGuDUpU=", false, function() {
+_s(EntryPage, "kTc/KxG4TCC21fIvBVlurtA7pXk=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$app$2f$context$2f$ThemeContext$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useTheme"]
     ];

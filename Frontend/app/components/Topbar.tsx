@@ -16,25 +16,30 @@ interface TopbarProps {
   language: string;
   setLanguage: (lang: string) => void;
   onCollaboratorsClick: () => void;
+  onTerminalClick: () => void; // ✅ new prop
 }
 
-export default function Topbar({ language, setLanguage, onCollaboratorsClick }: TopbarProps) {
+export default function Topbar({
+  language,
+  setLanguage,
+  onCollaboratorsClick,
+  onTerminalClick,
+}: TopbarProps) {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
-  
-  // Updated button colors for professional themes
+
   const runButtonClass = isDark
-    ? "bg-[#4D4D7F] hover:bg-[#3F3F6A] text-white"  // Matte dark blue for dark mode
-    : "bg-[#A78BFA] hover:bg-[#8B5CF6] text-white"; // Lavender for light mode
-    
+    ? "bg-[#4D4D7F] hover:bg-[#3F3F6A] text-white"
+    : "bg-[#A78BFA] hover:bg-[#8B5CF6] text-white";
+
   const selectClass = isDark
     ? "bg-[#212124] text-[#E0E0E0] border border-[#2A2A2E]"
     : "bg-[#F0F0F0] text-[#2D2D2D] border border-[#D1D1CC]";
-    
+
   const themeToggleClass = isDark
-    ? "bg-[#2A2A2E]" 
+    ? "bg-[#2A2A2E]"
     : "bg-[#D1D1CC]";
-    
+
   const thumbClass = isDark
     ? "translate-x-7 bg-[#4A6B82] text-white"
     : "translate-x-1 bg-white text-[#AD6800]";
@@ -59,8 +64,17 @@ export default function Topbar({ language, setLanguage, onCollaboratorsClick }: 
         </select>
       </div>
 
-      {/* Right: Theme Toggle + Collaborators */}
+      {/* Right: Terminal + Theme Toggle + Collaborators */}
       <div className="flex items-center space-x-6">
+        {/* ✅ Terminal Button */}
+        <button
+          onClick={onTerminalClick}
+          className={`px-4 py-2 ${runButtonClass} rounded`}
+        >
+          Terminal
+        </button>
+
+        {/* Theme Toggle */}
         <div className="flex items-center space-x-2">
           <span className="text-sm">{isDark ? "Dark" : "Light"} Mode</span>
           <button
@@ -74,7 +88,7 @@ export default function Topbar({ language, setLanguage, onCollaboratorsClick }: 
             </span>
           </button>
         </div>
-        
+
         <button
           onClick={onCollaboratorsClick}
           className={`px-4 py-2 ${runButtonClass} rounded`}
