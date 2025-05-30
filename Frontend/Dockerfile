@@ -1,0 +1,28 @@
+# Dockerfile.nextjs
+FROM node:20-alpine AS base
+
+WORKDIR /app
+
+# Install pnpm and set up environment
+RUN npm install -g pnpm
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="${PNPM_HOME}:${PATH}"
+ENV SHELL="/bin/sh"
+
+# Install dependencies
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install
+
+# Copy source code
+COPY . .
+
+# Build for production
+RUN pnpm build
+
+# Development mode
+EXPOSE 3000
+ENV PORT 3000
+ENV HOSTNAME "0.0.0.0"
+
+# Use development command by default
+CMD ["pnpm", "run", "start"]

@@ -2,6 +2,7 @@
   "name": "editor",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@8.15.4",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
