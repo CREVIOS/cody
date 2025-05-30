@@ -61,7 +61,10 @@ export default function Terminal({ onClose }: TerminalProps) {
     if (input === "clear") {
       setHistory([]);
     } else {
-      wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(input);
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+  wsRef.current.send(input);
+}
+
     }
 
     setCurrentInput("");

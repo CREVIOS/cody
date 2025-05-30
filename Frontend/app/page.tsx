@@ -32,9 +32,12 @@ export default function Home() {
   
   if (currentView === "layout") {
     return <Layout 
-      projectName={projectName} 
-      onHome={goToEntry} 
-    />;
+  projectName={projectName} 
+  onHome={goToEntry}
+  onTerminalClick={() => { /* some function here */ }}
+  showTerminal={false} // or true, depending on your logic
+/>;
+
   }
 
   // Default to entry page

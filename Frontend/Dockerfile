@@ -1,28 +1,31 @@
-# Dockerfile.nextjs
-FROM node:20-alpine AS base
+# Use the official lightweight Node.js image
+FROM node:20-alpine
 
+# Set working directory
 WORKDIR /app
 
-# Install pnpm and set up environment
-RUN npm install -g pnpm
-ENV PNPM_HOME="/root/.local/share/pnpm"
-ENV PATH="${PNPM_HOME}:${PATH}"
-ENV SHELL="/bin/sh"
+# Install the matching version of pnpm
+RUN npm install -g pnpm@9.15.4
 
-# Install dependencies
+# Copy only dependency files first (for caching)
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install
 
-# Copy source code
+# Install dependencies (strict lockfile match)
+RUN pnpm install --frozen-lockfile
+
+# Copy the rest of the source code
 COPY . .
 
-# Build for production
+# Build the Next.js app
 RUN pnpm build
 
-# Development mode
+# Expose app port
 EXPOSE 3000
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
 
-# Use development command by default
-CMD ["pnpm", "run", "start"]
+# Set environment variables
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Start the production server
+CMD ["pnpm", "start"]

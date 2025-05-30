@@ -1,6 +1,6 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
-import { useEffect, useState } from "react";
+
 
 export default function Collaborators() {
   const { theme } = useTheme();
