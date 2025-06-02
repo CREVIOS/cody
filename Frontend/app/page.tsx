@@ -41,5 +41,5 @@ export default function Home() {
   }
 
   // Default to entry page
-  return <EntryPage onNewProject={goToPrompt} />;
+  return <EntryPage onNewProject={goToPrompt} onOpenProject={goToLayout} />;
 }

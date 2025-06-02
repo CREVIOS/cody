@@ -5,30 +5,62 @@ import { useTheme } from "@/context/ThemeContext";
 import { useRef } from "react";
 import { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { listProjects, deleteProject, Project } from "@/lib/projectApi";
 
 interface EntryPageProps {
   onNewProject: () => void;
+  onOpenProject: (projectId: string) => void;
 }
 
-export default function EntryPage({ onNewProject }: EntryPageProps) {
+export default function EntryPage({ onNewProject, onOpenProject }: EntryPageProps) {
   const { theme, toggleTheme } = useTheme();
   const name = "Moumita"; // Replace with dynamic value
-  const [projects] = useState([
-    "Project Alpha",
-    "Beta Testing",
-    "Gamma UI Revamp",
-    "Delta Refactor",
-    "Echo Prototype",
-    "Figma Redesign",
-    "GraphQL Migration",
-    "HTTP Logger Tool",
-    "Internal Dashboard",
-    "JSON Formatter",
-  ]);
-
+  const [projects, setProjects] = useState<Project[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; projectId: string | null }>({
+    show: false,
+    projectId: null
+  });
+  // Load projects on component mount
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const projectList = await listProjects();
+        setProjects(projectList);
+      } catch (err) {
+        console.error('Failed to load projects:', err);
+        setError('Failed to load projects');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProjects();
+  }, []);
+
+  // Handle project deletion
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      setLoading(true);
+      await deleteProject(projectId);
+      // Reload projects after deletion
+      const projectList = await listProjects();
+      setProjects(projectList);
+      setDeleteConfirm({ show: false, projectId: null });
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+      setError('Failed to delete project');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Simulate loading delay
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 1500); // simulate 1.5s delay
     return () => clearTimeout(timer);
@@ -230,7 +262,7 @@ export default function EntryPage({ onNewProject }: EntryPageProps) {
           >
             {loading ? (
               <ul className="space-y-2">
-                {[...Array(10)].map((_, index) => (
+                {[...Array(5)].map((_, index) => (
                   <li
                     key={index}
                     className={`flex items-center gap-4 p-4 rounded-full ${projectItemClass}`}
@@ -240,12 +272,33 @@ export default function EntryPage({ onNewProject }: EntryPageProps) {
                   </li>
                 ))}
               </ul>
+            ) : error ? (
+              <div className="text-center py-8">
+                <p className="text-red-500 mb-4">{error}</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className={`px-4 py-2 ${buttonClass} rounded-lg text-sm`}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : projects.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p className="mb-4">No projects found</p>
+                <button
+                  onClick={onNewProject}
+                  className={`px-4 py-2 ${buttonClass} rounded-lg text-sm`}
+                >
+                  Create Your First Project
+                </button>
+              </div>
             ) : (
               <ul className="space-y-2">
                 {projects.map((project, index) => (
                   <li
-                    key={index}
-                    className={`flex items-center gap-4 p-4 rounded-full ${projectItemClass} transition-colors cursor-pointer`}
+                    key={project.id}
+                    className={`flex items-center gap-4 p-4 rounded-full ${projectItemClass} transition-colors cursor-pointer group`}
+                    onClick={() => onOpenProject(project.id)}
                   >
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
@@ -256,7 +309,28 @@ export default function EntryPage({ onNewProject }: EntryPageProps) {
                     >
                       {index + 1}
                     </div>
-                    <span className="truncate">{project}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="truncate block font-medium">{project.name}</span>
+                      <span className="text-xs opacity-70">
+                        Last modified: {project.lastModified.toLocaleDateString()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteConfirm({ show: true, projectId: project.id });
+                      }}
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-full ${
+                        theme === "dark" 
+                          ? "hover:bg-red-900/30 text-red-400" 
+                          : "hover:bg-red-100 text-red-600"
+                      }`}
+                      title="Delete project"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -264,6 +338,34 @@ export default function EntryPage({ onNewProject }: EntryPageProps) {
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm.show && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className={`${cardBgClass} p-6 rounded-xl shadow-xl border ${borderClass} max-w-md w-full mx-4`}>
+            <h3 className="text-lg font-semibold mb-4">Delete Project</h3>
+            <p className="mb-6 opacity-80">
+              Are you sure you want to delete this project? This action cannot be undone and will permanently remove all files and folders.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteConfirm({ show: false, projectId: null })}
+                className={`px-4 py-2 rounded-lg border ${borderClass} ${
+                  theme === "dark" ? "hover:bg-[#3A3A3E]" : "hover:bg-gray-100"
+                } transition-colors`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteConfirm.projectId && handleDeleteProject(deleteConfirm.projectId)}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
