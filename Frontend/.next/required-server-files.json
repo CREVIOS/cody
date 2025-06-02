@@ -97,7 +97,7 @@
         "transform": "lodash/{{member}}"
       }
     },
-    "outputFileTracingRoot": "/Users/tazkia/Documents/GitHub/cody/Frontend",
+    "outputFileTracingRoot": "/Users/turjo/Desktop/cody/Frontend",
     "experimental": {
       "nodeMiddleware": false,
       "cacheLife": {
@@ -280,10 +280,10 @@
     "bundlePagesRouterDependencies": false,
     "configFileName": "next.config.js",
     "turbopack": {
-      "root": "/Users/tazkia/Documents/GitHub/cody/Frontend"
+      "root": "/Users/turjo/Desktop/cody/Frontend"
     }
   },
-  "appDir": "/Users/tazkia/Documents/GitHub/cody/Frontend",
+  "appDir": "/Users/turjo/Desktop/cody/Frontend",
   "relativeAppDir": "",
   "files": [
     ".next/routes-manifest.json",
@@ -305,6 +305,6 @@
     ".next/server/next-font-manifest.json"
   ],
   "ignore": [
-    "node_modules/.pnpm/next@15.3.1_react-dom@19.1.0_react@19.1.0/node_modules/next/dist/compiled/@ampproject/toolbox-optimizer/**/*"
+    "node_modules/next/dist/compiled/@ampproject/toolbox-optimizer/**/*"
   ]
 }

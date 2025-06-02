@@ -17,6 +17,13 @@ export default function NavigationWrapper() {
     setCurrentView("layout");
   };
 
+  const handleOpenProject = (projectId: string) => {
+    // For now, use the projectId as the project name
+    // In a real app, you'd fetch the project details from an API
+    setProjectName(`Project ${projectId}`);
+    setCurrentView("layout");
+  };
+
   switch (currentView) {
     case "prompt":
       return <ProjectPromptComponent onCancel={goToEntry} onSubmit={goToLayout} />;
@@ -31,6 +38,6 @@ export default function NavigationWrapper() {
       );
     case "entry":
     default:
-      return <EntryPageComponent onNewProject={goToPrompt} />;
+      return <EntryPageComponent onNewProject={goToPrompt} onOpenProject={handleOpenProject} />;
   }
 }
