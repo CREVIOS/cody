@@ -22,12 +22,12 @@ class FileSystemService {
       const bucketExists = await this.minioClient.bucketExists(this.bucketName);
       if (!bucketExists) {
         await this.minioClient.makeBucket(this.bucketName, 'us-east-1');
-        console.log(`✅ Bucket '${this.bucketName}' created successfully`);
+        console.log(`Bucket '${this.bucketName}' created successfully`);
       } else {
-        console.log(`✅ Bucket '${this.bucketName}' already exists`);
+        console.log(`Bucket '${this.bucketName}' already exists`);
       }
     } catch (error) {
-      console.error('❌ Error initializing bucket:', error);
+      console.error('Error initializing bucket:', error);
     }
   }
 
