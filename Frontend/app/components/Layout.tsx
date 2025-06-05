@@ -3,11 +3,15 @@
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import { FileSystemProvider } from "@/context/FileSystemContext";
+import { Bell, UserPlus  } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import FileSystemEditor from "@/components/FileSystemEditor";
 import Collaborators from "@/components/Collaborators";
 import Terminal from "@/components/Terminal";
+import NotificationModal from "@/components/NotificationModal";
+import InviteModal from "@/components/InviteModal";
+
 
 interface LayoutProps {
   projectName: string;
@@ -23,11 +27,19 @@ export default function Layout({
   const { theme } = useTheme();
   const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [currentProjectName, setCurrentProjectName] = useState(projectName);
   const collaboratorsRef = useRef<HTMLDivElement | null>(null);
   const projectNameInputRef = useRef<HTMLInputElement | null>(null);
+
+
+  // Permission to invite users (condition will be decided later)
+  const canInviteUsers = true;
+
+
 
   const backgroundClass =
     theme === "dark"
@@ -72,6 +84,27 @@ export default function Layout({
       setCurrentProjectName(projectName);
     }
   };
+
+  // Handle notification actions
+  const handleAcceptInvitation = (invitationId: string) => {
+    // You can implement the actual logic here
+    console.log(`Accepted invitation: ${invitationId}`);
+    // For example, you might want to close the modal after accepting
+    // setShowNotifications(false);
+  };
+
+
+  // Handle invite modal actions
+  const handleSendInvitation = (email: string, role: string) => {
+    // You can implement the actual logic here
+    console.log(`Sent invitation to ${email} with role ${role} for project ${currentProjectName}`);
+  };
+
+  const handleCancelInvitation = (invitationId: string) => {
+    // You can implement the actual logic here
+    console.log(`Cancelled invitation: ${invitationId}`);
+  };
+
 
   // Simple drag implementation
   const handleDragMouseDown = (e: React.MouseEvent) => {
@@ -119,7 +152,7 @@ export default function Layout({
       >
         {/* Sidebar with project name */}
         <div className={`row-span-2  border-r flex flex-col ${borderClass}`}>
-          {/* Home icon */}
+          {/* Home icon, Notification, Invite icon */}
           <div className={`p-2 border-b flex items-center ${borderClass}`}>
             <button
               onClick={onHome}
@@ -146,6 +179,43 @@ export default function Layout({
                 Back to Home
               </div>
             </button>
+
+
+            {/* Notification Icon */}
+            <button
+              onClick={() => setShowNotifications(true)}
+              className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative ml-2`}
+              title="Notifications"
+            >
+              <Bell className="w-4 h-4" />
+              
+              {/* Notification badge - you can conditionally show this based on unread notifications */}
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
+                <span className="text-[10px] text-white font-bold">3</span>
+              </div>
+
+              {/* Tooltip */}
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                Notifications
+              </div>
+            </button>
+
+            {/* Invite Users Icon - Only show if user has permission */}
+            {canInviteUsers && (
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative ml-2`}
+                title="Invite Users"
+              >
+                <UserPlus className="w-4 h-4" />
+
+                {/* Tooltip */}
+                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                  Invite Users
+                </div>
+              </button>
+            )}
+            
             <div className="flex-1"></div> {/* Empty space */}
           </div>
 
@@ -170,12 +240,7 @@ export default function Layout({
               >
                 <h2
                   className="text-base font-medium truncate"
-                  style={{
-                    textShadow:
-                      theme === "dark"
-                        ? "0 0 8px rgba(139, 92, 246, 0.4)"
-                        : "0 0 8px rgba(79, 70, 229, 0.3)",
-                  }}
+                  
                 >
                   {currentProjectName}
                 </h2>
@@ -308,6 +373,23 @@ export default function Layout({
             </div>
           )}
         </div>
+
+        {/* Notification Modal */}
+        <NotificationModal
+          isOpen={showNotifications}
+          onClose={() => setShowNotifications(false)}
+          onAcceptInvitation={handleAcceptInvitation}
+        />
+
+        {/* Invite Modal */}
+        <InviteModal
+          isOpen={showInviteModal}
+          onClose={() => setShowInviteModal(false)}
+          projectName={currentProjectName}
+          onSendInvitation={handleSendInvitation}
+          onCancelInvitation={handleCancelInvitation}
+        />
+
       </div>
     </FileSystemProvider>
   );
