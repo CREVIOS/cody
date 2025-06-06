@@ -5,6 +5,7 @@ from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
+import models
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -96,3 +97,67 @@ async def delete_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+        
+
+
+
+@router.get("/{user_id}/all-projects", response_model=schemas.UserProjectsResponse)
+async def get_user_all_projects(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all projects where user is owner or member"""
+    # Verify user exists
+    user = await crud.crud_user.get(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Get owned projects
+    owned_projects = await crud.crud_project.get_by_owner(db, owner_id=user_id)
+    
+    # Get projects where user is a member
+    from sqlalchemy import select, and_
+    from sqlalchemy.orm import selectinload
+    
+    # Query for member projects
+    result = await db.execute(
+        select(models.Project)
+        .join(models.ProjectMember, models.Project.project_id == models.ProjectMember.project_id)
+        .join(models.Role, models.ProjectMember.role_id == models.Role.role_id)
+        .where(
+            and_(
+                models.ProjectMember.user_id == user_id,
+                models.ProjectMember.is_active == True,
+                models.Project.is_active == True,
+                models.Project.owner_id != user_id  # Exclude owned projects
+            )
+        )
+        .options(
+            selectinload(models.Project.owner),
+            selectinload(models.Project.members).selectinload(models.ProjectMember.role)
+        )
+    )
+    member_projects = result.scalars().all()
+    
+    # Get member roles
+    member_projects_with_roles = []
+    for project in member_projects:
+        # Find this user's role in the project
+        user_member = next(
+            (m for m in project.members if m.user_id == user_id),
+            None
+        )
+        if user_member:
+            member_projects_with_roles.append({
+                "project": project,
+                "role": user_member.role.role_name
+            })
+    
+    return schemas.UserProjectsResponse(
+        user=user,
+        owned_projects=owned_projects,
+        member_projects=member_projects_with_roles
+    )

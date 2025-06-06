@@ -3,31 +3,31 @@
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import { FileSystemProvider } from "@/context/FileSystemContext";
-import { Bell, UserPlus  } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import FileSystemEditor from "@/components/FileSystemEditor";
 import Collaborators from "@/components/Collaborators";
 import Terminal from "@/components/Terminal";
-import NotificationModal from "@/components/NotificationModal";
 import InviteModal from "@/components/InviteModal";
-
 
 interface LayoutProps {
   projectName: string;
+  projectId?: string;
   onHome: () => void;
   onTerminalClick: () => void;
   showTerminal: boolean;
+  onExport: () => void;
 }
 
 export default function Layout({
   projectName = "Untitled Project",
+  projectId,
   onHome,
 }: LayoutProps) {
   const { theme } = useTheme();
   const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -35,27 +35,13 @@ export default function Layout({
   const collaboratorsRef = useRef<HTMLDivElement | null>(null);
   const projectNameInputRef = useRef<HTMLInputElement | null>(null);
 
-
   // Permission to invite users (condition will be decided later)
   const canInviteUsers = true;
 
-
-
-  const backgroundClass =
-    theme === "dark"
-      ? "bg-[#212124] text-[#E0E0E0]"
-      : "bg-[#F5F5F0] text-[#2D2D2D]";
-
-  const borderClass =
-    theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
-
-  const inputClass =
-    theme === "dark"
-      ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]"
-      : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
-
-  const iconHoverClass =
-    theme === "dark" ? "hover:bg-[#3A3A3E]" : "hover:bg-gray-200";
+  const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
+  const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
+  const inputClass = theme === "dark" ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]" : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
+  const iconHoverClass = theme === "dark" ? "hover:bg-[#3A3A3E]" : "hover:bg-gray-200";
 
   // Focus input when editing starts
   const [showTerminal, setShowTerminal] = useState(false);
@@ -85,15 +71,6 @@ export default function Layout({
     }
   };
 
-  // Handle notification actions
-  const handleAcceptInvitation = (invitationId: string) => {
-    // You can implement the actual logic here
-    console.log(`Accepted invitation: ${invitationId}`);
-    // For example, you might want to close the modal after accepting
-    // setShowNotifications(false);
-  };
-
-
   // Handle invite modal actions
   const handleSendInvitation = (email: string, role: string) => {
     // You can implement the actual logic here
@@ -104,7 +81,6 @@ export default function Layout({
     // You can implement the actual logic here
     console.log(`Cancelled invitation: ${invitationId}`);
   };
-
 
   // Simple drag implementation
   const handleDragMouseDown = (e: React.MouseEvent) => {
@@ -146,57 +122,24 @@ export default function Layout({
   };
 
   return (
-    <FileSystemProvider projectId={currentProjectName}>
-      <div
-        className={`h-screen w-screen grid grid-cols-[250px_1fr] grid-rows-[60px_1fr] ${backgroundClass}`}
-      >
+    <FileSystemProvider projectId={projectId || currentProjectName}>
+      <div className={`h-screen w-screen grid grid-cols-[250px_1fr] grid-rows-[60px_1fr] ${backgroundClass}`}>
         {/* Sidebar with project name */}
-        <div className={`row-span-2  border-r flex flex-col ${borderClass}`}>
-          {/* Home icon, Notification, Invite icon */}
+        <div className={`row-span-2 border-r flex flex-col ${borderClass}`}>
+          {/* Home icon and Invite icon */}
           <div className={`p-2 border-b flex items-center ${borderClass}`}>
             <button
               onClick={onHome}
               className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative`}
               title="Back to Home"
             >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
-                ></path>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
               </svg>
 
               {/* Tooltip */}
               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 Back to Home
-              </div>
-            </button>
-
-
-            {/* Notification Icon */}
-            <button
-              onClick={() => setShowNotifications(true)}
-              className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative ml-2`}
-              title="Notifications"
-            >
-              <Bell className="w-4 h-4" />
-              
-              {/* Notification badge - you can conditionally show this based on unread notifications */}
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
-                <span className="text-[10px] text-white font-bold">3</span>
-              </div>
-
-              {/* Tooltip */}
-              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                Notifications
               </div>
             </button>
 
@@ -374,13 +317,6 @@ export default function Layout({
           )}
         </div>
 
-        {/* Notification Modal */}
-        <NotificationModal
-          isOpen={showNotifications}
-          onClose={() => setShowNotifications(false)}
-          onAcceptInvitation={handleAcceptInvitation}
-        />
-
         {/* Invite Modal */}
         <InviteModal
           isOpen={showInviteModal}
@@ -389,7 +325,6 @@ export default function Layout({
           onSendInvitation={handleSendInvitation}
           onCancelInvitation={handleCancelInvitation}
         />
-
       </div>
     </FileSystemProvider>
   );

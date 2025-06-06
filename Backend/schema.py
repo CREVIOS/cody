@@ -250,3 +250,13 @@ class Notification(NotificationBase):
     class Config:
         from_attributes = True
 
+
+
+class ProjectWithRole(BaseSchema):
+    project: Project
+    role: str
+
+class UserProjectsResponse(BaseSchema):
+    user: User
+    owned_projects: List[Project]
+    member_projects: List[ProjectWithRole]
