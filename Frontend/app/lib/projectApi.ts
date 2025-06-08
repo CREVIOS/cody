@@ -1,5 +1,5 @@
 // Project management API functions
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface Project {
   id: string;
@@ -92,6 +92,72 @@ export const initializeProject = async (projectId: string): Promise<void> => {
     }
   } catch (error) {
     console.error('Error initializing project:', error);
+    throw error;
+  }
+};
+
+// Project management API functions
+
+export interface User {
+  user_id: string;
+  username: string;
+  email: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface Project {
+  project_id: string;
+  project_name: string;
+  description: string | null;
+  owner_id: string;
+  created_at: string;
+  modified_at: string | null;
+  is_active: boolean;
+}
+
+export interface ProjectWithRole {
+  project: Project;
+  role: string;
+}
+
+export interface UserProjectsResponse {
+  owned_projects: Project[];
+  member_projects: ProjectWithRole[];
+}
+
+// List all users
+export const listUsers = async (): Promise<User[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/users`);
+    const data = await response.json();
+    
+    if (response.ok && data.items) {
+      return data.items;
+    } else {
+      throw new Error(data.detail || 'Failed to fetch users');
+    }
+  } catch (error) {
+    console.error('Error listing users:', error);
+    throw error;
+  }
+};
+
+// Get user's all projects (owned and member)
+export const getUserProjects = async (userId: string): Promise<UserProjectsResponse> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/all-projects`);
+    const data = await response.json();
+    
+    if (response.ok) {
+      return data;
+    } else {
+      throw new Error(data.detail || 'Failed to fetch user projects');
+    }
+  } catch (error) {
+    console.error('Error fetching user projects:', error);
     throw error;
   }
 };
