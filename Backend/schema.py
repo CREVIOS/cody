@@ -112,6 +112,37 @@ class ProjectMember(ProjectMemberBase):
     last_activity: Optional[datetime] = None
     is_active: bool
 
+# Project Invitation Schemas
+class ProjectInvitationBase(BaseSchema):
+    project_id: UUID
+    email: EmailStr
+    role_id: UUID
+    user_id: Optional[UUID] = None
+
+class ProjectInvitationCreate(ProjectInvitationBase):
+    invited_by: UUID
+    expires_at: datetime
+    token: Optional[str] = None  # Will be auto-generated if not provided
+
+class ProjectInvitationUpdate(BaseSchema):
+    status: Optional[str] = None
+    user_id: Optional[UUID] = None
+    accepted_at: Optional[datetime] = None
+
+class ProjectInvitation(ProjectInvitationBase):
+    invitation_id: UUID
+    invited_by: UUID
+    token: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+    accepted_at: Optional[datetime] = None
+
+class ProjectInvitationWithDetails(ProjectInvitation):
+    project: Project
+    role: Role
+    inviter: User
+
 # File Type Schemas
 class FileTypeBase(BaseSchema):
     type_name: str
