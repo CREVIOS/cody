@@ -84,6 +84,7 @@ export default function Home() {
         onTerminalClick={() => {}}
         onExport={() => { /* some function here */ }}
         showTerminal={false}
+        user={selectedUser || undefined}
       />
     );
   }

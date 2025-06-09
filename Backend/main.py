@@ -9,7 +9,7 @@ from db import engine, Base
 from sqlalchemy import text
 
 # Import routers
-from routers import users, projects, roles, project_members, directories, file_types, files, file_versions, notifications
+from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -89,11 +89,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
+
 # Include routers
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")
 app.include_router(project_members.router, prefix="/api/v1")
+app.include_router(project_invitations.router, prefix="/api/v1")
 app.include_router(directories.router, prefix="/api/v1")
 app.include_router(file_types.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
@@ -115,7 +117,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=True,
         log_level="info"
     )

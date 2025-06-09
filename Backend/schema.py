@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator, Field
 from typing import Optional, List, Dict, Any, TypeVar, Generic, Union
 from datetime import datetime
 from uuid import UUID
@@ -250,7 +250,44 @@ class Notification(NotificationBase):
     class Config:
         from_attributes = True
 
+# Project Invitation Schemas
+class ProjectInvitationBase(BaseSchema):
+    project_id: UUID
+    email: EmailStr
+    role_id: UUID
+    user_id: Optional[UUID] = None
+    expires_at: Optional[datetime] = None
 
+class ProjectInvitationCreate(BaseSchema):
+    project_id: UUID
+    email: EmailStr
+    role_id: UUID
+    invited_by: UUID
+    user_id: Optional[UUID] = None
+    token: Optional[str] = Field(None, description="Auto-generated if not provided")
+    expires_at: Optional[datetime] = Field(None, description="Auto-generated if not provided")
+
+class ProjectInvitationUpdate(BaseSchema):
+    status: Optional[str] = None
+    user_id: Optional[UUID] = None
+    accepted_at: Optional[datetime] = None
+
+class ProjectInvitation(ProjectInvitationBase):
+    invitation_id: UUID
+    invited_by: UUID
+    token: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+    accepted_at: Optional[datetime] = None
+
+class ProjectInvitationWithDetails(ProjectInvitation):
+    project: Project
+    role: Role
+    inviter: User
+
+class AcceptInvitationRequest(BaseSchema):
+    user_id: UUID
 
 class ProjectWithRole(BaseSchema):
     project: Project
@@ -260,3 +297,10 @@ class UserProjectsResponse(BaseSchema):
     user: User
     owned_projects: List[Project]
     member_projects: List[ProjectWithRole]
+    
+    
+
+class AcceptInvitationRequest(BaseSchema):
+    user_id: UUID
+    
+
