@@ -78,8 +78,17 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         db_obj = self.model(**obj_data)
         db.add(db_obj)
         await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        
+        # Try to refresh the object, but if it fails, reload it from the database
+        try:
+            await db.refresh(db_obj)
+            return db_obj
+        except Exception:
+            # If refresh fails, reload the object from the database
+            id_field = self._get_id_field()
+            obj_id = getattr(db_obj, id_field)
+            refreshed_obj = await self.get(db, id=obj_id)
+            return refreshed_obj if refreshed_obj else db_obj
 
     async def update(
         self, 
@@ -94,8 +103,17 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         
         db.add(db_obj)
         await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        
+        # Try to refresh the object, but if it fails, reload it from the database
+        try:
+            await db.refresh(db_obj)
+            return db_obj
+        except Exception:
+            # If refresh fails, reload the object from the database
+            id_field = self._get_id_field()
+            obj_id = getattr(db_obj, id_field)
+            refreshed_obj = await self.get(db, id=obj_id)
+            return refreshed_obj if refreshed_obj else db_obj
 
     async def remove(self, db: AsyncSession, *, id: UUID) -> Optional[ModelType]:
         obj = await self.get(db, id)
@@ -147,6 +165,37 @@ class CRUDFileType(CRUDBase[models.FileType, schemas.FileTypeCreate, schemas.Fil
 class CRUDFileVersion(CRUDBase[models.FileVersion, schemas.FileVersionCreate, schemas.FileVersionUpdate]):
     pass
 
+<<<<<<< HEAD
+class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate]):
+    async def get_by_user(self, db: AsyncSession, *, user_id: UUID) -> List[models.ProjectMember]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.user_id == user_id)
+            .where(self.model.is_active == True)
+            .options(selectinload(self.model.project), selectinload(self.model.role))
+        )
+        return result.scalars().all()
+
+class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectInvitationCreate, schemas.ProjectInvitationUpdate]):
+    async def get_by_token(self, db: AsyncSession, *, token: str) -> Optional[models.ProjectInvitation]:
+        result = await db.execute(select(self.model).where(self.model.token == token))
+        return result.scalar_one_or_none()
+    
+    async def get_by_email_and_project(self, db: AsyncSession, *, email: str, project_id: UUID) -> Optional[models.ProjectInvitation]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.email == email)
+            .where(self.model.project_id == project_id)
+            .where(self.model.status == "pending")
+        )
+        return result.scalar_one_or_none()
+    
+    async def get_pending_by_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.email == email)
+            .where(self.model.status == "pending")
+=======
 class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectInvitationCreate, schemas.ProjectInvitationUpdate]):
     async def get_by_token(self, db: AsyncSession, *, token: str) -> Optional[models.ProjectInvitation]:
         result = await db.execute(
@@ -164,6 +213,7 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         result = await db.execute(
             select(self.model)
             .where(self.model.project_id == project_id)
+>>>>>>> main
             .options(
                 selectinload(self.model.project),
                 selectinload(self.model.role),
@@ -171,6 +221,20 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
             )
         )
         return result.scalars().all()
+<<<<<<< HEAD
+    
+    async def get_pending_by_email_with_details(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
+        """Get pending invitations with all related data (project, role, inviter) loaded"""
+        from datetime import datetime
+        
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.email == email)
+            .where(self.model.status == "pending")
+            .where(self.model.expires_at >= datetime.utcnow())  # Only non-expired
+            .options(
+                selectinload(self.model.project).selectinload(models.Project.owner),
+=======
 
     async def get_by_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
         result = await db.execute(
@@ -178,11 +242,16 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
             .where(self.model.email == email)
             .options(
                 selectinload(self.model.project),
+>>>>>>> main
                 selectinload(self.model.role),
                 selectinload(self.model.inviter)
             )
         )
         return result.scalars().all()
+<<<<<<< HEAD
+    
+    
+=======
 
     async def get_pending_for_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
         result = await db.execute(
@@ -217,17 +286,19 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         await db.refresh(db_obj)
         return db_obj
 
+>>>>>>> main
 # Create CRUD instances
 crud_user = CRUDUser(models.User)
 crud_project = CRUDProject(models.Project)
 crud_role = CRUDRole(models.Role)
-crud_project_member = CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate](models.ProjectMember)
+crud_project_member = CRUDProjectMember(models.ProjectMember)
 crud_file_type = CRUDFileType(models.FileType)
 crud_directory = CRUDBase[models.Directory, schemas.DirectoryCreate, schemas.DirectoryUpdate](models.Directory)
 crud_file = CRUDBase[models.File, schemas.FileCreate, schemas.FileUpdate](models.File)
 crud_file_version = CRUDFileVersion(models.FileVersion)
 crud_project_invitation = CRUDProjectInvitation(models.ProjectInvitation)
 crud_notification = CRUDBase[models.Notification, schemas.NotificationCreate, schemas.NotificationUpdate](models.Notification)
+crud_project_invitation = CRUDProjectInvitation(models.ProjectInvitation)
 
 # User CRUD functions
 async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:

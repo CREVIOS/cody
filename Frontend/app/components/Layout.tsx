@@ -10,6 +10,7 @@ import FileSystemEditor from "@/components/FileSystemEditor";
 import Collaborators from "@/components/Collaborators";
 import Terminal from "@/components/Terminal";
 import InviteModal from "@/components/InviteModal";
+import { User } from "@/lib/projectApi";
 
 interface LayoutProps {
   projectName: string;
@@ -18,12 +19,14 @@ interface LayoutProps {
   onTerminalClick: () => void;
   showTerminal: boolean;
   onExport: () => void;
+  user?: User;
 }
 
 export default function Layout({
   projectName = "Untitled Project",
   projectId,
   onHome,
+  user,
 }: LayoutProps) {
   const { theme } = useTheme();
   const [language, setLanguage] = useState("javascript");
@@ -143,8 +146,8 @@ export default function Layout({
               </div>
             </button>
 
-            {/* Invite Users Icon - Only show if user has permission */}
-            {canInviteUsers && (
+            {/* Invite Users Icon - Only show if user has permission and we have user data */}
+            {canInviteUsers && user && projectId && (
               <button
                 onClick={() => setShowInviteModal(true)}
                 className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative ml-2`}
@@ -318,13 +321,16 @@ export default function Layout({
         </div>
 
         {/* Invite Modal */}
-        <InviteModal
-          isOpen={showInviteModal}
-          onClose={() => setShowInviteModal(false)}
-          projectName={currentProjectName}
-          onSendInvitation={handleSendInvitation}
-          onCancelInvitation={handleCancelInvitation}
-        />
+        {user && projectId && (
+          <InviteModal
+            isOpen={showInviteModal}
+            onClose={() => setShowInviteModal(false)}
+            projectId={projectId}
+            projectName={currentProjectName}
+            currentUserId={user.user_id}
+            onInvitationSent={() => {}}
+          />
+        )}
       </div>
     </FileSystemProvider>
   );

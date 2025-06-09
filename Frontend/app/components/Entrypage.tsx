@@ -275,7 +275,12 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
       <NotificationModal
         isOpen={showNotifications}
         onClose={() => setShowNotifications(false)}
-        onAcceptInvitation={handleAcceptInvitation}
+        userEmail={user.email}
+        userId={user.user_id}
+        onInvitationAccepted={(projectId) => {
+          // Refresh projects when invitation is accepted
+          console.log('Invitation accepted for project:', projectId);
+        }}
       />
     </div>
   );

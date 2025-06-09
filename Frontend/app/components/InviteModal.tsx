@@ -1,141 +1,187 @@
 import { useState, useEffect } from "react";
 import { useTheme } from "@/context/ThemeContext";
-import { X, UserPlus, Mail, Users, Clock, Trash2 } from "lucide-react";
-
-interface Role {
-  id: string;
-  name: string;
-  label: string;
-}
-
-interface PendingInvitation {
-  id: string;
-  email: string;
-  roleId: string;
-  roleName: string;
-  invitedAt: string;
-  expiresAt: string;
-}
+import { X, UserPlus, Mail, Users, Clock, Trash2, Loader2, AlertCircle } from "lucide-react";
+import { 
+  createInvitation, 
+  getProjectInvitations, 
+  deleteInvitation, 
+  getRoles,
+  ProjectInvitation,
+  Role,
+  testBackendConnection
+} from "@/lib/projectApi";
 
 interface InviteModalProps {
   isOpen: boolean;
   onClose: () => void;
+  projectId: string;
   projectName: string;
-  onSendInvitation?: (email: string, role: string) => void;
-  onCancelInvitation?: (invitationId: string) => void;
-  pendingInvitations?: PendingInvitation[];
+  currentUserId: string;
+  onInvitationSent?: () => void;
 }
-
-const roleOptions: Role[] = [
-  { id: "role_001", name: "admin", label: "Admin" },
-  { id: "role_002", name: "editor", label: "Editor" },
-  { id: "role_003", name: "viewer", label: "Viewer" }
-];
-
-// Create a map for quick role lookup
-const roleMap = new Map(roleOptions.map(role => [role.id, role]));
-
-// Mock pending invitations for demonstration
-const mockPendingInvitations: PendingInvitation[] = [
-  {
-    id: "inv_001",
-    email: "alice@example.com",
-    roleId: "role_002",
-    roleName: "Editor",
-    invitedAt: "2024-06-03",
-    expiresAt: "2024-06-10"
-  },
-  {
-    id: "inv_002",
-    email: "bob@example.com",
-    roleId: "role_003",
-    roleName: "Viewer",
-    invitedAt: "2024-06-04",
-    expiresAt: "2024-06-11"
-  },
-  {
-    id: "inv_003",
-    email: "charlie@example.com",
-    roleId: "role_001",
-    roleName: "Admin",
-    invitedAt: "2024-06-05",
-    expiresAt: "2024-06-12"
-  }
-];
 
 export default function InviteModal({
   isOpen,
   onClose,
+  projectId,
   projectName,
-  onSendInvitation,
-  onCancelInvitation,
-  pendingInvitations = mockPendingInvitations
+  currentUserId,
+  onInvitationSent
 }: InviteModalProps) {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<"invite" | "pending">("invite");
   const [email, setEmail] = useState("");
-  const [selectedRoleId, setSelectedRoleId] = useState("role_002"); // Default to Editor
-  const [pendingList, setPendingList] = useState<PendingInvitation[]>(pendingInvitations);
+  const [selectedRoleId, setSelectedRoleId] = useState("");
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingInvitations, setLoadingInvitations] = useState(false);
+  const [sendingInvitation, setSendingInvitation] = useState(false);
+  const [deletingInvitations, setDeletingInvitations] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
 
-  // Sync pendingList with prop changes
+  // Fetch roles when modal opens
   useEffect(() => {
-    setPendingList(pendingInvitations);
-  }, [pendingInvitations]);
+    if (isOpen) {
+      // Test backend connection first
+      testBackendConnection().then(isConnected => {
+        console.log('Backend connection test:', isConnected ? 'SUCCESS' : 'FAILED');
+        if (!isConnected) {
+          setInvitationError('Unable to connect to backend server. Please check if the server is running.');
+        }
+      });
+      
+      fetchRoles();
+      fetchPendingInvitations();
+    }
+  }, [isOpen, projectId]);
 
   // Reset form when modal closes
   useEffect(() => {
     if (!isOpen) {
       setEmail("");
-      setSelectedRoleId("role_002");
+      setError(null);
+      setInvitationError(null);
       setActiveTab("invite");
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
-
-  const handleSendInvitation = () => {
-    if (!email.trim()) return;
-
-    const selectedRole = roleMap.get(selectedRoleId);
-    if (!selectedRole) return;
-
-    const newInvitation: PendingInvitation = {
-      id: `inv_${Date.now()}`,
-      email: email.trim(),
-      roleId: selectedRoleId,
-      roleName: selectedRole.label,
-      invitedAt: new Date().toISOString().split('T')[0],
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    };
-
-    // Update local state immediately for UI responsiveness
-    setPendingList(prev => [...prev, newInvitation]);
-
-    if (onSendInvitation) {
-      onSendInvitation(email, selectedRole.name);
-    } else {
-      // Default behavior - log the invitation
-      console.log(`Sent invitation to ${email.trim()} with role ${selectedRole.label} for project ${projectName}`);
+  const fetchRoles = async () => {
+    try {
+      setLoading(true);
+      const fetchedRoles = await getRoles();
+      setRoles(fetchedRoles);
+      // Set default role if available
+      if (fetchedRoles.length > 0 && !selectedRoleId) {
+        // Try to find "Editor" role as default, otherwise use first role
+        const editorRole = fetchedRoles.find(r => r.role_name.toLowerCase() === 'editor');
+        setSelectedRoleId(editorRole?.role_id || fetchedRoles[0].role_id);
+      }
+    } catch (err) {
+      console.error('Error fetching roles:', err);
+      setError('Failed to load roles');
+    } finally {
+      setLoading(false);
     }
-
-    // Reset form
-    setEmail("");
-    setSelectedRoleId("role_002");
-    
-    // Switch to pending tab to show the new invitation
-    setActiveTab("pending");
   };
 
-  const handleCancelInvitation = (invitationId: string) => {
-    // Update local state immediately for UI responsiveness
-    setPendingList(prev => prev.filter(inv => inv.id !== invitationId));
-
-    if (onCancelInvitation) {
-      onCancelInvitation(invitationId);
-    } else {
-      // Default behavior - log the cancellation
-      console.log(`Cancelled invitation: ${invitationId}`);
+  const fetchPendingInvitations = async () => {
+    try {
+      setLoadingInvitations(true);
+      const invitations = await getProjectInvitations(projectId, 'pending');
+      // Filter to show only pending invitations that haven't expired
+      const now = new Date();
+      const validInvitations = invitations.filter(inv => {
+        const expiresAt = new Date(inv.expires_at);
+        return expiresAt >= now;
+      });
+      setPendingInvitations(validInvitations);
+    } catch (err) {
+      console.error('Error fetching invitations:', err);
+    } finally {
+      setLoadingInvitations(false);
     }
+  };
+
+  const handleSendInvitation = async () => {
+    if (!email.trim() || !selectedRoleId) return;
+
+    try {
+      setSendingInvitation(true);
+      setInvitationError(null);
+
+      // Debug: Log the data being sent
+      const invitationData = {
+        project_id: projectId,
+        email: email.trim(),
+        role_id: selectedRoleId,
+        invited_by: currentUserId
+      };
+      
+      console.log('Sending invitation with data:', invitationData);
+      
+      // Validate required fields before sending
+      if (!projectId) {
+        throw new Error('Project ID is required');
+      }
+      if (!currentUserId) {
+        throw new Error('User ID is required');
+      }
+      if (!selectedRoleId) {
+        throw new Error('Role ID is required');
+      }
+
+      await createInvitation(invitationData);
+
+      // Reset form
+      setEmail("");
+      
+      // Refresh pending invitations
+      await fetchPendingInvitations();
+      
+      // Switch to pending tab to show the new invitation
+      setActiveTab("pending");
+
+      // Notify parent component
+      if (onInvitationSent) {
+        onInvitationSent();
+      }
+    } catch (err: any) {
+      console.error('Error sending invitation:', err);
+      setInvitationError(err.message || 'Failed to send invitation. Please try again.');
+    } finally {
+      setSendingInvitation(false);
+    }
+  };
+
+  const handleCancelInvitation = async (invitationId: string) => {
+    try {
+      setDeletingInvitations(prev => new Set(prev).add(invitationId));
+      
+      await deleteInvitation(invitationId);
+      
+      // Remove from local state immediately for better UX
+      setPendingInvitations(prev => prev.filter(inv => inv.invitation_id !== invitationId));
+    } catch (err) {
+      console.error('Error canceling invitation:', err);
+      // Refresh the list in case of error
+      await fetchPendingInvitations();
+    } finally {
+      setDeletingInvitations(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(invitationId);
+        return newSet;
+      });
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
   };
 
   const overlayClass = "fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4";
@@ -199,6 +245,8 @@ export default function InviteModal({
     transition-colors
   `;
 
+  if (!isOpen) return null;
+
   return (
     <div className={overlayClass} onClick={onClose}>
       <div className={modalClass} onClick={(e) => e.stopPropagation()}>
@@ -235,7 +283,7 @@ export default function InviteModal({
             className={tabButtonClass(activeTab === "pending")}
           >
             <Clock className="w-4 h-4 inline mr-1" />
-            Pending ({pendingList.length})
+            Pending ({pendingInvitations.length})
           </button>
         </div>
 
@@ -279,31 +327,69 @@ export default function InviteModal({
                   ${theme === "dark" ? "text-gray-300" : "text-gray-700"}`}>
                   Role
                 </label>
-                <select
-                  value={selectedRoleId}
-                  onChange={(e) => setSelectedRoleId(e.target.value)}
-                  className={inputClass}
-                >
-                  {roleOptions.map(role => (
-                    <option key={role.id} value={role.id}>
-                      {role.label}
-                    </option>
-                  ))}
-                </select>
+                {loading ? (
+                  <div className="flex items-center justify-center py-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  </div>
+                ) : roles.length > 0 ? (
+                  <select
+                    value={selectedRoleId}
+                    onChange={(e) => setSelectedRoleId(e.target.value)}
+                    className={inputClass}
+                  >
+                    {roles.map(role => (
+                      <option key={role.role_id} value={role.role_id}>
+                        {role.role_name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                    No roles available
+                  </div>
+                )}
               </div>
+
+              {/* Error Message */}
+              {invitationError && (
+                <div className={`flex items-center gap-2 p-3 rounded-md text-sm
+                  ${theme === "dark"
+                    ? "bg-red-500/20 text-red-300"
+                    : "bg-red-50 text-red-700"
+                  }`}>
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{invitationError}</span>
+                </div>
+              )}
 
               {/* Send Button */}
               <button
                 onClick={handleSendInvitation}
-                disabled={!email.trim()}
-                className={`${buttonClass} ${!email.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={!email.trim() || !selectedRoleId || sendingInvitation}
+                className={`${buttonClass} ${(!email.trim() || !selectedRoleId || sendingInvitation) ? 'opacity-50 cursor-not-allowed' : ''} flex items-center justify-center`}
               >
-                Send Invitation
+                {sendingInvitation ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Sending...
+                  </>
+                ) : (
+                  'Send Invitation'
+                )}
               </button>
             </div>
           ) : (
             <div>
-              {pendingList.length === 0 ? (
+              {loadingInvitations ? (
+                <div className="flex flex-col items-center py-8">
+                  <Loader2 className={`w-8 h-8 animate-spin mb-3
+                    ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`} />
+                  <p className={`text-sm 
+                    ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                    Loading invitations...
+                  </p>
+                </div>
+              ) : pendingInvitations.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className={`w-12 h-12 mx-auto mb-3 
                     ${theme === "dark" ? "text-gray-600" : "text-gray-400"}`} />
@@ -313,8 +399,8 @@ export default function InviteModal({
                   </p>
                 </div>
               ) : (
-                pendingList.map((invitation) => (
-                  <div key={invitation.id} className={pendingItemClass}>
+                pendingInvitations.map((invitation) => (
+                  <div key={invitation.invitation_id} className={pendingItemClass}>
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
                         <h3 className="font-medium text-sm truncate mb-1">
@@ -322,19 +408,26 @@ export default function InviteModal({
                         </h3>
                         <p className={`text-xs mb-2 
                           ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
-                          Role: <span className="font-medium">{invitation.roleName}</span>
+                          Role: <span className="font-medium">
+                            {roles.find(r => r.role_id === invitation.role_id)?.role_name || 'Unknown'}
+                          </span>
                         </p>
                         <p className={`text-xs 
                           ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
-                          Invited: {invitation.invitedAt} • Expires: {invitation.expiresAt}
+                          Invited: {formatDate(invitation.created_at)} • Expires: {formatDate(invitation.expires_at)}
                         </p>
                       </div>
                       <button
-                        onClick={() => handleCancelInvitation(invitation.id)}
+                        onClick={() => handleCancelInvitation(invitation.invitation_id)}
                         className={cancelButtonClass}
                         title="Cancel invitation"
+                        disabled={deletingInvitations.has(invitation.invitation_id)}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {deletingInvitations.has(invitation.invitation_id) ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>
