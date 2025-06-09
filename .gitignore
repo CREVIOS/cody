@@ -64,3 +64,12 @@ minio-data/
 
 # Docker
 *.tar
+
+# Python
+__pycache__/
+.specstory/
+
+.cursorindexingignore
+.DS_Store
+gh
+gh.pub
