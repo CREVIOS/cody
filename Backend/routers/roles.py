@@ -89,3 +89,17 @@ async def delete_role(
             detail="Role not found"
         )
 
+@router.get("/{role_id}/permissions", response_model=schemas.Role)
+async def get_role_permissions(
+    role_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get role with its permissions by role ID"""
+    role = await crud.crud_role.get(db, id=role_id)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role not found"
+        )
+    return role
+

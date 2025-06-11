@@ -1,14 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import { X, Users, Loader2, AlertCircle } from "lucide-react";
-import { getPendingInvitationsByEmail, acceptInvitation, ProjectInvitationWithDetails, testBackendConnection } from "@/lib/projectApi";
+import { acceptInvitation, ProjectInvitationWithDetails, Project } from "@/lib/projectApi";
 
 interface NotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
   userEmail: string;
   userId: string;
-  onInvitationAccepted?: (projectId: string) => void;
+  invitations: ProjectInvitationWithDetails[];
+  loading: boolean;
+  error: string | null;
+  onInvitationAccepted?: (projectId: string, projectData?: { project: Project; role: string }) => void;
+  onRefreshData?: () => void;
 }
 
 export default function NotificationModal({
@@ -16,43 +20,15 @@ export default function NotificationModal({
   onClose,
   userEmail,
   userId,
-  onInvitationAccepted
+  invitations,
+  loading,
+  error,
+  onInvitationAccepted,
+  onRefreshData
 }: NotificationModalProps) {
   const { theme } = useTheme();
-  const [invitations, setInvitations] = useState<ProjectInvitationWithDetails[]>([]);
   const [acceptedInvitations, setAcceptedInvitations] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [processingInvitations, setProcessingInvitations] = useState<Set<string>>(new Set());
-
-  // Fetch invitations when modal opens
-  useEffect(() => {
-    if (isOpen && userEmail) {
-      // Test backend connection first
-      testBackendConnection().then(isConnected => {
-        console.log('Backend connection test (Notifications):', isConnected ? 'SUCCESS' : 'FAILED');
-        if (!isConnected) {
-          setError('Unable to connect to backend server. Please check if the server is running.');
-        }
-      });
-      
-      fetchInvitations();
-    }
-  }, [isOpen, userEmail]);
-
-  const fetchInvitations = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await getPendingInvitationsByEmail(userEmail);
-      setInvitations(data);
-    } catch (err) {
-      setError('Failed to load invitations. Please try again.');
-      console.error('Error fetching invitations:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleAccept = async (invitation: ProjectInvitationWithDetails) => {
     if (processingInvitations.has(invitation.invitation_id)) return;
@@ -84,12 +60,12 @@ export default function NotificationModal({
 
       // Remove from invitations list after a short delay
       setTimeout(() => {
-        setInvitations(prev => prev.filter(inv => inv.invitation_id !== invitation.invitation_id));
+        onRefreshData?.();
       }, 500);
 
       // Notify parent component if callback provided
       if (onInvitationAccepted) {
-        onInvitationAccepted(invitation.project_id);
+        onInvitationAccepted(invitation.project_id, { project: invitation.project, role: invitation.role.role_name });
       }
     } catch (err: any) {
       console.error('Error accepting invitation:', err);
@@ -220,7 +196,7 @@ export default function NotificationModal({
                 {error}
               </p>
               <button
-                onClick={fetchInvitations}
+                onClick={onRefreshData}
                 className={`mt-3 px-3 py-1.5 rounded-md text-sm font-medium
                   ${theme === "dark"
                     ? "bg-indigo-600 hover:bg-indigo-700 text-white"
@@ -240,22 +216,22 @@ export default function NotificationModal({
               </p>
             </div>
           ) : (
-            invitations.map((invitation) => (
-              <div key={invitation.invitation_id} className={invitationItemClass}>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-sm truncate mb-1">
-                      {invitation.project.project_name}
-                    </h3>
-                    <p className={`text-xs mb-2 
-                      ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
-                      Role: <span className="font-medium">{invitation.role.role_name}</span>
-                    </p>
-                    <p className={`text-xs 
-                      ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
-                      Invited by {invitation.inviter.full_name || invitation.inviter.username} • {formatDate(invitation.created_at)}
-                    </p>
-                  </div>
+                          invitations.map((invitation) => (
+                <div key={invitation.invitation_id} className={invitationItemClass}>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-medium text-sm truncate mb-1">
+                        {invitation.project?.project_name || 'Unknown Project'}
+                      </h3>
+                      <p className={`text-xs mb-2 
+                        ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                        Role: <span className="font-medium">{invitation.role?.role_name || 'Unknown Role'}</span>
+                      </p>
+                      <p className={`text-xs 
+                        ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
+                        Invited by {invitation.inviter?.full_name || invitation.inviter?.username || 'Unknown User'} • {formatDate(invitation.created_at)}
+                      </p>
+                    </div>
                   <button
                     onClick={() => !isAccepted(invitation.invitation_id) && !isProcessing(invitation.invitation_id) && handleAccept(invitation)}
                     className={getButtonClass(invitation.invitation_id)}

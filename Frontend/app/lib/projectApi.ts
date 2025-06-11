@@ -73,6 +73,13 @@ export interface ProjectMember {
   is_active: boolean;
 }
 
+// ProjectMember with full details (for collaborators list)
+export interface ProjectMemberWithDetails extends ProjectMember {
+  user: User;
+  role: Role;
+  inviter?: User | null;
+}
+
 // Request types
 export interface ProjectInvitationCreate {
   project_id: string;
@@ -92,15 +99,25 @@ export interface ProjectInvitationUpdate {
 
 // Project with role information
 export interface ProjectWithRole {
-  project: Project;
-  role: string;
+  project_id: string;
+  project_name: string;
+  description: string | null;
+  visibility: string;
+  created_at: string;
+  modified_at: string | null;
+  owner_id: string;
+  is_active: boolean;
+  project_settings?: Record<string, any>;
+  role_id: string;
 }
 
 // User projects response
 export interface UserProjectsResponse {
-  user: User;
-  owned_projects: Project[];
-  member_projects: ProjectWithRole[];
+  items: ProjectWithRole[];
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
 }
 
 // Paginated response type (matching backend)
@@ -175,18 +192,36 @@ export const listUsers = async (): Promise<User[]> => {
  */
 export const findUserByEmail = async (email: string): Promise<User | null> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/users?limit=1000`);
+    if (!API_BASE_URL) {
+      throw new Error('API_BASE_URL is not configured');
+    }
+
+    // Get all users and filter by email (temporary solution until backend endpoint is ready)
+    const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // Add token if you have auth
+      }
+    });
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    const data: PaginatedResponse<User> = await response.json();
-    const user = data.items.find(u => u.email.toLowerCase() === email.toLowerCase());
-    return user || null;
+    const data = await response.json();
+    const users = data.items || [];
+    const user = users.find((u: User) => u.email.toLowerCase() === email.toLowerCase());
+    
+    if (!user) {
+      console.log('No user found with email:', email);
+      return null;
+    }
+
+    console.log('Found user:', user);
+    return user;
   } catch (error) {
     console.error('Error finding user by email:', error);
-    return null;
+    throw error; // Let the caller handle the error
   }
 };
 
@@ -195,6 +230,13 @@ export const findUserByEmail = async (email: string): Promise<User | null> => {
  */
 export const getUserProjects = async (userId: string): Promise<UserProjectsResponse> => {
   try {
+    // First get all roles to find the owner role ID
+    const roles = await getRoles();
+    const ownerRole = roles.find(role => role.role_name.toLowerCase() === 'owner');
+    if (!ownerRole) {
+      throw new Error('Owner role not found in the system');
+    }
+
     const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/all-projects`);
     
     if (!response.ok) {
@@ -202,7 +244,39 @@ export const getUserProjects = async (userId: string): Promise<UserProjectsRespo
       throw new Error(errorMessage);
     }
     
-    return await response.json();
+    const data = await response.json();
+    console.log('API Response:', data); // Debug log
+    
+    // Transform the response to match expected structure
+    const allProjects = [
+      // Handle owned projects
+      ...(data.owned_projects || []).map((project: Project) => ({
+        ...project,
+        role_id: ownerRole.role_id
+      })),
+      // Handle member projects
+      ...(data.member_projects || []).map((memberProject: { project: Project; role: string }) => {
+        // Find the role ID that matches the role name
+        const roleId = roles.find(r => r.role_name.toLowerCase() === memberProject.role.toLowerCase())?.role_id;
+        if (!roleId) {
+          console.warn(`Role not found for name: ${memberProject.role}`);
+        }
+        return {
+          ...memberProject.project,
+          role_id: roleId || 'unknown'
+        };
+      })
+    ];
+
+    console.log('Transformed projects:', allProjects); // Debug log
+
+    return {
+      items: allProjects,
+      total: allProjects.length,
+      page: 1,
+      size: allProjects.length,
+      pages: 1
+    };
   } catch (error) {
     console.error('Error fetching user projects:', error);
     throw error;
@@ -287,34 +361,36 @@ export const createInvitation = async (invitation: {
   try {
     console.log('Creating invitation - input:', invitation);
     
-    // First, try to find user by email
+    // First find the user by email
     const user = await findUserByEmail(invitation.email);
-    console.log('Found user by email:', user);
+    if (!user) {
+      throw new Error(`No user found with email: ${invitation.email}`);
+    }
     
-    // Prepare invitation data
+    // Prepare invitation data with user_id
     const invitationData: ProjectInvitationCreate = {
       project_id: invitation.project_id,
       email: invitation.email,
       role_id: invitation.role_id,
       invited_by: invitation.invited_by,
-      user_id: user?.user_id || null,
+      user_id: user.user_id, // Include the user_id from found user
       token: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
     };
 
-    const url = `${API_BASE_URL}/api/v1/project-invitations/`;
+    const url = `${API_BASE_URL}/api/v1/project-invitations`;
     
     console.log('Create invitation API call:', {
       url,
       method: 'POST',
-      payload: invitationData,
-      API_BASE_URL
+      payload: invitationData
     });
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // Add token if you have auth
       },
       body: JSON.stringify(invitationData)
     });
@@ -333,20 +409,7 @@ export const createInvitation = async (invitation: {
     return await response.json();
   } catch (error) {
     console.error('Error creating invitation:', error);
-    
-    // Provide more specific error messages
-    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-      throw new Error('Unable to connect to server. Please check if the backend is running and accessible.');
-    }
-    
-    // Ensure error is properly stringified
-    if (error instanceof Error) {
-      throw error;
-    } else if (typeof error === 'string') {
-      throw new Error(error);
-    } else {
-      throw new Error(JSON.stringify(error));
-    }
+    throw error;
   }
 };
 
@@ -676,4 +739,51 @@ export const formatDateTime = (dateString: string): string => {
     hour: '2-digit',
     minute: '2-digit'
   });
+};
+
+// ==================== PROJECT MEMBERS API FUNCTIONS ====================
+
+/**
+ * Get project members with full user and role details by project ID
+ */
+export const getProjectMembers = async (projectId: string): Promise<ProjectMemberWithDetails[]> => {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/project-members/by-project/${projectId}`
+    );
+    
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+    
+    const members: ProjectMemberWithDetails[] = await response.json();
+    return members;
+  } catch (error) {
+    console.error('Error fetching project members:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get role permissions by role ID
+ */
+export const getRolePermissions = async (roleId: string): Promise<string[]> => {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/roles/${roleId}/permissions`
+    );
+    
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+    
+    const roleData = await response.json();
+    // Extract permissions array from the role data
+    return roleData.permissions || [];
+  } catch (error) {
+    console.error('Error fetching role permissions:', error);
+    throw error;
+  }
 };

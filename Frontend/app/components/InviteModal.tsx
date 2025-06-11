@@ -1,111 +1,75 @@
 import { useState, useEffect } from "react";
-import { useTheme } from "@/context/ThemeContext";
+import { useTheme, Theme } from "@/context/ThemeContext";
+import { useRoles } from "@/context/RolesContext";
 import { X, UserPlus, Mail, Users, Clock, Trash2, Loader2, AlertCircle } from "lucide-react";
 import { 
   createInvitation, 
-  getProjectInvitations, 
   deleteInvitation, 
-  getRoles,
   ProjectInvitation,
   Role,
-  testBackendConnection
+  testBackendConnection,
+  findUserByEmail
 } from "@/lib/projectApi";
 
-interface InviteModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  projectId: string;
+export interface InviteModalProps {
+  projectId?: string;
   projectName: string;
-  currentUserId: string;
-  onInvitationSent?: () => void;
+  onClose: () => void;
+  onInviteSent: () => void;
+  canManageMembers: boolean;
+  theme: Theme;
+  user?: { user_id: string };
+  pendingInvitations?: ProjectInvitation[];
 }
 
 export default function InviteModal({
-  isOpen,
-  onClose,
   projectId,
   projectName,
-  currentUserId,
-  onInvitationSent
+  onClose,
+  onInviteSent,
+  canManageMembers,
+  theme,
+  user,
+  pendingInvitations = []
 }: InviteModalProps) {
-  const { theme } = useTheme();
+  const { theme: contextTheme } = useTheme();
+  const { roles, loading: rolesLoading } = useRoles();
   const [activeTab, setActiveTab] = useState<"invite" | "pending">("invite");
   const [email, setEmail] = useState("");
   const [selectedRoleId, setSelectedRoleId] = useState("");
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingInvitations, setLoadingInvitations] = useState(false);
   const [sendingInvitation, setSendingInvitation] = useState(false);
   const [deletingInvitations, setDeletingInvitations] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [invitationError, setInvitationError] = useState<string | null>(null);
+  const [localPendingInvitations, setLocalPendingInvitations] = useState<ProjectInvitation[]>(pendingInvitations);
 
-  // Fetch roles when modal opens
+  // Update local state when prop changes
   useEffect(() => {
-    if (isOpen) {
-      // Test backend connection first
-      testBackendConnection().then(isConnected => {
-        console.log('Backend connection test:', isConnected ? 'SUCCESS' : 'FAILED');
-        if (!isConnected) {
-          setInvitationError('Unable to connect to backend server. Please check if the server is running.');
-        }
-      });
-      
-      fetchRoles();
-      fetchPendingInvitations();
+    setLocalPendingInvitations(pendingInvitations);
+  }, [pendingInvitations]);
+
+  // Set default role when roles are available
+  useEffect(() => {
+    if (roles.length > 0 && !selectedRoleId) {
+      // Try to find "Editor" role as default, otherwise use first role
+      const editorRole = roles.find(r => r.role_name.toLowerCase() === 'editor');
+      setSelectedRoleId(editorRole?.role_id || roles[0].role_id);
     }
-  }, [isOpen, projectId]);
+  }, [roles, selectedRoleId]);
 
   // Reset form when modal closes
   useEffect(() => {
-    if (!isOpen) {
+    if (!projectId) {
       setEmail("");
       setError(null);
       setInvitationError(null);
       setActiveTab("invite");
     }
-  }, [isOpen]);
-
-  const fetchRoles = async () => {
-    try {
-      setLoading(true);
-      const fetchedRoles = await getRoles();
-      setRoles(fetchedRoles);
-      // Set default role if available
-      if (fetchedRoles.length > 0 && !selectedRoleId) {
-        // Try to find "Editor" role as default, otherwise use first role
-        const editorRole = fetchedRoles.find(r => r.role_name.toLowerCase() === 'editor');
-        setSelectedRoleId(editorRole?.role_id || fetchedRoles[0].role_id);
-      }
-    } catch (err) {
-      console.error('Error fetching roles:', err);
-      setError('Failed to load roles');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchPendingInvitations = async () => {
-    try {
-      setLoadingInvitations(true);
-      const invitations = await getProjectInvitations(projectId, 'pending');
-      // Filter to show only pending invitations that haven't expired
-      const now = new Date();
-      const validInvitations = invitations.filter(inv => {
-        const expiresAt = new Date(inv.expires_at);
-        return expiresAt >= now;
-      });
-      setPendingInvitations(validInvitations);
-    } catch (err) {
-      console.error('Error fetching invitations:', err);
-    } finally {
-      setLoadingInvitations(false);
-    }
-  };
+  }, [projectId]);
 
   const handleSendInvitation = async () => {
-    if (!email.trim() || !selectedRoleId) return;
+    if (!email.trim() || !selectedRoleId || !projectId || !user?.user_id) return;
 
     try {
       setSendingInvitation(true);
@@ -114,9 +78,9 @@ export default function InviteModal({
       // Debug: Log the data being sent
       const invitationData = {
         project_id: projectId,
-        email: email.trim(),
+        email: email.trim().toLowerCase(), // Ensure email is lowercase
         role_id: selectedRoleId,
-        invited_by: currentUserId
+        invited_by: user.user_id
       };
       
       console.log('Sending invitation with data:', invitationData);
@@ -125,27 +89,30 @@ export default function InviteModal({
       if (!projectId) {
         throw new Error('Project ID is required');
       }
-      if (!currentUserId) {
-        throw new Error('User ID is required');
-      }
       if (!selectedRoleId) {
         throw new Error('Role ID is required');
+      }
+      if (!invitationData.invited_by) {
+        throw new Error('Current user information is missing');
+      }
+
+      // First try to find if user exists
+      const existingUser = await findUserByEmail(invitationData.email);
+      console.log('Existing user check:', existingUser);
+
+      if (!existingUser) {
+        setInvitationError('User with this email does not exist in the system');
+        return;
       }
 
       await createInvitation(invitationData);
 
       // Reset form
       setEmail("");
-      
-      // Refresh pending invitations
-      await fetchPendingInvitations();
-      
-      // Switch to pending tab to show the new invitation
-      setActiveTab("pending");
 
-      // Notify parent component
-      if (onInvitationSent) {
-        onInvitationSent();
+      // Notify parent component to refresh data
+      if (onInviteSent) {
+        onInviteSent();
       }
     } catch (err: any) {
       console.error('Error sending invitation:', err);
@@ -161,12 +128,19 @@ export default function InviteModal({
       
       await deleteInvitation(invitationId);
       
-      // Remove from local state immediately for better UX
-      setPendingInvitations(prev => prev.filter(inv => inv.invitation_id !== invitationId));
+      // Update local state immediately
+      setLocalPendingInvitations(current => 
+        current.filter(inv => inv.invitation_id !== invitationId)
+      );
+      
+      // Notify parent to refresh data
+      if (onInviteSent) {
+        onInviteSent();
+      }
     } catch (err) {
       console.error('Error canceling invitation:', err);
-      // Refresh the list in case of error
-      await fetchPendingInvitations();
+      // Show error message to user
+      setError('Failed to cancel invitation. Please try again.');
     } finally {
       setDeletingInvitations(prev => {
         const newSet = new Set(prev);
@@ -245,7 +219,7 @@ export default function InviteModal({
     transition-colors
   `;
 
-  if (!isOpen) return null;
+  if (!projectId) return null;
 
   return (
     <div className={overlayClass} onClick={onClose}>
@@ -283,7 +257,7 @@ export default function InviteModal({
             className={tabButtonClass(activeTab === "pending")}
           >
             <Clock className="w-4 h-4 inline mr-1" />
-            Pending ({pendingInvitations.length})
+            Pending
           </button>
         </div>
 
@@ -380,48 +354,40 @@ export default function InviteModal({
             </div>
           ) : (
             <div>
-              {loadingInvitations ? (
-                <div className="flex flex-col items-center py-8">
-                  <Loader2 className={`w-8 h-8 animate-spin mb-3
-                    ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`} />
-                  <p className={`text-sm 
-                    ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
-                    Loading invitations...
-                  </p>
+              {loading ? (
+                <div className="flex items-center justify-center p-8">
+                  <Loader2 className="w-6 h-6 animate-spin" />
                 </div>
-              ) : pendingInvitations.length === 0 ? (
-                <div className="text-center py-8">
-                  <Users className={`w-12 h-12 mx-auto mb-3 
-                    ${theme === "dark" ? "text-gray-600" : "text-gray-400"}`} />
-                  <p className={`text-sm 
-                    ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+              ) : error ? (
+                <div className="p-4 text-center">
+                  <AlertCircle className="w-6 h-6 mx-auto mb-2" />
+                  <p className="text-sm text-red-500">{error}</p>
+                </div>
+              ) : localPendingInvitations.length === 0 ? (
+                <div className="p-8 text-center">
+                  <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
                     No pending invitations
                   </p>
                 </div>
               ) : (
-                pendingInvitations.map((invitation) => (
+                localPendingInvitations.map((invitation) => (
                   <div key={invitation.invitation_id} className={pendingItemClass}>
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-sm truncate mb-1">
-                          {invitation.email}
-                        </h3>
-                        <p className={`text-xs mb-2 
-                          ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
-                          Role: <span className="font-medium">
-                            {roles.find(r => r.role_id === invitation.role_id)?.role_name || 'Unknown'}
-                          </span>
+                        <p className="text-sm mb-1">{invitation.email}</p>
+                        <p className={`text-xs ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                          Role: {roles.find(r => r.role_id === invitation.role_id)?.role_name || 'Unknown Role'}
                         </p>
-                        <p className={`text-xs 
-                          ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
-                          Invited: {formatDate(invitation.created_at)} • Expires: {formatDate(invitation.expires_at)}
+                        <p className={`text-xs ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
+                          Expires: {formatDate(invitation.expires_at)}
                         </p>
                       </div>
                       <button
                         onClick={() => handleCancelInvitation(invitation.invitation_id)}
-                        className={cancelButtonClass}
-                        title="Cancel invitation"
                         disabled={deletingInvitations.has(invitation.invitation_id)}
+                        className={cancelButtonClass}
+                        title="Cancel Invitation"
                       >
                         {deletingInvitations.has(invitation.invitation_id) ? (
                           <Loader2 className="w-4 h-4 animate-spin" />

@@ -39,13 +39,18 @@ export default function Home() {
     if (!selectedUser) return;
     try {
       const projectsData = await getUserProjects(selectedUser.user_id);
-      const allProjects: Project[] = [
-        ...projectsData.owned_projects,
-        ...projectsData.member_projects.map(mp => mp.project)
-      ];
-      const found = allProjects.find(p => p.project_id === projectId);
-      goToLayout(found ? found.project_name : "Untitled Project", projectId);
+      const found = projectsData.items.find(p => p.project_id === projectId);
+      if (!found) {
+        console.warn('Project not found in user projects:', projectId);
+        goToLayout("Untitled Project", projectId);
+        return;
+      }
+      
+      // Ensure we have a valid project name
+      const projectName = found.project_name?.trim() || "Untitled Project";
+      goToLayout(projectName, projectId);
     } catch (e) {
+      console.error('Error fetching project:', e);
       goToLayout("Untitled Project", projectId);
     }
   };

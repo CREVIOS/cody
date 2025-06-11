@@ -10,7 +10,10 @@ import FileSystemEditor from "@/components/FileSystemEditor";
 import Collaborators from "@/components/Collaborators";
 import Terminal from "@/components/Terminal";
 import InviteModal from "@/components/InviteModal";
-import { User } from "@/lib/projectApi";
+import { User, getProjectMembers, ProjectMemberWithDetails, getProjectInvitations, ProjectInvitation, getRolePermissions, getRoles, Role } from "@/lib/projectApi";
+import { usePermissions } from '@/hooks/usePermissions';
+import { Permission } from '@/types/permissions';
+import { useRoles } from '@/context/RolesContext';
 
 interface LayoutProps {
   projectName: string;
@@ -29,25 +32,132 @@ export default function Layout({
   user,
 }: LayoutProps) {
   const { theme } = useTheme();
+  const { roles, getRoleNameById, loading: rolesLoading } = useRoles();
   const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
-  const [currentProjectName, setCurrentProjectName] = useState(projectName);
+  const [currentProjectName, setCurrentProjectName] = useState(projectName || "Untitled Project");
+  const [projectMembers, setProjectMembers] = useState<ProjectMemberWithDetails[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState<string | null>(null);
+  const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
+  const [invitationsLoading, setInvitationsLoading] = useState(false);
+  const [invitationsError, setInvitationsError] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRoleId, setUserRoleId] = useState<string | null>(null);
   const collaboratorsRef = useRef<HTMLDivElement | null>(null);
-  const projectNameInputRef = useRef<HTMLInputElement | null>(null);
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
 
-  // Permission to invite users (condition will be decided later)
-  const canInviteUsers = true;
+  // Use the new permissions hook
+  const { permissions, hasPermission, loading: permissionsLoading, error: permissionsError } = usePermissions({
+    roleId: userRoleId,
+  });
 
-  const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
-  const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
-  const inputClass = theme === "dark" ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]" : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
-  const iconHoverClass = theme === "dark" ? "hover:bg-[#3A3A3E]" : "hover:bg-gray-200";
+  // Fetch project data when project opens
+  useEffect(() => {
+    const fetchProjectData = async () => {
+      if (!projectId || !user) return;
+      
+      // Fetch project members and pending invitations in parallel
+      const fetchMembers = async () => {
+        try {
+          setMembersLoading(true);
+          setMembersError(null);
+          const members = await getProjectMembers(projectId);
+          setProjectMembers(members);
+          
+          // Find current user's role in the project
+          const currentUserMember = members.find(member => member.user_id === user.user_id);
+          if (currentUserMember) {
+            setUserRole(getRoleNameById(currentUserMember.role_id));
+            setUserRoleId(currentUserMember.role_id);
+          } else {
+            // User is not a member of this project
+            setUserRole(null);
+            setUserRoleId(null);
+          }
+        } catch (err) {
+          console.error('Failed to load project members:', err);
+          setMembersError('Failed to load collaborators');
+          setProjectMembers([]);
+          setUserRole(null);
+          setUserRoleId(null);
+        } finally {
+          setMembersLoading(false);
+        }
+      };
 
-  // Focus input when editing starts
-  const [showTerminal, setShowTerminal] = useState(false);
+      const fetchPendingInvitations = async () => {
+        try {
+          setInvitationsLoading(true);
+          setInvitationsError(null);
+          const invitations = await getProjectInvitations(projectId, 'pending');
+          // Filter to show only pending invitations that haven't expired
+          const now = new Date();
+          const validInvitations = invitations.filter(inv => {
+            const expiresAt = new Date(inv.expires_at);
+            return inv.status === 'pending' && expiresAt >= now;
+          });
+          setPendingInvitations(validInvitations);
+        } catch (err) {
+          console.error('Failed to load pending invitations:', err);
+          setInvitationsError('Failed to load pending invitations');
+          setPendingInvitations([]);
+        } finally {
+          setInvitationsLoading(false);
+        }
+      };
+
+      // Fetch both in parallel
+      await Promise.all([fetchMembers(), fetchPendingInvitations()]);
+    };
+
+    if (projectId && user) {
+      fetchProjectData();
+      
+      // Set up an interval to refresh data every 30 seconds
+      const refreshInterval = setInterval(fetchProjectData, 30000);
+      
+      // Cleanup interval on unmount
+      return () => clearInterval(refreshInterval);
+    }
+  }, [projectId, user]);
+
+  // Function to refresh project data (can be called after invitations are sent/accepted)
+  const refreshProjectData = async () => {
+    if (!projectId) return;
+    
+    try {
+      // Refresh both members and pending invitations
+      const [members, invitations] = await Promise.all([
+        getProjectMembers(projectId),
+        getProjectInvitations(projectId, 'pending')
+      ]);
+      
+      setProjectMembers(members);
+      
+      // Filter valid invitations
+      const now = new Date();
+      const validInvitations = invitations.filter(inv => {
+        const expiresAt = new Date(inv.expires_at);
+        return expiresAt >= now;
+      });
+      setPendingInvitations(validInvitations);
+
+      // Update current user's role if needed
+      if (user) {
+        const currentUserMember = members.find(member => member.user_id === user.user_id);
+        if (currentUserMember) {
+          setUserRole(getRoleNameById(currentUserMember.role_id));
+          setUserRoleId(currentUserMember.role_id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh project data:', err);
+    }
+  };
 
   useEffect(() => {
     if (isEditingName && projectNameInputRef.current) {
@@ -55,12 +165,23 @@ export default function Layout({
     }
   }, [isEditingName]);
 
+  // Update currentProjectName when projectName prop changes
+  useEffect(() => {
+    const newName = projectName?.trim() || "Untitled Project";
+    if (newName !== currentProjectName) {
+      setCurrentProjectName(newName);
+    }
+  }, [projectName]);
+
   // Handle project name edit submission
   const handleNameSubmit = () => {
     setIsEditingName(false);
-    // If project name is empty, reset to previous value
-    if (!currentProjectName.trim()) {
-      setCurrentProjectName(projectName);
+    // If project name is empty or only whitespace, reset to "Untitled Project"
+    const trimmedName = currentProjectName.trim();
+    if (!trimmedName) {
+      setCurrentProjectName("Untitled Project");
+    } else if (trimmedName !== currentProjectName) {
+      setCurrentProjectName(trimmedName);
     }
   };
 
@@ -124,6 +245,21 @@ export default function Layout({
     document.addEventListener("mouseup", handleMouseUp);
   };
 
+  // Function to check if user is owner/admin
+  const isOwnerOrAdmin = () => {
+    const userMember = projectMembers.find(member => member.user_id === user?.user_id);
+    return userMember?.role.role_name.toLowerCase() === 'owner' || 
+           userMember?.role.role_name.toLowerCase() === 'admin';
+  };
+
+  const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
+  const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
+  const inputClass = theme === "dark" ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]" : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
+  const iconHoverClass = theme === "dark" ? "hover:bg-[#3A3A3E]" : "hover:bg-gray-200";
+
+  // Focus input when editing starts
+  const [showTerminal, setShowTerminal] = useState(false);
+
   return (
     <FileSystemProvider projectId={projectId || currentProjectName}>
       <div className={`h-screen w-screen grid grid-cols-[250px_1fr] grid-rows-[60px_1fr] ${backgroundClass}`}>
@@ -147,7 +283,7 @@ export default function Layout({
             </button>
 
             {/* Invite Users Icon - Only show if user has permission and we have user data */}
-            {canInviteUsers && user && projectId && (
+            {isOwnerOrAdmin() && user && projectId && (
               <button
                 onClick={() => setShowInviteModal(true)}
                 className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-colors group relative ml-2`}
@@ -218,10 +354,34 @@ export default function Layout({
           className={`col-span-1 flex items-center justify-between border-b px-6 ${borderClass}`}
         >
           <Topbar
+            projectName={currentProjectName}
+            isEditingName={isEditingName}
+            setIsEditingName={(value) => {
+              // Only allow setting isEditingName to true if user has invite permission
+              if (value && !hasPermission('invite')) {
+                return;
+              }
+              setIsEditingName(value);
+            }}
+            onNameChange={(value) => {
+              // Only allow name changes if user has invite permission
+              if (hasPermission('invite')) {
+                setCurrentProjectName(value);
+              }
+            }}
+            onNameSubmit={handleNameSubmit}
+            onKeyDown={handleKeyDown}
+            inputRef={projectNameInputRef}
+            onHome={onHome}
+            canEditName={hasPermission('invite')}
+            canInviteUsers={hasPermission('invite')}
+            onInviteClick={() => hasPermission('invite') && setShowInviteModal(true)}
+            pendingInvitationsCount={pendingInvitations.length}
+            theme={theme}
+            user={user}
+            onNewProject={() => {}} // Since this is in project view, new project action is not needed
             language={language}
             setLanguage={setLanguage}
-            onCollaboratorsClick={() => setShowCollaborators(true)}
-            onTerminalClick={() => setShowTerminal((prev) => !prev)}
           />
         </div>
 
@@ -314,21 +474,27 @@ export default function Layout({
                     ✖
                   </button>
                 </div>
-                <Collaborators />
+                <Collaborators 
+                  members={projectMembers}
+                  loading={membersLoading}
+                  error={membersError}
+                />
               </div>
             </div>
           )}
         </div>
 
         {/* Invite Modal */}
-        {user && projectId && (
+        {showInviteModal && user && projectId && isOwnerOrAdmin() && (
           <InviteModal
-            isOpen={showInviteModal}
             onClose={() => setShowInviteModal(false)}
             projectId={projectId}
             projectName={currentProjectName}
-            currentUserId={user.user_id}
-            onInvitationSent={() => {}}
+            onInviteSent={refreshProjectData}
+            canManageMembers={isOwnerOrAdmin()}
+            theme={theme}
+            user={user}
+            pendingInvitations={pendingInvitations}
           />
         )}
       </div>
