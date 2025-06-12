@@ -235,6 +235,44 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         await db.refresh(db_obj)
         return db_obj
 
+class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate]):
+    async def get_by_project_and_user(self, db: AsyncSession, *, project_id: UUID, user_id: UUID) -> Optional[models.ProjectMember]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.project_id == project_id)
+            .where(self.model.user_id == user_id)
+            .options(
+                selectinload(self.model.project),
+                selectinload(self.model.user),
+                selectinload(self.model.role)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_project(self, db: AsyncSession, *, project_id: UUID) -> List[models.ProjectMember]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.project_id == project_id)
+            .options(
+                selectinload(self.model.project),
+                selectinload(self.model.user),
+                selectinload(self.model.role)
+            )
+        )
+        return result.scalars().all()
+
+    async def get_by_user(self, db: AsyncSession, *, user_id: UUID) -> List[models.ProjectMember]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.user_id == user_id)
+            .options(
+                selectinload(self.model.project),
+                selectinload(self.model.user),
+                selectinload(self.model.role)
+            )
+        )
+        return result.scalars().all()
+
 # Create CRUD instances
 crud_user = CRUDUser(models.User)
 crud_project = CRUDProject(models.Project)
