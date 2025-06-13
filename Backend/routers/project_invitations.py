@@ -51,7 +51,7 @@ async def create_project_invitation(
                 detail="User is already a member of this project"
             )
     
-    # Check for existing pending invitation to the same email for the same project
+
     existing_invitation = await crud.crud_project_invitation.get_by_email_and_project(
         db, email=invitation_in.email, project_id=invitation_in.project_id
     )
@@ -92,7 +92,8 @@ async def read_project_invitations(
         pages=(total + limit - 1) // limit
     )
 
-@router.get("/by-email/{email}", response_model=List[schemas.ProjectInvitationWithDetails])
+
+@router.get("/by-email/{email}", response_model=List[schemas.ProjectInvitation])
 async def read_invitations_by_email(
     email: str,
     pending_only: bool = Query(True),  # Default to pending only for notifications
