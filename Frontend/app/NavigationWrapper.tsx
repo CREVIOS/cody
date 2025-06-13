@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import EntryPageComponent from "@/components/Entrypage";
+import EntryPageComponent from "@/components/welcomepage/EntryPage";
 import ProjectPromptComponent from "@/components/ProjectPrompt";
-import LayoutComponent from "@/components/Layout";
-import { User } from "@/lib/projectApi";
+import LayoutComponent from "@/components/layout/Layout";
+import { User } from '@/lib/projectAPI/TypeDefinitions';
 
 export default function NavigationWrapper() {
   const [currentView, setCurrentView] = useState("entry");

@@ -1,6 +1,6 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
-import { ProjectMemberWithDetails } from "@/lib/projectApi";
+import { ProjectMemberWithDetails } from "@/lib/projectAPI/TypeDefinitions";
 
 interface CollaboratorsProps {
   members: ProjectMemberWithDetails[];

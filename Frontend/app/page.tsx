@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import EntryPage from "@/components/Entrypage";
+import EntryPage from "@/components/welcomepage/EntryPage";
 import ProjectPrompt from "@/components/ProjectPrompt";
-import Layout from "@/components/Layout";
+import Layout from "@/components/layout/Layout";
 import AppWrapper from "@/components/AppWrapper";
-import { User, getUserProjects, Project } from "@/lib/projectApi";
+import { User, Project } from '@/lib/projectAPI/TypeDefinitions';
+import { getProjects } from "@/lib/projectAPI/ProjectAPI";
 
 // This is the navigation controller component that handles the routing
 export default function Home() {
@@ -35,11 +36,19 @@ export default function Home() {
   };
 
   // Handler for opening an existing project
-  const handleOpenProject = async (projectId: string) => {
+  const handleOpenProject = async (projectId: string, projectName?: string) => {
     if (!selectedUser) return;
+    
+    // If we have the project name, use it directly
+    if (projectName) {
+      goToLayout(projectName.trim() || "Untitled Project", projectId);
+      return;
+    }
+
+    // Otherwise fetch the project details
     try {
-      const projectsData = await getUserProjects(selectedUser.user_id);
-      const found = projectsData.items.find(p => p.project_id === projectId);
+      const projectsData = await getProjects(0, 100, selectedUser.user_id);
+      const found = projectsData.find((p: Project) => p.project_id === projectId);
       if (!found) {
         console.warn('Project not found in user projects:', projectId);
         goToLayout("Untitled Project", projectId);
@@ -47,8 +56,14 @@ export default function Home() {
       }
       
       // Ensure we have a valid project name
-      const projectName = found.project_name?.trim() || "Untitled Project";
-      goToLayout(projectName, projectId);
+      const name = found.project_name?.trim();
+      if (!name) {
+        console.warn('Project name is empty for project:', projectId);
+        goToLayout("Untitled Project", projectId);
+        return;
+      }
+      
+      goToLayout(name, projectId);
     } catch (e) {
       console.error('Error fetching project:', e);
       goToLayout("Untitled Project", projectId);

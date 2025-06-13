@@ -1,20 +1,20 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
-import { User } from '@/lib/projectApi';
+import { User } from '@/lib/projectAPI/TypeDefinitions';
 import { Theme } from '@/context/ThemeContext';
 import Terminal from "@/components/Terminal";
 import { useState } from "react";
 
-const languages = [
-  { label: "JavaScript", value: "javascript" },
-  { label: "Python", value: "python" },
-  { label: "C++", value: "cpp" },
-  { label: "HTML", value: "html" },
-  { label: "CSS", value: "css" },
-  { label: "JSON", value: "json" },
-  { label: "Markdown", value: "markdown" },
-  { label: "Java", value: "java" },
-];
+// const languages = [
+//   { label: "JavaScript", value: "javascript" },
+//   { label: "Python", value: "python" },
+//   { label: "C++", value: "cpp" },
+//   { label: "HTML", value: "html" },
+//   { label: "CSS", value: "css" },
+//   { label: "JSON", value: "json" },
+//   { label: "Markdown", value: "markdown" },
+//   { label: "Java", value: "java" },
+// ];
 
 export interface TopbarProps {
   projectName: string;
@@ -34,6 +34,7 @@ export interface TopbarProps {
   onNewProject: () => void;
   language: string;
   setLanguage: (value: string) => void;
+  onCollaboratorsClick: () => void;
 }
 
 export default function Topbar({
@@ -54,6 +55,7 @@ export default function Topbar({
   onNewProject,
   language,
   setLanguage,
+  onCollaboratorsClick,
 }: TopbarProps) {
   const { toggleTheme } = useTheme();
   const isDark = theme === "dark";
@@ -114,7 +116,7 @@ export default function Topbar({
           </div>
 
           <button
-            onClick={onInviteClick}
+            onClick={onCollaboratorsClick}
             className={`px-4 py-2 ${runButtonClass} rounded`}
           >
             Collaborators

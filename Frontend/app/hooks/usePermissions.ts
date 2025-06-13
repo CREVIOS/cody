@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Permission, Permissions, DEFAULT_PERMISSIONS } from '@/types/permissions';
-import { getRolePermissions } from '@/lib/projectApi';
+import { getRolePermissions } from '@/lib/projectAPI/RoleAPI';
 
 interface UsePermissionsProps {
   roleId: string | null;
@@ -32,11 +32,21 @@ export function usePermissions({ roleId }: UsePermissionsProps): UsePermissionsR
       
       // Convert array of permissions to permissions object
       const newPermissions = { ...DEFAULT_PERMISSIONS };
-      permissionsList.forEach((permission: string) => {
-        if (permission in newPermissions) {
-          (newPermissions as any)[permission] = true;
-        }
-      });
+      
+      // Handle both array and object formats
+      if (Array.isArray(permissionsList)) {
+        permissionsList.forEach((permission: string) => {
+          if (permission in newPermissions) {
+            (newPermissions as any)[permission] = true;
+          }
+        });
+      } else if (typeof permissionsList === 'object' && permissionsList !== null) {
+        Object.entries(permissionsList).forEach(([permission, value]) => {
+          if (permission in newPermissions) {
+            (newPermissions as any)[permission] = Boolean(value);
+          }
+        });
+      }
       
       setPermissions(newPermissions);
     } catch (err) {

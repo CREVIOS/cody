@@ -1,7 +1,8 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Role, getRoles, getRolePermissions } from '@/lib/projectApi';
+import { Role } from '@/lib/projectAPI/TypeDefinitions';
+import { getRoles, getRolePermissions } from '@/lib/projectAPI/RoleAPI';
 
 interface Permission {
   permission_name: string;
