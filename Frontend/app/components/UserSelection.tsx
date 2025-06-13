@@ -46,20 +46,26 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
   return (
     <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${backgroundClass}`}>
       <h1 
-        className="text-5xl font-bold mb-12"
+        className="text-5xl font-bold mb-12 text-center"
         style={{ textShadow: titleShadow }}
       >
         Select a User
       </h1>
 
-      <div className="w-full max-w-4xl">
+      <div className="w-full max-w-6xl">
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[...Array(6)].map((_, i) => (
               <div key={i} className={`p-6 rounded-xl border ${cardClass}`}>
-                <Skeleton className="h-12 w-12 rounded-full mb-4" />
-                <Skeleton className="h-6 w-3/4 mb-2" />
-                <Skeleton className="h-4 w-full" />
+                <div className="flex items-center gap-3 mb-4">
+                  <Skeleton className="h-12 w-12 rounded-full flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <Skeleton className="h-5 w-3/4 mb-2" />
+                    <Skeleton className="h-4 w-full" />
+                  </div>
+                </div>
+                <Skeleton className="h-4 w-2/3 mb-2" />
+                <Skeleton className="h-6 w-16" />
               </div>
             ))}
           </div>
@@ -79,42 +85,74 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
               <button
                 key={user.user_id}
                 onClick={() => onSelectUser(user)}
-                className={`p-6 rounded-xl border ${cardClass} transition-all duration-300 
-                  hover:shadow-lg hover:scale-105 text-left group cursor-pointer`}
+                className={`relative p-6 rounded-xl border ${cardClass} transition-all duration-300 
+                  hover:shadow-lg hover:scale-105 text-left group cursor-pointer w-full overflow-hidden`}
+                style={{ position: 'relative' }}
               >
-                <div className="flex items-center mb-4">
-                  {user.avatar_url ? (
-                    <img 
-                      src={user.avatar_url} 
-                      alt={user.username}
-                      className="w-12 h-12 rounded-full mr-3"
-                    />
-                  ) : (
-                    <div className={`w-12 h-12 rounded-full mr-3 flex items-center justify-center
-                      ${theme === "dark" 
-                        ? "bg-indigo-500/30 text-indigo-200" 
-                        : "bg-indigo-100 text-indigo-700"}`}
-                    >
-                      <span className="text-xl font-semibold">
-                        {user.username.charAt(0).toUpperCase()}
-                      </span>
+                {/* Main user info container with proper flex layout */}
+                <div className="flex items-center gap-3 mb-4 w-full">
+                  {/* Avatar - show image if available, otherwise first character */}
+              
+{user.avatar_url ? (
+  <img
+    src={user.avatar_url}
+    alt={`${user.username.charAt(0).toUpperCase()}`}
+    className="w-12 h-12 rounded-full object-cover flex-shrink-0"
+  />
+) : (
+  <div className={`w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center
+    ${theme === "dark"
+      ? "bg-indigo-500/30 text-indigo-200"
+      : "bg-indigo-100 text-indigo-700"}`}
+  >
+    <span className="text-xl font-semibold">
+      {user.username.charAt(0).toUpperCase()}
+    </span>
+  </div>
+)}
+
+                  {/* User details - with proper overflow and positioning */}
+                  <div className="flex-1 min-w-0 overflow-hidden">
+                    <div className="relative">
+                      <h3 className="font-semibold text-lg truncate leading-tight relative z-10" 
+                          title={user.username}
+                          style={{ 
+                            position: 'relative',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: '100%'
+                          }}>
+                        {user.username}
+                      </h3>
                     </div>
-                  )}
-                  <div>
-                    <h3 className="font-semibold text-lg">{user.username}</h3>
-                    <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
-                      {user.email}
-                    </p>
+                    <div className="relative">
+                      <p className={`text-sm truncate leading-tight relative z-10 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}
+                         title={user.email}
+                         style={{ 
+                           position: 'relative',
+                           overflow: 'hidden',
+                           textOverflow: 'ellipsis',
+                           whiteSpace: 'nowrap',
+                           maxWidth: '100%'
+                         }}>
+                        {user.email}
+                      </p>
+                    </div>
                   </div>
                 </div>
+
+                {/* Full name - with proper text handling */}
                 {user.full_name && (
-                  <p className={`text-sm ${theme === "dark" ? "text-gray-300" : "text-gray-700"}`}>
+                  <p className={`text-sm mb-3 truncate ${theme === "dark" ? "text-gray-300" : "text-gray-700"}`}
+                     title={user.full_name}>
                     {user.full_name}
                   </p>
                 )}
-                <div className={`mt-3 flex items-center text-xs 
-                  ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
-                  <span className={`inline-block px-2 py-1 rounded-full
+
+                {/* Status badge */}
+                <div className="flex items-center">
+                  <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium
                     ${user.status === 'active' 
                       ? theme === "dark" 
                         ? "bg-green-500/20 text-green-400" 
