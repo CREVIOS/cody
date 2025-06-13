@@ -1,11 +1,11 @@
 import { useState } from "react";
 import UserSelection from "@/components/UserSelection";
-import EntryPage from "@/components/Entrypage";
-import { User } from "@/lib/projectApi";
+import EntryPage from "@/components/welcomepage/EntryPage";
+import { User } from "@/lib/projectAPI/TypeDefinitions";
 
 interface AppWrapperProps {
   onNewProject: () => void;
-  onOpenProject: (projectId: string) => void;
+  onOpenProject: (projectId: string, projectName?: string) => void;
   onSelectUser: (user: User) => void;
 }
 

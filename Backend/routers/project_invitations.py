@@ -51,14 +51,15 @@ async def create_project_invitation(
                 detail="User is already a member of this project"
             )
     
-    # Check for existing pending invitation to the same email for the same project
-    existing_invitations = await crud.get_invitations_by_project(db, invitation_in.project_id)
-    for inv in existing_invitations:
-        if inv.email == invitation_in.email and inv.status == 'pending':
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pending invitation already exists for this email in this project"
-            )
+
+    existing_invitation = await crud.crud_project_invitation.get_by_email_and_project(
+        db, email=invitation_in.email, project_id=invitation_in.project_id
+    )
+    if existing_invitation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pending invitation already exists for this email in this project"
+        )
     
     return await crud.create_project_invitation(db, invitation_in)
 
@@ -91,17 +92,26 @@ async def read_project_invitations(
         pages=(total + limit - 1) // limit
     )
 
+
 @router.get("/by-email/{email}", response_model=List[schemas.ProjectInvitation])
 async def read_invitations_by_email(
     email: str,
-    pending_only: bool = Query(False),
+    pending_only: bool = Query(True),  # Default to pending only for notifications
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all invitations for a specific email address"""
+    """Get all invitations for a specific email address with full details"""
     if pending_only:
-        return await crud.get_pending_invitations_for_email(db, email=email)
+        invitations = await crud.get_pending_invitations_for_email(db, email=email)
     else:
-        return await crud.get_invitations_by_email(db, email=email)
+        invitations = await crud.get_invitations_by_email(db, email=email)
+    
+    # Convert to detailed format (the CRUD functions already load the relationships)
+    detailed_invitations = []
+    for invitation in invitations:
+        if invitation.project and invitation.role and invitation.inviter:
+            detailed_invitations.append(invitation)
+    
+    return detailed_invitations
 
 @router.get("/by-project/{project_id}", response_model=List[schemas.ProjectInvitation])
 async def read_invitations_by_project(
@@ -184,10 +194,12 @@ async def update_project_invitation(
 @router.post("/{invitation_id}/accept", response_model=schemas.ProjectMember)
 async def accept_project_invitation(
     invitation_id: UUID,
-    accepting_user_id: UUID,
+    accept_data: schemas.AcceptInvitationRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Accept a project invitation and create project membership"""
+    accepting_user_id = accept_data.user_id
+    
     invitation = await crud.get_project_invitation(db, invitation_id)
     if not invitation:
         raise HTTPException(

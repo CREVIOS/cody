@@ -1,32 +1,68 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
+import { User } from '@/lib/projectAPI/TypeDefinitions';
+import { Theme } from '@/context/ThemeContext';
+import Terminal from "@/components/Terminal";
+import { useState } from "react";
 
-const languages = [
-  { label: "JavaScript", value: "javascript" },
-  { label: "Python", value: "python" },
-  { label: "C++", value: "cpp" },
-  { label: "HTML", value: "html" },
-  { label: "CSS", value: "css" },
-  { label: "JSON", value: "json" },
-  { label: "Markdown", value: "markdown" },
-  { label: "Java", value: "java" },
-];
+// const languages = [
+//   { label: "JavaScript", value: "javascript" },
+//   { label: "Python", value: "python" },
+//   { label: "C++", value: "cpp" },
+//   { label: "HTML", value: "html" },
+//   { label: "CSS", value: "css" },
+//   { label: "JSON", value: "json" },
+//   { label: "Markdown", value: "markdown" },
+//   { label: "Java", value: "java" },
+// ];
 
-interface TopbarProps {
+export interface TopbarProps {
+  projectName: string;
+  isEditingName: boolean;
+  setIsEditingName: (value: boolean) => void;
+  onNameChange: (value: string) => void;
+  onNameSubmit: () => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onHome: () => void;
+  canEditName: boolean;
+  canInviteUsers: boolean;
+  onInviteClick: () => void;
+  pendingInvitationsCount: number;
+  theme: Theme;
+  user?: User;
+  onNewProject: () => void;
   language: string;
-  setLanguage: (lang: string) => void;
+  setLanguage: (value: string) => void;
   onCollaboratorsClick: () => void;
-  onTerminalClick: () => void; // ✅ new prop
 }
 
 export default function Topbar({
+  projectName,
+  isEditingName,
+  setIsEditingName,
+  onNameChange,
+  onNameSubmit,
+  onKeyDown,
+  inputRef,
+  onHome,
+  canEditName,
+  canInviteUsers,
+  onInviteClick,
+  pendingInvitationsCount,
+  theme,
+  user,
+  onNewProject,
   language,
   setLanguage,
   onCollaboratorsClick,
-  onTerminalClick,
 }: TopbarProps) {
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
   const isDark = theme === "dark";
+  const [showTerminal, setShowTerminal] = useState(false);
+
+  // Ensure we have a valid project name for display
+  const displayName = projectName?.trim() || "Untitled Project";
 
   const runButtonClass = isDark
     ? "bg-[#4D4D7F] hover:bg-[#3F3F6A] text-white"
@@ -45,57 +81,55 @@ export default function Topbar({
     : "translate-x-1 bg-white text-[#AD6800]";
 
   return (
-    <div className="w-full flex items-center justify-between">
-      {/* Left: Run + Language */}
-      <div className="flex items-center space-x-4">
-        <button className={`px-4 py-2 rounded ${runButtonClass}`}>
-          Run
-        </button>
-        <select
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          className={`p-2 rounded text-sm ${selectClass}`}
-        >
-          {languages.map((lang) => (
-            <option key={lang.value} value={lang.value}>
-              {lang.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Right: Terminal + Theme Toggle + Collaborators */}
-      <div className="flex items-center space-x-6">
-        {/* ✅ Terminal Button */}
-        <button
-          onClick={onTerminalClick}
-          className={`px-4 py-2 ${runButtonClass} rounded`}
-        >
-          Terminal
-        </button>
-
-        {/* Theme Toggle */}
-        <div className="flex items-center space-x-2">
-          <span className="text-sm">{isDark ? "Dark" : "Light"} Mode</span>
-          <button
-            onClick={toggleTheme}
-            className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors duration-300 ${themeToggleClass}`}
-          >
-            <span
-              className={`inline-block h-6 w-6 rounded-full shadow-lg transform transition-transform duration-300 flex items-center justify-center text-sm ${thumbClass}`}
-            >
-              {isDark ? "🌙" : "☀️"}
-            </span>
+    <>
+      <div className="w-full flex items-center justify-between">
+        {/* Left: Run + Language */}
+        <div className="flex items-center space-x-4">
+          <button className={`px-4 py-2 rounded ${runButtonClass}`}>
+            Run
           </button>
         </div>
 
-        <button
-          onClick={onCollaboratorsClick}
-          className={`px-4 py-2 ${runButtonClass} rounded`}
-        >
-          Collaborators
-        </button>
+        {/* Right: Terminal + Theme Toggle + Collaborators */}
+        <div className="flex items-center space-x-6">
+          {/* ✅ Terminal Button */}
+          <button
+            onClick={() => setShowTerminal(!showTerminal)}
+            className={`px-4 py-2 ${runButtonClass} rounded`}
+          >
+            Terminal
+          </button>
+
+          {/* Theme Toggle */}
+          <div className="flex items-center space-x-2">
+            <span className="text-sm">{isDark ? "Dark" : "Light"} Mode</span>
+            <button
+              onClick={toggleTheme}
+              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors duration-300 ${themeToggleClass}`}
+            >
+              <span
+                className={`inline-block h-6 w-6 rounded-full shadow-lg transform transition-transform duration-300 flex items-center justify-center text-sm ${thumbClass}`}
+              >
+                {isDark ? "🌙" : "☀️"}
+              </span>
+            </button>
+          </div>
+
+          <button
+            onClick={onCollaboratorsClick}
+            className={`px-4 py-2 ${runButtonClass} rounded`}
+          >
+            Collaborators
+          </button>
+        </div>
       </div>
-    </div>
+
+      {/* Terminal Panel */}
+      {showTerminal && (
+        <div className="fixed bottom-0 left-[240px] right-0 h-1/3 bg-black shadow-lg z-50">
+          <Terminal onClose={() => setShowTerminal(false)} />
+        </div>
+      )}
+    </>
   );
 }

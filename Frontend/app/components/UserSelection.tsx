@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTheme } from "@/context/ThemeContext";
-import { listUsers, User } from "@/lib/projectApi";
+import { User } from "@/lib/projectAPI/TypeDefinitions";
+import { listUsers } from "@/lib/projectAPI/UserAPI";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface UserSelectionProps {

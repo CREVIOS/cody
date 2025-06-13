@@ -165,6 +165,17 @@ class CRUDFileType(CRUDBase[models.FileType, schemas.FileTypeCreate, schemas.Fil
 class CRUDFileVersion(CRUDBase[models.FileVersion, schemas.FileVersionCreate, schemas.FileVersionUpdate]):
     pass
 
+class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate]):
+    async def get_by_user(self, db: AsyncSession, *, user_id: UUID) -> List[models.ProjectMember]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.user_id == user_id)
+            .where(self.model.is_active == True)
+            .options(selectinload(self.model.project), selectinload(self.model.role))
+        )
+        return result.scalars().all()
+
+
 class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectInvitationCreate, schemas.ProjectInvitationUpdate]):
     async def get_by_token(self, db: AsyncSession, *, token: str) -> Optional[models.ProjectInvitation]:
         result = await db.execute(
@@ -203,17 +214,29 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         return result.scalars().all()
 
     async def get_pending_for_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
+        from datetime import datetime
+        
         result = await db.execute(
             select(self.model)
             .where(self.model.email == email)
             .where(self.model.status == 'pending')
+            .where(self.model.expires_at >= datetime.utcnow())  # Only non-expired invitations
             .options(
-                selectinload(self.model.project),
+                selectinload(self.model.project).selectinload(models.Project.owner),
                 selectinload(self.model.role),
                 selectinload(self.model.inviter)
             )
         )
         return result.scalars().all()
+
+    async def get_by_email_and_project(self, db: AsyncSession, *, email: str, project_id: UUID) -> Optional[models.ProjectInvitation]:
+        result = await db.execute(
+            select(self.model)
+            .where(self.model.email == email)
+            .where(self.model.project_id == project_id)
+            .where(self.model.status == "pending")
+        )
+        return result.scalar_one_or_none()
 
     async def create_with_token(self, db: AsyncSession, *, obj_in: Union[schemas.ProjectInvitationCreate, Dict[str, Any]]) -> models.ProjectInvitation:
         import secrets
@@ -234,6 +257,7 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         await db.commit()
         await db.refresh(db_obj)
         return db_obj
+
 
 class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate]):
     async def get_by_project_and_user(self, db: AsyncSession, *, project_id: UUID, user_id: UUID) -> Optional[models.ProjectMember]:
@@ -273,6 +297,7 @@ class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCrea
         )
         return result.scalars().all()
 
+
 # Create CRUD instances
 crud_user = CRUDUser(models.User)
 crud_project = CRUDProject(models.Project)
@@ -284,7 +309,6 @@ crud_file = CRUDBase[models.File, schemas.FileCreate, schemas.FileUpdate](models
 crud_file_version = CRUDFileVersion(models.FileVersion)
 crud_project_invitation = CRUDProjectInvitation(models.ProjectInvitation)
 crud_notification = CRUDBase[models.Notification, schemas.NotificationCreate, schemas.NotificationUpdate](models.Notification)
-crud_project_invitation = CRUDProjectInvitation(models.ProjectInvitation)
 
 # User CRUD functions
 async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:

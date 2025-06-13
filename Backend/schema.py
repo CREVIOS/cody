@@ -112,6 +112,11 @@ class ProjectMember(ProjectMemberBase):
     last_activity: Optional[datetime] = None
     is_active: bool
 
+class ProjectMemberWithDetails(ProjectMember):
+    user: User
+    role: Role
+    inviter: Optional[User] = None
+
 # Project Invitation Schemas
 class ProjectInvitationBase(BaseSchema):
     project_id: UUID

@@ -1,6 +1,6 @@
 "use client";
 
-import EnhancedFileTree from './EnhancedFileTree';
+import EnhancedFileTree from './filetree/EnhancedFileTree';
 
 export default function Sidebar() {
   return (
