@@ -17,14 +17,18 @@ const getErrorMessage = async (response: Response): Promise<string> => {
         
         // Handle validation errors
         if (errorData.detail && Array.isArray(errorData.detail)) {
-          return errorData.detail.map((err: any) => err.msg || err.message || JSON.stringify(err)).join(', ');
+          return errorData.detail.map((err: Record<string, unknown>) => 
+            typeof err.msg === 'string' ? err.msg : 
+            typeof err.message === 'string' ? err.message : 
+            JSON.stringify(err)
+          ).join(', ');
         }
         
         // Last resort: stringify the object
         return JSON.stringify(errorData);
       }
       return `HTTP error! status: ${response.status}`;
-    } catch (parseError) {
+    } catch {
       // If JSON parsing fails, return status-based error
       return `HTTP error! status: ${response.status}`;
     }

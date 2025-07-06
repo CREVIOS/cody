@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { ProjectMemberWithDetails } from "./TypeDefinitions";
 
@@ -7,7 +7,7 @@ import { ProjectMemberWithDetails } from "./TypeDefinitions";
  */
 export const getProjectMembers = async (projectId: string): Promise<ProjectMemberWithDetails[]> => {
     try {
-      const response = await fetch(
+      const response = await fetchWithRetry(
         `${API_BASE_URL}/api/v1/project-members/by-project/${projectId}`
       );
       
@@ -20,7 +20,8 @@ export const getProjectMembers = async (projectId: string): Promise<ProjectMembe
       return members;
     } catch (error) {
       console.error('Error fetching project members:', error);
-      throw error;
+      // Return empty array instead of throwing to prevent UI breakage
+      return [];
     }
   };
   

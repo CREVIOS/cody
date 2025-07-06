@@ -20,7 +20,7 @@ export interface User {
     modified_at: string | null;
     owner_id: string;
     is_active: boolean;
-    project_settings?: Record<string, any>;
+    project_settings?: Record<string, unknown>;
   }
   
   // Role type (matching backend schema)
@@ -99,7 +99,7 @@ export interface User {
     modified_at: string | null;
     owner_id: string;
     is_active: boolean;
-    project_settings?: Record<string, any>;
+    project_settings?: Record<string, unknown>;
     role_id: string;
   }
   

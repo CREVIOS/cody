@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Database URL - CockroachDB connection
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "cockroachdb+asyncpg://tanzila:UJwqUQPK9NxPpyQJyAqmsA@web-app-db-11902.j77.aws-ap-south-1.cockroachlabs.cloud:26257/defaultdb")
+    "cockroachdb+asyncpg://tanzila:nd-qFSw5GhO5HFQoQ0AFJg@editor-12981.j77.aws-ap-south-1.cockroachlabs.cloud:26257/defaultdb")
 
 # Create async engine with CockroachDB-specific settings
 engine = create_async_engine(

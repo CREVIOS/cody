@@ -1,6 +1,4 @@
 import { FileSystemItem } from '@/types/fileSystem';
-import { getTabIcon } from './getTabIcon';
-
 
 interface FileInfoBarProps {
   selectedFile: FileSystemItem;
@@ -23,7 +21,6 @@ export function FileInfoBar({
     }`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center">
-          <span className="mr-2">{getTabIcon(selectedFile.name)}</span>
           <span className="font-medium">{selectedFile.name}</span>
           <span className="ml-2 text-xs opacity-60">
             {selectedFile.path}

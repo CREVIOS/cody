@@ -4,13 +4,18 @@ import { getLanguageFromExtension } from './LanguageDetection';
 import { FileInfoBar } from './FileInfoBar';
 import { MonacoEditorWrapper } from './MonacoEditorWrapper';
 
+interface OpenFileContent {
+  item: FileSystemItem;
+  content: string;
+  isDirty: boolean;
+}
 
 interface FileEditorContentProps {
   selectedFile: FileSystemItem;
   currentFileContent: string;
   updateCurrentContent: (content: string) => void;
   saveFile: (path: string, content: string) => void;
-  openFiles: Map<string, any>;
+  openFiles: Map<string, OpenFileContent>;
   isDark: boolean;
 }
 

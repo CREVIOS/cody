@@ -4,10 +4,6 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { Role } from '@/lib/projectAPI/TypeDefinitions';
 import { getRoles, getRolePermissions } from '@/lib/projectAPI/RoleAPI';
 
-interface Permission {
-  permission_name: string;
-}
-
 interface RoleWithPermissions extends Role {
   permissions: Record<string, boolean>;
 }

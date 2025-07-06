@@ -1,6 +1,5 @@
 import React, { useRef, useEffect } from 'react';
 import { UserPlus } from "lucide-react";
-import { Theme } from "@/context/ThemeContext";
 
 interface SidebarHeaderProps {
   isEditingName: boolean;
@@ -12,7 +11,6 @@ interface SidebarHeaderProps {
   onHome: () => void;
   canInviteUsers: boolean;
   onInviteClick: () => void;
-  theme: Theme;
   borderClass: string;
   inputClass: string;
   iconHoverClass: string;
@@ -28,7 +26,6 @@ export function SidebarHeader({
   onHome,
   canInviteUsers,
   onInviteClick,
-  theme,
   borderClass,
   inputClass,
   iconHoverClass,

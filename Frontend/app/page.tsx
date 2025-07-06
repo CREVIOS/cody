@@ -24,10 +24,6 @@ export default function Home() {
       setCurrentView("userSelection");
     }
   };
-  const goToUserSelection = () => {
-    setSelectedUser(null);
-    setCurrentView("userSelection");
-  };
   
   const goToLayout = (name: string, id?: string) => {
     setProjectName(name);

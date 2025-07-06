@@ -20,7 +20,7 @@ interface FileSystemProviderProps {
   projectName?: string;
 }
 
-export function FileSystemProvider({ children, projectId, projectName = 'Untitled Project' }: FileSystemProviderProps) {
+export function FileSystemProvider({ children, projectId, projectName = '' }: FileSystemProviderProps) {
   const [fileTree, setFileTree] = useState<FileSystemItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileSystemItem | null>(null);
   const [openFiles, setOpenFiles] = useState<Map<string, { item: FileSystemItem; content: string; isDirty: boolean }>>(new Map());
@@ -199,6 +199,29 @@ export function FileSystemProvider({ children, projectId, projectName = 'Untitle
       const data = await response.json();
       
       if (data.success) {
+        // If content is provided, set initial file size
+        if (content) {
+          // Create a new file item with proper size
+          const fileItem: FileSystemItem = {
+            name: path.split('/').pop() || path,
+            path: path,
+            type: 'file',
+            size: new Blob([content]).size
+          };
+          
+          // Add to open files
+          setOpenFiles(prev => new Map(prev).set(path, {
+            item: fileItem,
+            content: content,
+            isDirty: false
+          }));
+          
+          // Set as selected file
+          setSelectedFile(fileItem);
+          setCurrentFileContent(content);
+          lastSavedContent.current = content;
+        }
+        
         await loadFileTree();
       } else {
         throw new Error(data.error || 'Failed to create file');
@@ -251,10 +274,46 @@ export function FileSystemProvider({ children, projectId, projectName = 'Untitle
       
       if (data.success) {
         const content = data.content;
-        setOpenFiles(prev => new Map(prev.set(item.path, { item, content, isDirty: false })));
-        setSelectedFile(item);
+        
+        // Update the item with correct size
+        const updatedItem = {
+          ...item,
+          size: new Blob([content]).size
+        };
+        
+        setOpenFiles(prev => new Map(prev.set(item.path, { 
+          item: updatedItem, 
+          content, 
+          isDirty: false 
+        })));
+        
+        setSelectedFile(updatedItem);
         setCurrentFileContent(content);
         lastSavedContent.current = content;
+        
+        // Also update the file size in the file tree
+        setFileTree(prev => {
+          const updateFileInTree = (items: FileSystemItem[]): FileSystemItem[] => {
+            return items.map(itemInTree => {
+              if (itemInTree.path === item.path) {
+                return {
+                  ...itemInTree,
+                  size: new Blob([content]).size
+                };
+              }
+              if (itemInTree.children) {
+                return {
+                  ...itemInTree,
+                  children: updateFileInTree(itemInTree.children)
+                };
+              }
+              return itemInTree;
+            });
+          };
+          
+          return updateFileInTree(prev);
+        });
+        
         saveProjectState();
       } else {
         throw new Error(data.error || 'Failed to open file');
@@ -284,10 +343,43 @@ export function FileSystemProvider({ children, projectId, projectName = 'Untitle
           const newMap = new Map(prev);
           const openFile = newMap.get(path);
           if (openFile) {
-            newMap.set(path, { ...openFile, content, isDirty: false });
+            const updatedItem = {
+              ...openFile.item,
+              size: new Blob([content]).size // Update file size based on content length
+            };
+            newMap.set(path, { 
+              ...openFile, 
+              content, 
+              isDirty: false,
+              item: updatedItem
+            });
           }
           return newMap;
         });
+        
+        // Also update the file size in the file tree
+        setFileTree(prev => {
+          const updateFileInTree = (items: FileSystemItem[]): FileSystemItem[] => {
+            return items.map(item => {
+              if (item.path === path) {
+                return {
+                  ...item,
+                  size: new Blob([content]).size
+                };
+              }
+              if (item.children) {
+                return {
+                  ...item,
+                  children: updateFileInTree(item.children)
+                };
+              }
+              return item;
+            });
+          };
+          
+          return updateFileInTree(prev);
+        });
+        
         lastSavedContent.current = content;
       } else {
         throw new Error(data.error || 'Failed to save file');

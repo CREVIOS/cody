@@ -1,5 +1,5 @@
 import React from 'react';
-import { getTabIcon } from './getTabIcon';
+import { useTabIcon } from './getTabIcon';
 
 interface FileTabProps {
   path: string;
@@ -20,6 +20,9 @@ export function FileTab({
   onTabClose, 
   isDark 
 }: FileTabProps) {
+  // Get the icon synchronously with the hook
+  const icon = useTabIcon(fileName);
+  
   return (
     <div
       className={`flex items-center px-3 py-2 min-w-0 cursor-pointer border-r group ${
@@ -30,7 +33,12 @@ export function FileTab({
       onClick={() => onTabClick(path)}
     >
       <span className="mr-2 text-sm">
-        {getTabIcon(fileName)}
+        {/* Display the icon directly */}
+        {icon.startsWith('http') ? (
+          <img src={icon} alt="" className="w-4 h-4 inline" />
+        ) : (
+          icon
+        )}
       </span>
       
       <span className="text-sm truncate max-w-32">

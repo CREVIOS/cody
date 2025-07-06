@@ -8,7 +8,6 @@ import { NotificationContent } from "./NotificationContent";
 interface NotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  userEmail: string;
   userId: string;
   invitations: ProjectInvitationWithDetails[];
   loading: boolean;
@@ -20,7 +19,6 @@ interface NotificationModalProps {
 export default function NotificationModal({
   isOpen,
   onClose,
-  userEmail,
   userId,
   invitations,
   loading,

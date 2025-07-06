@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { ProjectInvitation, ProjectInvitationCreate, ProjectInvitationUpdate, ProjectInvitationWithDetails, PaginatedResponse } from "./TypeDefinitions";
 import { findUserByEmail } from "./UserAPI";
@@ -54,7 +54,7 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
       if (projectId) params.append('project_id', projectId);
       if (status) params.append('status', status);
       
-      const response = await fetch(`${API_BASE_URL}/api/v1/project-invitations?${params}`);
+      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/project-invitations?${params}`);
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
@@ -65,7 +65,8 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
       return data.items || [];
     } catch (error) {
       console.error('Error fetching project invitations:', error);
-      throw error;
+      // Return empty array instead of throwing to prevent UI breakage
+      return [];
     }
   };
   

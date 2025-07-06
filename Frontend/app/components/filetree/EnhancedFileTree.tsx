@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useFileSystem } from '@/context/FileSystemContext';
 import { FileSystemItem } from '@/types/fileSystem';

@@ -32,7 +32,7 @@ export default function Layout({
   user,
 }: LayoutProps) {
   const { theme } = useTheme();
-  const { roles, getRoleNameById, loading: rolesLoading } = useRoles();
+  const { getRoleNameById } = useRoles();
   const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -42,44 +42,43 @@ export default function Layout({
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
   const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
-  const [invitationsLoading, setInvitationsLoading] = useState(false);
-  const [invitationsError, setInvitationsError] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [userRoleId, setUserRoleId] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
   const projectNameInputRef = useRef<HTMLInputElement>(null);
 
   // Use the new permissions hook
-  const { permissions, hasPermission, loading: permissionsLoading, error: permissionsError } = usePermissions({
+  const { hasPermission } = usePermissions({
     roleId: userRoleId,
   });
 
   // Fetch project data when project opens
   useEffect(() => {
     const fetchProjectData = async () => {
-      if (!projectId || !user) return;
-      
+      if (!projectId) return;
+
       const fetchMembers = async () => {
         try {
           setMembersLoading(true);
           setMembersError(null);
           const members = await getProjectMembers(projectId);
-          setProjectMembers(members);
-          
-          const currentUserMember = members.find(member => member.user_id === user.user_id);
-          if (currentUserMember) {
-            setUserRole(getRoleNameById(currentUserMember.role_id));
-            setUserRoleId(currentUserMember.role_id);
+          // Handle the case where we get an empty array due to API error
+          if (members && members.length > 0) {
+            setProjectMembers(members);
+            
+            if (user) {
+              const currentUserMember = members.find(member => member.user_id === user.user_id);
+              if (currentUserMember) {
+                setUserRoleId(currentUserMember.role_id);
+              } else {
+                setUserRoleId(null);
+              }
+            }
           } else {
-            setUserRole(null);
-            setUserRoleId(null);
+            console.log('No members returned or API error occurred');
           }
         } catch (err) {
           console.error('Failed to load project members:', err);
           setMembersError('Failed to load collaborators');
-          setProjectMembers([]);
-          setUserRole(null);
-          setUserRoleId(null);
         } finally {
           setMembersLoading(false);
         }
@@ -87,25 +86,34 @@ export default function Layout({
 
       const fetchPendingInvitations = async () => {
         try {
-          setInvitationsLoading(true);
-          setInvitationsError(null);
           const invitations = await getProjectInvitations(projectId, 'pending');
-          const now = new Date();
-          const validInvitations = invitations.filter(inv => {
-            const expiresAt = new Date(inv.expires_at);
-            return inv.status === 'pending' && expiresAt >= now;
-          });
-          setPendingInvitations(validInvitations);
+          // Check if we got a valid response
+          if (invitations && Array.isArray(invitations)) {
+            const now = new Date();
+            const validInvitations = invitations.filter(inv => {
+              const expiresAt = new Date(inv.expires_at);
+              return inv.status === 'pending' && expiresAt >= now;
+            });
+            setPendingInvitations(validInvitations);
+          }
         } catch (err) {
           console.error('Failed to load pending invitations:', err);
-          setInvitationsError('Failed to load pending invitations');
           setPendingInvitations([]);
-        } finally {
-          setInvitationsLoading(false);
         }
       };
 
-      await Promise.all([fetchMembers(), fetchPendingInvitations()]);
+      // Execute both API calls but handle errors independently
+      try {
+        await fetchMembers();
+      } catch (e) {
+        console.error('Error in fetchMembers:', e);
+      }
+      
+      try {
+        await fetchPendingInvitations();
+      } catch (e) {
+        console.error('Error in fetchPendingInvitations:', e);
+      }
     };
 
     if (projectId && user) {
@@ -115,31 +123,22 @@ export default function Layout({
       
       return () => clearInterval(refreshInterval);
     }
-  }, [projectId, user]);
+  }, [projectId, user, getRoleNameById]);
 
   // Function to refresh project data
   const refreshProjectData = async () => {
     if (!projectId) return;
     
     try {
-      const [members, invitations] = await Promise.all([
-        getProjectMembers(projectId),
-        getProjectInvitations(projectId, 'pending')
+      const [members] = await Promise.all([
+        getProjectMembers(projectId)
       ]);
       
       setProjectMembers(members);
       
-      const now = new Date();
-      const validInvitations = invitations.filter(inv => {
-        const expiresAt = new Date(inv.expires_at);
-        return expiresAt >= now;
-      });
-      setPendingInvitations(validInvitations);
-
       if (user) {
         const currentUserMember = members.find(member => member.user_id === user.user_id);
         if (currentUserMember) {
-          setUserRole(getRoleNameById(currentUserMember.role_id));
           setUserRoleId(currentUserMember.role_id);
         }
       }
@@ -153,7 +152,7 @@ export default function Layout({
     if (projectName && projectName !== currentProjectName) {
       setCurrentProjectName(projectName);
     }
-  }, [projectName]);
+  }, [projectName, currentProjectName]);
 
   // Handle project name edit submission
   const handleNameSubmit = () => {

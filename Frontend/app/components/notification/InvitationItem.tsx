@@ -52,9 +52,9 @@ export function InvitationItem({
         project: invitation.project, 
         role: invitation.role.role_name 
       });
-    } catch (err: any) {
+    } catch (err: Error | unknown) {
       console.error('Error accepting invitation:', err);
-      const errorMessage = err?.message || 'Failed to accept invitation. Please try again.';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to accept invitation. Please try again.';
       alert(errorMessage);
     } finally {
       setIsProcessing(false);

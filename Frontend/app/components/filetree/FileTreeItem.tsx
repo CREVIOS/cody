@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useFileSystem } from '@/context/FileSystemContext';
 import { FileSystemItem } from '@/types/fileSystem';
-import { getFileIcon } from './getFileIcon';
+import { useFileIcon } from './getFileIcon';
 
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -26,6 +26,9 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
   const [isRenaming, setIsRenaming] = useState(false);
   const [newName, setNewName] = useState(item.name);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Get the icon synchronously with the hook
+  const icon = useFileIcon(item.name, item.type === 'folder', isExpanded);
 
   const isDark = theme === 'dark';
   const isSelected = selectedFile?.path === item.path;
@@ -121,7 +124,12 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
         
         {/* File/Folder icon */}
         <span className="text-sm mr-2 flex-shrink-0">
-          {getFileIcon(item.name, item.type === 'folder', isExpanded)}
+          {/* Display the icon directly */}
+          {icon.startsWith('http') ? (
+            <img src={icon} alt="" className="w-4 h-4 inline" />
+          ) : (
+            icon
+          )}
         </span>
         
         {/* File/Folder name */}

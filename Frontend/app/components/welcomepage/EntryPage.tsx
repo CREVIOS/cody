@@ -26,7 +26,7 @@ interface EntryPageProps {
 
 export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPageProps) {
   const { theme, toggleTheme } = useTheme();
-  const { getRoleNameById, loading: rolesLoading } = useRoles();
+  const { loading: rolesLoading } = useRoles();
   const [projects, setProjects] = useState<ProjectWithRole[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
