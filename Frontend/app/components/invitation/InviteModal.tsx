@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useTheme, Theme } from "@/context/ThemeContext";
+import { Theme } from "@/context/ThemeContext";
 import { useRoles } from "@/context/RolesContext";
 import { ProjectInvitation } from "@/lib/projectAPI/TypeDefinitions";
 import { ModalHeader } from "./ModalHeader";
@@ -12,7 +12,6 @@ export interface InviteModalProps {
   projectName: string;
   onClose: () => void;
   onInviteSent: () => void;
-  canManageMembers: boolean;
   theme: Theme;
   user?: { user_id: string };
   pendingInvitations?: ProjectInvitation[];
@@ -23,15 +22,13 @@ export default function InviteModal({
   projectName,
   onClose,
   onInviteSent,
-  canManageMembers,
   theme,
   user,
   pendingInvitations = []
 }: InviteModalProps) {
-  const { roles, loading: rolesLoading } = useRoles();
+  const { roles } = useRoles();
   const [activeTab, setActiveTab] = useState<"invite" | "pending">("invite");
   const [selectedRoleId, setSelectedRoleId] = useState("");
-  const [loading, setLoading] = useState(false);
   const [deletingInvitations, setDeletingInvitations] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [localPendingInvitations, setLocalPendingInvitations] = useState<ProjectInvitation[]>(pendingInvitations);
@@ -117,7 +114,7 @@ export default function InviteModal({
             <PendingInvitations
               invitations={localPendingInvitations}
               roles={roles}
-              loading={loading}
+              loading={false}
               error={error}
               theme={theme}
               onInvitationCanceled={handleInvitationCanceled}

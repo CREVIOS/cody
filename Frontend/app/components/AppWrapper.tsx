@@ -4,12 +4,13 @@ import EntryPage from "@/components/welcomepage/EntryPage";
 import { User } from "@/lib/projectAPI/TypeDefinitions";
 
 interface AppWrapperProps {
-  onNewProject: () => void;
+  onNewProject?: () => void;
   onOpenProject: (projectId: string, projectName?: string) => void;
   onSelectUser: (user: User) => void;
+  onLogout?: () => void;
 }
 
-export default function AppWrapper({ onNewProject, onOpenProject, onSelectUser }: AppWrapperProps) {
+export default function AppWrapper({ onNewProject, onOpenProject, onSelectUser, onLogout }: AppWrapperProps) {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   const handleSelectUser = (user: User) => {
@@ -20,6 +21,9 @@ export default function AppWrapper({ onNewProject, onOpenProject, onSelectUser }
   // Add a button to change user in the EntryPage if needed
   const handleChangeUser = () => {
     setSelectedUser(null);
+    if (onLogout) {
+      onLogout();
+    }
   };
 
   if (!selectedUser) {
@@ -32,6 +36,7 @@ export default function AppWrapper({ onNewProject, onOpenProject, onSelectUser }
         user={selectedUser}
         onNewProject={onNewProject}
         onOpenProject={onOpenProject}
+        onLogout={handleChangeUser}
       />
       {/* Optional: Add a floating button to change user */}
       <button

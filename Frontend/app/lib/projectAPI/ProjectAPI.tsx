@@ -2,8 +2,6 @@ import { API_BASE_URL } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { Project, PaginatedResponse } from "./TypeDefinitions";
 
-
-
 /**
  * Get all projects
  */
@@ -72,3 +70,34 @@ export const getProjects = async (
       throw error;
     }
   };
+
+/**
+ * Create a new project
+ */
+export const createProject = async (projectData: {
+  project_name: string;
+  description?: string;
+  visibility?: string;
+  project_settings?: Record<string, any>;
+  owner_id: string;
+}): Promise<Project> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/projects/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(projectData),
+    });
+
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error creating project:', error);
+    throw error;
+  }
+};

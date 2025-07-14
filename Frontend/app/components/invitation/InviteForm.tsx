@@ -88,9 +88,10 @@ export function InviteForm({
       if (onInviteSent) {
         onInviteSent();
       }
-    } catch (err: any) {
+    } catch (err: Error | unknown) {
       console.error('Error sending invitation:', err);
-      setInvitationError(err.message || 'Failed to send invitation. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to send invitation. Please try again.';
+      setInvitationError(errorMessage);
     } finally {
       setSendingInvitation(false);
     }

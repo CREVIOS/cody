@@ -24,10 +24,6 @@ export default function Home() {
       setCurrentView("userSelection");
     }
   };
-  const goToUserSelection = () => {
-    setSelectedUser(null);
-    setCurrentView("userSelection");
-  };
   
   const goToLayout = (name: string, id?: string) => {
     setProjectName(name);
@@ -81,9 +77,15 @@ export default function Home() {
     setCurrentView("entry");
   };
 
+  // Handler for logout
+  const handleLogout = () => {
+    setSelectedUser(null);
+    setCurrentView("userSelection");
+  };
+
   // Render the appropriate component based on currentView
   if (currentView === "userSelection" || !selectedUser) {
-    return <AppWrapper onNewProject={handleNewProject} onOpenProject={handleOpenProject} onSelectUser={handleSelectUser} />;
+    return <AppWrapper onOpenProject={handleOpenProject} onSelectUser={handleSelectUser} onLogout={handleLogout} />;
   }
 
   if (currentView === "prompt") {
@@ -113,8 +115,8 @@ export default function Home() {
   return (
     <EntryPage
       user={selectedUser!}
-      onNewProject={handleNewProject}
       onOpenProject={handleOpenProject}
+      onLogout={handleLogout}
     />
   );
 }

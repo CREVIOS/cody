@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Permission, Permissions, DEFAULT_PERMISSIONS } from '@/types/permissions';
 import { getRolePermissions } from '@/lib/projectAPI/RoleAPI';
 
@@ -19,7 +19,7 @@ export function usePermissions({ roleId }: UsePermissionsProps): UsePermissionsR
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPermissions = async () => {
+  const fetchPermissions = useCallback(async () => {
     if (!roleId) {
       setPermissions(DEFAULT_PERMISSIONS);
       return;
@@ -37,13 +37,13 @@ export function usePermissions({ roleId }: UsePermissionsProps): UsePermissionsR
       if (Array.isArray(permissionsList)) {
         permissionsList.forEach((permission: string) => {
           if (permission in newPermissions) {
-            (newPermissions as any)[permission] = true;
+            (newPermissions as Record<string, boolean>)[permission] = true;
           }
         });
       } else if (typeof permissionsList === 'object' && permissionsList !== null) {
         Object.entries(permissionsList).forEach(([permission, value]) => {
           if (permission in newPermissions) {
-            (newPermissions as any)[permission] = Boolean(value);
+            (newPermissions as Record<string, boolean>)[permission] = Boolean(value);
           }
         });
       }
@@ -56,11 +56,11 @@ export function usePermissions({ roleId }: UsePermissionsProps): UsePermissionsR
     } finally {
       setLoading(false);
     }
-  };
+  }, [roleId]);
 
   useEffect(() => {
     fetchPermissions();
-  }, [roleId]);
+  }, [fetchPermissions]);
 
   const hasPermission = (permission: Permission): boolean => {
     return permissions[permission];
