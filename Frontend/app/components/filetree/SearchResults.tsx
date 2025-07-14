@@ -21,7 +21,9 @@ export function SearchResults({
     return (
       <div>
         <div className={`px-3 py-2 text-xs font-medium uppercase tracking-wider border-b ${
-          isDark ? 'text-gray-400 border-gray-700' : 'text-gray-600 border-gray-200'
+          isDark 
+            ? 'text-[#858585] border-[#3e3e42]' 
+            : 'text-[#6c6c6c] border-[#e5e5e5]'
         }`}>
           Search Results ({searchResults.length})
         </div>
@@ -36,7 +38,9 @@ export function SearchResults({
             />
           ))
         ) : !isSearching ? (
-          <div className="px-3 py-2 text-sm text-gray-500">
+          <div className={`px-3 py-2 text-sm ${
+            isDark ? 'text-[#858585]' : 'text-[#6c6c6c]'
+          }`}>
             No results found for &quot;{searchQuery}&quot;
           </div>
         ) : null}

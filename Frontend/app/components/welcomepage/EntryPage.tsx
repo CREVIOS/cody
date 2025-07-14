@@ -203,6 +203,11 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
       if (response?.items) {
         setProjects(response.items);
       }
+      
+      // Automatically open the newly created project
+      if (createdProject.project_id && createdProject.project_name) {
+        onOpenProject(createdProject.project_id, createdProject.project_name);
+      }
     } catch (err) {
       console.error('Failed to refresh projects after creation:', err);
     }

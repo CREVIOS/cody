@@ -207,7 +207,7 @@ export default function Layout({
           />
 
           {/* Regular sidebar content */}
-          <div className="p-4 flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto">
             <Sidebar />
           </div>
         </div>
@@ -215,23 +215,8 @@ export default function Layout({
         {/* Topbar */}
         <LayoutTopBar
           currentProjectName={currentProjectName}
-          isEditingName={isEditingName}
-          setIsEditingName={setIsEditingName}
-          onNameChange={setCurrentProjectName}
-          onNameSubmit={handleNameSubmit}
-          onKeyDown={handleKeyDown}
-          projectNameInputRef={projectNameInputRef}
-          onHome={onHome}
-          canEditName={hasPermission('invite')}
-          canInviteUsers={hasPermission('invite')}
-          onInviteClick={() => setShowInviteModal(true)}
-          pendingInvitationsCount={pendingInvitations.length}
+          projectId={projectId}
           theme={theme}
-          user={user}
-          onNewProject={() => {}}
-          language={language}
-          setLanguage={setLanguage}
-          borderClass={borderClass}
           onCollaboratorsClick={() => setShowCollaborators(!showCollaborators)}
         />
 
@@ -240,6 +225,8 @@ export default function Layout({
           showTerminal={showTerminal}
           onTerminalClose={() => setShowTerminal(false)}
           showCollaborators={showCollaborators}
+          projectId={projectId}
+          user={user}
           collaboratorsComponent={
             <DraggableCollaborators
               projectMembers={projectMembers}

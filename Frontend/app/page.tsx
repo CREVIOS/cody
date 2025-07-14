@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import EntryPage from "@/components/welcomepage/EntryPage";
-import ProjectPrompt from "@/components/ProjectPrompt";
 import Layout from "@/components/layout/Layout";
 import AppWrapper from "@/components/AppWrapper";
 import { User, Project } from '@/lib/projectAPI/TypeDefinitions';
@@ -16,7 +15,6 @@ export default function Home() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   // Navigation handlers
-  const goToPrompt = () => setCurrentView("prompt");
   const goToEntry = () => {
     if (selectedUser) {
       setCurrentView("entry");
@@ -68,7 +66,9 @@ export default function Home() {
 
   // Handler for creating a new project
   const handleNewProject = () => {
-    goToPrompt();
+    // Instead of going to the simple prompt, we'll handle this in the EntryPage
+    // which has the proper ProjectCreateModal
+    goToEntry();
   };
 
   // Handler for user selection
@@ -88,14 +88,15 @@ export default function Home() {
     return <AppWrapper onOpenProject={handleOpenProject} onSelectUser={handleSelectUser} onLogout={handleLogout} />;
   }
 
-  if (currentView === "prompt") {
-    return (
-      <ProjectPrompt 
-        onCancel={goToEntry} 
-        onSubmit={(name) => goToLayout(name)} 
-      />
-    );
-  }
+  // Remove the old ProjectPrompt flow since we're using ProjectCreateModal now
+  // if (currentView === "prompt") {
+  //   return (
+  //     <ProjectPrompt 
+  //       onCancel={goToEntry} 
+  //       onSubmit={(name) => goToLayout(name)} 
+  //     />
+  //   );
+  // }
   
   if (currentView === "layout") {
     return (

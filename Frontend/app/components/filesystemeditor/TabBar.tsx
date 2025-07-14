@@ -37,7 +37,9 @@ export function TabBar({ isDark }: TabBarProps) {
 
   return (
     <div className={`flex overflow-x-auto border-b ${
-      isDark ? 'bg-gray-800 border-gray-700' : 'bg-gray-100 border-gray-200'
+      isDark 
+        ? 'bg-[#2d2d30] border-[#3e3e42]' 
+        : 'bg-[#f3f3f3] border-[#e5e5e5]'
     }`}>
       {Array.from(openFiles.entries()).map(([path, openFile]) => {
         const isActive = selectedFile?.path === path;
