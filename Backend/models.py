@@ -4,9 +4,9 @@ from sqlalchemy import (
     Column, String, Text, Integer, Boolean, DateTime, ForeignKey,
     func, UniqueConstraint, Index, CheckConstraint
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from db import Base
+from db import Base, JSONVariant
 
 # Users Model
 class User(Base):
@@ -48,7 +48,7 @@ class Project(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     is_active = Column(Boolean, default=True)
     # FIXED: Use lambda for JSONB default to avoid serialization issues
-    project_settings = Column(JSONB, default=lambda: {})
+    project_settings = Column(JSONVariant, default=lambda: {})
 
     # Relationships
     owner = relationship("User", back_populates="owned_projects")
@@ -74,7 +74,7 @@ class Role(Base):
     role_name = Column(String(50), nullable=False, unique=True)
     description = Column(Text)
     # FIXED: Use lambda for JSONB default
-    permissions = Column(JSONB, nullable=False, default=lambda: {})
+    permissions = Column(JSONVariant, nullable=False, default=lambda: {})
 
     # Relationships
     members = relationship("ProjectMember", back_populates="role")
@@ -101,9 +101,9 @@ class ProjectMember(Base):
 
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", name="uq_member_once_per_project"),
-        Index("idx_project", "project_id"),
-        Index("idx_role", "role_id"),
-        Index("idx_activity", "last_activity"),
+        Index("idx_member_project", "project_id"),
+        Index("idx_member_role", "role_id"),
+        Index("idx_member_activity", "last_activity"),
     )
 
 # Project Invitations Model
@@ -130,8 +130,8 @@ class ProjectInvitation(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'accepted', 'declined', 'expired')", name="check_invitation_status"),
-        Index("idx_project", "project_id"),
-        Index("idx_token", "token"),
+        Index("idx_invitation_project", "project_id"),
+        Index("idx_invitation_token", "token"),
     )
 
 # Directories Model
@@ -155,9 +155,9 @@ class Directory(Base):
     files = relationship("File", back_populates="directory", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("idx_project", "project_id"),
-        Index("idx_parent", "parent_directory_id"),
-        Index("idx_path", "materialized_path"),
+        Index("idx_directory_project", "project_id"),
+        Index("idx_directory_parent", "parent_directory_id"),
+        Index("idx_directory_path", "materialized_path"),
     )
 
 # File Types Model
@@ -207,8 +207,8 @@ class File(Base):
 
     __table_args__ = (
         UniqueConstraint("directory_id", "file_name", name="uq_file_name_in_directory"),
-        Index("idx_project", "project_id"),
-        Index("idx_directory", "directory_id"),
+        Index("idx_file_project", "project_id"),
+        Index("idx_file_directory", "directory_id"),
     )
 
 # File Versions Model
@@ -244,8 +244,8 @@ class ExecutionEnvironment(Base):
     version = Column(String(40))
     docker_image = Column(String(255))
     # FIXED: Use lambda for JSONB defaults
-    base_packages = Column(JSONB, default=lambda: [])
-    setup_commands = Column(JSONB, default=lambda: [])
+    base_packages = Column(JSONVariant, default=lambda: [])
+    setup_commands = Column(JSONVariant, default=lambda: [])
     run_command_template = Column(String(255))
     timeout_seconds = Column(Integer, default=30)
     persistent_storage = Column(Boolean, default=False)
@@ -314,7 +314,7 @@ class WebSocketConnection(Base):
     last_ping = Column(DateTime(timezone=True))
     is_active = Column(Boolean, default=True)
     # FIXED: Use lambda for JSONB default
-    client_info = Column(JSONB, default=lambda: {})
+    client_info = Column(JSONVariant, default=lambda: {})
 
     # Relationships
     user = relationship("User", back_populates="websocket_conns")

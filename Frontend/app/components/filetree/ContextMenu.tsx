@@ -59,8 +59,8 @@ export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMe
         ref={menuRef}
         className={`fixed z-50 py-1 rounded-md shadow-lg border min-w-[180px] ${
           isDark 
-            ? 'bg-gray-800 border-gray-600 text-white' 
-            : 'bg-white border-gray-300 text-black'
+            ? 'bg-[#2d2d30] border-[#3e3e42] text-[#cccccc]' 
+            : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838]'
         }`}
         style={{ 
           left: Math.min(x, window.innerWidth - 200), 
@@ -71,7 +71,7 @@ export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMe
           if (menuItem.type === 'separator') {
             return (
               <div key={index} className={`h-px mx-2 my-1 ${
-                isDark ? 'bg-gray-600' : 'bg-gray-200'
+                isDark ? 'bg-[#3e3e42]' : 'bg-[#e5e5e5]'
               }`} />
             );
           }
@@ -81,8 +81,14 @@ export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMe
               key={index}
               className={`w-full flex items-center px-3 py-1.5 text-sm transition-colors ${
                 menuItem.danger 
-                  ? (isDark ? 'hover:bg-red-900/30 text-red-400' : 'hover:bg-red-50 text-red-600')
-                  : (isDark ? 'hover:bg-gray-700' : 'hover:bg-gray-100')
+                  ? (isDark 
+                      ? 'hover:bg-[#5a1d1d] text-[#f48771]' 
+                      : 'hover:bg-[#f2dede] text-[#cd3131]'
+                    )
+                  : (isDark 
+                      ? 'hover:bg-[#37373d]' 
+                      : 'hover:bg-[#f3f3f3]'
+                    )
               }`}
               onClick={() => {
                 if (menuItem.action) {

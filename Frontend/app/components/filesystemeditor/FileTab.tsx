@@ -25,10 +25,16 @@ export function FileTab({
   
   return (
     <div
-      className={`flex items-center px-3 py-2 min-w-0 cursor-pointer border-r group ${
+      className={`flex items-center px-3 py-2 min-w-0 cursor-pointer border-r group transition-colors duration-100 ${
         isActive
-          ? (isDark ? 'bg-gray-900 text-white border-gray-600' : 'bg-white text-black border-gray-300')
-          : (isDark ? 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-50 border-gray-200')
+          ? (isDark 
+              ? 'bg-[#1e1e1e] text-[#ffffff] border-r-[#3e3e42]' 
+              : 'bg-[#ffffff] text-[#333333] border-r-[#e5e5e5]'
+            )
+          : (isDark 
+              ? 'bg-[#2d2d30] text-[#969696] border-r-[#3e3e42] hover:bg-[#1e1e1e] hover:text-[#ffffff]' 
+              : 'bg-[#f3f3f3] text-[#333333] hover:bg-[#ffffff] border-r-[#e5e5e5]'
+            )
       }`}
       onClick={() => onTabClick(path)}
     >
@@ -46,12 +52,16 @@ export function FileTab({
       </span>
       
       {isModified && (
-        <span className="ml-1 text-orange-500 text-xs">●</span>
+        <span className={`ml-1 text-xs ${
+          isDark ? 'text-[#ffffff]' : 'text-[#005fb8]'
+        }`}>●</span>
       )}
       
       <button
-        className={`ml-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-opacity-80 ${
-          isDark ? 'hover:bg-red-900/30 text-red-400' : 'hover:bg-red-100 text-red-600'
+        className={`ml-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
+          isDark 
+            ? 'hover:bg-[#ffffff]/10 text-[#969696] hover:text-[#ffffff]' 
+            : 'hover:bg-[#000000]/10 text-[#616161] hover:text-[#333333]'
         }`}
         onClick={(e) => onTabClose(e, path)}
         title="Close"

@@ -7,12 +7,14 @@ import {  Play, TerminalSquare, Users  } from 'lucide-react';
 
 export interface TopbarProps {
   projectName: string;
+  projectId?: string;
   theme: Theme;
   onCollaboratorsClick: () => void;
 }
 
 export default function Topbar({
   projectName,
+  projectId,
   theme,
   onCollaboratorsClick,
 }: TopbarProps) {
@@ -87,7 +89,10 @@ export default function Topbar({
       {/* Terminal Panel */}
       {showTerminal && (
         <div className="fixed bottom-0 left-[240px] right-0 h-1/3 bg-black shadow-lg z-50">
-          <Terminal onClose={() => setShowTerminal(false)} />
+          <Terminal 
+            projectId={projectId || 'default-project'} 
+            onClose={() => setShowTerminal(false)} 
+          />
         </div>
       )}
     </>
