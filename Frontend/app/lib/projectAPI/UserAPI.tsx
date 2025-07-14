@@ -65,7 +65,7 @@ export const listUsers = async (): Promise<User[]> => {
     }
   };
   
-  /**
+    /**
    * Get user's all projects (owned and member)
    */
   export const getUserProjects = async (userId: string): Promise<UserProjectsResponse> => {
@@ -76,7 +76,7 @@ export const listUsers = async (): Promise<User[]> => {
       if (!ownerRole) {
         throw new Error('Owner role not found in the system');
       }
-  
+
       const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/all-projects`);
       
       if (!response.ok) {
@@ -107,9 +107,9 @@ export const listUsers = async (): Promise<User[]> => {
           };
         })
       ];
-  
+
       console.log('Transformed projects:', allProjects); // Debug log
-  
+
       return {
         items: allProjects,
         total: allProjects.length,
@@ -119,6 +119,131 @@ export const listUsers = async (): Promise<User[]> => {
       };
     } catch (error) {
       console.error('Error fetching user projects:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Get user by ID
+   */
+  export const getUser = async (userId: string): Promise<User> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`);
+      
+      if (!response.ok) {
+        const errorMessage = await getErrorMessage(response);
+        throw new Error(errorMessage);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error fetching user:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Update user profile
+   */
+  export interface UserUpdateData {
+    username?: string;
+    email?: string;
+    full_name?: string;
+    avatar_url?: string;
+    status?: string;
+  }
+
+  export const updateUser = async (userId: string, updateData: UserUpdateData): Promise<User> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updateData),
+      });
+      
+      if (!response.ok) {
+        const errorMessage = await getErrorMessage(response);
+        throw new Error(errorMessage);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error updating user:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Update user profile with validation
+   */
+  export interface ProfileUpdateData {
+    username?: string;
+    email?: string;
+    full_name?: string;
+    avatar_url?: string;
+  }
+
+  export const updateProfile = async (userId: string, profileData: ProfileUpdateData): Promise<User> => {
+    try {
+      // Validate data before sending
+      const validatedData: UserUpdateData = {};
+      
+      if (profileData.username !== undefined) {
+        if (profileData.username.length < 3) {
+          throw new Error('Username must be at least 3 characters long');
+        }
+        validatedData.username = profileData.username;
+      }
+      
+      if (profileData.email !== undefined) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(profileData.email)) {
+          throw new Error('Please enter a valid email address');
+        }
+        validatedData.email = profileData.email;
+      }
+      
+      if (profileData.full_name !== undefined) {
+        validatedData.full_name = profileData.full_name;
+      }
+      
+      if (profileData.avatar_url !== undefined) {
+        validatedData.avatar_url = profileData.avatar_url;
+      }
+      
+      return await updateUser(userId, validatedData);
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      throw error;
+    }
+  };
+
+  export interface UserCreateData {
+    username: string;
+    email: string;
+    password: string;
+    full_name?: string;
+    avatar_url?: string;
+  }
+
+  export const createUser = async (userData: UserCreateData): Promise<User> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userData),
+      });
+      if (!response.ok) {
+        const errorMessage = await getErrorMessage(response);
+        throw new Error(errorMessage);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Error creating user:', error);
       throw error;
     }
   };

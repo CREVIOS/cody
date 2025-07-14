@@ -6,6 +6,8 @@ import { deleteProject } from "@/lib/projectAPI/ProjectAPI";
 import { getPendingInvitationsByEmail } from "@/lib/projectAPI/InvitationAPI";
 import { getUserProjects } from "@/lib/projectAPI/UserAPI";
 import NotificationModal from "@/components/notification/NotificationModal";
+import ProjectCreateModal from "@/components/ProjectCreateModal";
+import ProfileModal from "@/components/ProfileModal";
 import { TopBar } from "./TopBar";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationButton } from "./NotificationButton";
@@ -19,12 +21,13 @@ import { ProjectList } from "./ProjectList";
 
 
 interface EntryPageProps {
-  onNewProject: () => void;
+  onNewProject?: () => void;
   onOpenProject: (projectId: string, projectName?: string) => void;
   user: User;
+  onLogout?: () => void;
 }
 
-export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPageProps) {
+export default function EntryPage({ onNewProject, onOpenProject, user, onLogout }: EntryPageProps) {
   const { theme, toggleTheme } = useTheme();
   const { loading: rolesLoading } = useRoles();
   const [projects, setProjects] = useState<ProjectWithRole[]>([]);
@@ -36,6 +39,35 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
   const [invitationsError, setInvitationsError] = useState<string | null>(null);
   const [invitationCount, setInvitationCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showProjectCreateModal, setShowProjectCreateModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User>(user);
+
+  // Update currentUser when user prop changes
+  useEffect(() => {
+    setCurrentUser(user);
+  }, [user]);
+
+  // Profile handlers
+  const handleProfileClick = () => {
+    setShowProfileModal(true);
+  };
+
+  const handleProfileUpdated = (updatedUser: User) => {
+    setCurrentUser(updatedUser);
+    // Optionally, you can also trigger a refresh of other user-related data here
+  };
+
+  const handleSettingsClick = () => {
+    // Placeholder for settings functionality
+    console.log('Settings clicked');
+  };
+
+  const handleLogoutClick = () => {
+    if (onLogout) {
+      onLogout();
+    }
+  };
 
   // Load projects on component mount
   useEffect(() => {
@@ -154,6 +186,28 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
     }
   };
 
+  // Function to handle new project creation
+  const handleNewProject = () => {
+    if (onNewProject) {
+      onNewProject(); // Use the old flow if provided
+    } else {
+      setShowProjectCreateModal(true); // Use the new modal flow
+    }
+  };
+
+  // Function to handle project creation success
+  const handleProjectCreated = async (createdProject: Project) => {
+    // Refresh the projects list to include the new project
+    try {
+      const response = await getUserProjects(user.user_id);
+      if (response?.items) {
+        setProjects(response.items);
+      }
+    } catch (err) {
+      console.error('Failed to refresh projects after creation:', err);
+    }
+  };
+
   // Apply theme classes
   const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
   const borderClass = theme === "dark" ? "border-[#3A3A3E]" : "border-gray-200";
@@ -185,6 +239,9 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
             borderClass={borderClass}
             menuBgClass={menuBgClass}
             menuHoverClass={menuHoverClass}
+            onProfileClick={handleProfileClick}
+            onSettingsClick={handleSettingsClick}
+            onLogoutClick={handleLogoutClick}
           />
         </div>
       </TopBar>
@@ -193,7 +250,7 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
         <WelcomeSection
           username={user.username}
           theme={theme}
-          onNewProject={onNewProject}
+          onNewProject={handleNewProject}
           buttonClass={buttonClass}
         />
 
@@ -206,7 +263,7 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
             user={user}
             onOpenProject={handleProjectOpen}
             onDeleteProject={handleDeleteProject}
-            onNewProject={onNewProject}
+            onNewProject={handleNewProject}
             theme={theme}
             cardBgClass={cardBgClass}
             borderClass={borderClass}
@@ -230,6 +287,23 @@ export default function EntryPage({ onNewProject, onOpenProject, user }: EntryPa
           handleInvitationAccepted(projectId, projectData);
         }}
         onRefreshData={refreshInvitationData}
+      />
+
+      {/* Project Create Modal */}
+      <ProjectCreateModal
+        isOpen={showProjectCreateModal}
+        onClose={() => setShowProjectCreateModal(false)}
+        onProjectCreated={handleProjectCreated}
+        user={user}
+      />
+
+      {/* Profile Modal */}
+      <ProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        user={currentUser}
+        onProfileUpdated={handleProfileUpdated}
+        theme={theme}
       />
     </div>
   );
