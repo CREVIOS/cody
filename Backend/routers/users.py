@@ -58,6 +58,16 @@ async def read_users(
         pages=(total + limit - 1) // limit
     )
 
+# Alias without trailing slash to avoid 307 redirects that some XHR clients won't follow cross-origin
+@router.get("", response_model=schemas.PaginatedResponse[schemas.User])
+async def read_users_no_trailing_slash(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: AsyncSession = Depends(get_db)
+):
+    return await read_users(skip=skip, limit=limit, status_filter=status_filter, db=db)
+
 @router.get("/{user_id}", response_model=schemas.User)
 async def read_user(
     user_id: UUID,

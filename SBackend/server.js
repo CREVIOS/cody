@@ -33,11 +33,47 @@ app.use(helmet({
 }));
 
 // CORS configuration
+const defaultCorsOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001'
+];
+const envCorsOriginsRaw = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || '';
+const envCorsOrigins = envCorsOriginsRaw
+  .split(',')
+  .map((v) => v.trim())
+  .filter((v) => v.length > 0);
+const allowedCorsOrigins = [...defaultCorsOrigins, ...envCorsOrigins];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || ['http://localhost:3000', 'http://localhost:3001'],
+  origin: (origin, callback) => {
+    // Allow non-browser clients or same-origin requests without an Origin header
+    if (!origin) return callback(null, true);
+
+    // Always allow localhost/127.0.0.1 in development for any port
+    try {
+      const url = new URL(origin);
+      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        return callback(null, true);
+      }
+    } catch (_) {}
+
+    if (allowedCorsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // In non-production, be permissive to reduce dev friction
+    if ((process.env.NODE_ENV || 'development') !== 'production') {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 204,
 }));
 
 // Rate limiting
