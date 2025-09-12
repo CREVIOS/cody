@@ -10,6 +10,7 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.types import TypeDecorator, TEXT
+from uuid import uuid4
 
 
 class JsonEncoded(TypeDecorator):
@@ -35,21 +36,40 @@ class JsonEncoded(TypeDecorator):
         return value
 
 
-# Database URL - CockroachDB connection
+# Database URLs - Supabase Postgres (pooled for app, direct for migrations)
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "cockroachdb+asyncpg://tanzila:nd-qFSw5GhO5HFQoQ0AFJg@editor-12981.j77.aws-ap-south-1.cockroachlabs.cloud:26257/defaultdb",
+    "postgresql+asyncpg://postgres.igbmvsodtgfmbcxmalha:%2AbeHA%40%24p-E4%2A6X%21@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
 )
 
-# Use JSONB for CockroachDB, JSON for others (like SQLite in tests)
-if "cockroachdb" in DATABASE_URL:
+# Optional: direct (non-pooled) sync URL for migrations/tools
+DIRECT_URL = os.getenv(
+    "DIRECT_URL",
+    "postgresql://postgres.igbmvsodtgfmbcxmalha:%2AbeHA%40%24p-E4%2A6X%21@aws-1-ap-south-1.pooler.supabase.com:5432/postgres",
+)
+
+# Prefer JSONB for Postgres, JSON for others (e.g., SQLite in tests)
+if "postgresql" in DATABASE_URL:
     from sqlalchemy.dialects.postgresql import JSONB as JSONVariant
 else:
     from sqlalchemy import JSON as JSONVariant
 
 
-# Create async engine with CockroachDB-specific settings
-engine = create_async_engine(DATABASE_URL)
+# Create async engine configured for PgBouncer (avoid app-level pooling)
+# - Disable asyncpg statement cache to avoid prepared statements under PgBouncer transaction/statement modes
+# - Provide unique prepared statement names as an additional safeguard when prepared statements are used internally
+connect_args = {}
+if "postgresql+asyncpg" in DATABASE_URL:
+    connect_args = {
+        "statement_cache_size": 0,
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    }
+
+engine = create_async_engine(
+    DATABASE_URL,
+    poolclass=NullPool,
+    connect_args=connect_args,
+)
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
