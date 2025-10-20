@@ -1,20 +1,62 @@
 import { Editor } from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
+import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
+import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
+import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
 
 interface MonacoEditorWrapperProps {
   language: string;
   content: string;
   onChange: (value: string | undefined) => void;
   isDark: boolean;
+
+  // Collaboration options (optional)
+  collaboration?: {
+    enabled: boolean;
+    docId: string;
+    user: {
+      id: string;
+      name: string;
+      color?: string;
+    };
+    wsUrl?: string;
+    offlineSupport?: boolean;
+  };
 }
 
-export function MonacoEditorWrapper({ 
-  language, 
-  content, 
-  onChange, 
-  isDark 
+export function MonacoEditorWrapper({
+  language,
+  content,
+  onChange,
+  isDark,
+  collaboration
 }: MonacoEditorWrapperProps) {
   const editorRef = useRef<any>(null);
+
+  // Setup collaboration if enabled
+  const [collabState, collabActions] = useCollaborativeEditor(
+    collaboration?.enabled
+      ? {
+          editor: editorRef.current,
+          docId: collaboration.docId,
+          user: collaboration.user,
+          wsUrl: collaboration.wsUrl,
+          offlineSupport: collaboration.offlineSupport,
+          logging: true,
+        }
+      : {
+          editor: null,
+          docId: '',
+          user: { id: '', name: '' },
+        }
+  );
+
+  // Inject remote cursor styles on mount
+  useEffect(() => {
+    if (collaboration?.enabled) {
+      injectRemoteCursorStyles();
+    }
+  }, [collaboration?.enabled]);
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
@@ -62,13 +104,35 @@ export function MonacoEditorWrapper({
 
   return (
     <div className="flex-1 relative">
+      {/* Collaboration UI */}
+      {collaboration?.enabled && (
+        <>
+          {/* User avatars in top-right corner */}
+          <div className="absolute top-2 right-4 z-10">
+            <CollaborativeUserAvatars
+              awareness={collabState.users.size > 0 ? { getStates: () => collabState.users } as any : null}
+              connectionStatus={collabState.status}
+              currentUserId={collaboration.user.id}
+            />
+          </div>
+
+          {/* Remote cursors */}
+          {editorRef.current && (
+            <RemoteCursors
+              editor={editorRef.current}
+              awareness={collabActions.getAwarenessStates ? { getStates: collabActions.getAwarenessStates, on: () => {}, off: () => {} } as any : null}
+            />
+          )}
+        </>
+      )}
+
       <Editor
         height="100%"
         width="100%"
         theme={isDark ? "vs-dark" : "light"}
         language={language}
-        value={content}
-        onChange={onChange}
+        value={collaboration?.enabled ? undefined : content}
+        onChange={collaboration?.enabled ? undefined : onChange}
         onMount={handleEditorDidMount}
         options={{
           fontSize: 14,
