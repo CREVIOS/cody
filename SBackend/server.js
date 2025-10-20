@@ -15,6 +15,7 @@ const execAsync = util.promisify(exec);
 const FileSystemService = require("./services/fileSystemService");
 const ContainerService = require("./services/containerService");
 const OutputManager = require("./services/outputManager");
+const { CollaborationService } = require("./services/collaborationService");
 
 // Create Express app with security middleware
 const app = express();
@@ -105,15 +106,23 @@ app.use((req, res, next) => {
 let fileSystemService;
 let containerService;
 let outputManager;
+let collaborationService;
 
 async function initializeServices() {
   try {
     console.log('🚀 Initializing services...');
-    
+
     fileSystemService = new FileSystemService();
     outputManager = new OutputManager();
     containerService = new ContainerService(fileSystemService);
-    
+    collaborationService = new CollaborationService('./data/collaboration', {
+      snapshotInterval: 5 * 60 * 1000, // 5 minutes
+      maxUpdatesBeforeSnapshot: 100,
+      gcEnabled: true,
+      roomCleanupInterval: 60 * 1000, // 1 minute
+      roomIdleTimeout: 5 * 60 * 1000 // 5 minutes
+    });
+
     // Connect output manager to container service
     containerService.outputManager = outputManager;
     
@@ -190,7 +199,8 @@ app.get('/api/health', asyncHandler(async (req, res) => {
     memory: process.memoryUsage(),
     services: {
       fileSystem: 'healthy',
-      containers: 'healthy'
+      containers: 'healthy',
+      collaboration: collaborationService ? 'healthy' : 'not initialized'
     }
   };
 
@@ -637,6 +647,46 @@ app.get('/api/containers', asyncHandler(async (req, res) => {
   });
 }));
 
+// Collaboration API Routes
+app.get('/api/collaboration/metrics', asyncHandler(async (req, res) => {
+  if (!collaborationService) {
+    return res.status(503).json({
+      success: false,
+      error: 'Collaboration service not initialized'
+    });
+  }
+
+  const metrics = collaborationService.getAllMetrics();
+  res.json({
+    success: true,
+    metrics
+  });
+}));
+
+app.get('/api/collaboration/rooms/:docId/metrics', asyncHandler(async (req, res) => {
+  if (!collaborationService) {
+    return res.status(503).json({
+      success: false,
+      error: 'Collaboration service not initialized'
+    });
+  }
+
+  const { docId } = req.params;
+  const room = collaborationService.rooms.get(docId);
+
+  if (!room) {
+    return res.status(404).json({
+      success: false,
+      error: 'Room not found'
+    });
+  }
+
+  res.json({
+    success: true,
+    metrics: room.getMetrics()
+  });
+}));
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(`❌ Error in ${req.method} ${req.path}:`, err);
@@ -886,18 +936,22 @@ wss.on("connection", (ws, req) => {
       case 'terminal':
         handleTerminalConnection(ws, projectId, connectionId);
         break;
-        
+
       case 'watcher':
         handleFileWatcherConnection(ws, projectId, connectionId);
         break;
-        
+
+      case 'collaboration':
+        handleCollaborationConnection(ws, projectId, connectionId, url);
+        break;
+
       default:
         throw new Error(`Unknown connection type: ${type}`);
     }
   } catch (error) {
     console.error(`❌ Error setting up ${type} connection:`, error);
-    ws.send(JSON.stringify({ 
-      type: 'error', 
+    ws.send(JSON.stringify({
+      type: 'error',
       message: error.message,
       code: 'CONNECTION_SETUP_FAILED'
     }));
@@ -930,6 +984,52 @@ async function handleTerminalConnection(ws, projectId, connectionId) {
       code: 'TERMINAL_CREATION_FAILED'
     }));
   }
+}
+
+// Collaboration connection handler (CRDT-based)
+function handleCollaborationConnection(ws, projectId, connectionId, url) {
+  // Extract parameters
+  const docId = url.searchParams.get('docId') || projectId;
+  const userId = url.searchParams.get('userId') || connectionId;
+  const userName = url.searchParams.get('userName') || 'Anonymous';
+  const userColor = url.searchParams.get('userColor') || generateRandomColor();
+
+  console.log(`👥 Collaboration connection - Room: ${docId}, User: ${userName}`);
+
+  // Get or create collaboration room
+  const room = collaborationService.getRoom(docId);
+
+  // Add connection with user info
+  const userInfo = {
+    id: userId,
+    name: userName,
+    color: userColor,
+    connectionId
+  };
+
+  room.addConnection(connectionId, ws, userInfo);
+
+  // Send confirmation
+  const confirmMessage = JSON.stringify({
+    type: 'collaboration:connected',
+    docId,
+    userId,
+    connectionId,
+    timestamp: Date.now()
+  });
+
+  if (ws.readyState === ws.OPEN) {
+    ws.send(confirmMessage);
+  }
+}
+
+// Generate random color for user
+function generateRandomColor() {
+  const colors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
+    '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52B788'
+  ];
+  return colors[Math.floor(Math.random() * colors.length)];
 }
 
 // File watcher connection handler
