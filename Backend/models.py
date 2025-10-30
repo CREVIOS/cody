@@ -290,6 +290,9 @@ class Notification(Base):
     notification_type = Column(String(50), nullable=False)
     title = Column(String(255), nullable=False)
     message = Column(Text)
+    reference_id = Column(UUID(as_uuid=True))
+    payload = Column(JSONVariant, default=lambda: {})
+    is_read = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -299,6 +302,10 @@ class Notification(Base):
     __table_args__ = (
         CheckConstraint("notification_type IN ('invitation', 'file_change', 'member_added', 'deployment', 'mention')", 
                        name="check_notification_type"),
+        Index("idx_notification_user", "user_id"),
+        Index("idx_notification_project", "project_id"),
+        Index("idx_notification_reference", "reference_id"),
+        Index("idx_notification_is_read", "is_read"),
     )
 
 # WebSocket Connections Model
@@ -324,4 +331,3 @@ class WebSocketConnection(Base):
         CheckConstraint("connection_type IN ('editor', 'terminal', 'preview')", name="check_connection_type"),
         Index("idx_user", "user_id"),
     )
-

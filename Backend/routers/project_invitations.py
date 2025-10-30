@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
@@ -6,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import schema as schemas
 import crud
+import models
 from db import get_db
 
 router = APIRouter(prefix="/project-invitations", tags=["project-invitations"])
@@ -39,6 +41,11 @@ async def create_project_invitation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Inviter user not found"
         )
+
+    project_name = project.project_name
+    role_name = role.role_name
+    inviter_name = inviter.full_name or inviter.username or "Project member"
+
     
     # Check if user is already a member of the project (if user_id provided)
     if invitation_in.user_id:
@@ -61,7 +68,27 @@ async def create_project_invitation(
             detail="Pending invitation already exists for this email in this project"
         )
     
-    return await crud.create_project_invitation(db, invitation_in)
+    invitation = await crud.create_project_invitation(db, invitation_in)
+
+    # Create notification for the invited user if available
+    try:
+        await create_invitation_notification(
+            db=db,
+            invitation=invitation,
+            project_name=project_name,
+            role_name=role_name,
+            inviter_name=inviter_name,
+            inviter_id=invitation_in.invited_by,
+        )
+    except Exception:
+        # Log but do not fail the request if notification creation fails
+        logger = logging.getLogger(__name__)
+        logger.exception("Failed to create invitation notification")
+
+    # Refresh the invitation instance after additional commits
+    await db.refresh(invitation)
+
+    return invitation
 
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.ProjectInvitation])
 async def read_project_invitations(
@@ -222,7 +249,10 @@ async def accept_project_invitation(
         )
     
     # Check if invitation has expired
-    if invitation.expires_at < datetime.now(timezone.utc):
+    expires_at = invitation.expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and expires_at < datetime.now(timezone.utc):
         await crud.update_project_invitation(
             db, 
             invitation_id, 
@@ -271,6 +301,18 @@ async def accept_project_invitation(
             accepted_at=datetime.now(timezone.utc)
         )
     )
+
+    # Mark related notification as handled
+    await update_invitation_notification_status(
+        db,
+        invitation_id=invitation.invitation_id,
+        status="accepted",
+        mark_read=True,
+        responded_at=datetime.now(timezone.utc)
+    )
+
+    # Refresh member after subsequent commits to avoid expired attributes
+    await db.refresh(new_member)
     
     return new_member
 
@@ -293,11 +335,21 @@ async def decline_project_invitation(
             detail=f"Invitation status is '{invitation.status}', cannot decline"
         )
     
-    return await crud.update_project_invitation(
+    updated_invitation = await crud.update_project_invitation(
         db,
         invitation_id,
         schemas.ProjectInvitationUpdate(status="declined")
     )
+
+    await update_invitation_notification_status(
+        db,
+        invitation_id=invitation_id,
+        status="declined",
+        mark_read=True,
+        responded_at=datetime.now(timezone.utc)
+    )
+
+    return updated_invitation
 
 @router.delete("/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project_invitation(
@@ -311,3 +363,106 @@ async def delete_project_invitation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project invitation not found"
         ) 
+
+
+async def create_invitation_notification(
+    db: AsyncSession,
+    invitation: models.ProjectInvitation,
+    project_name: str,
+    role_name: str,
+    inviter_name: str,
+    inviter_id: Optional[UUID],
+):
+    """Create or update a notification associated with a project invitation."""
+    if not invitation.user_id:
+        return None
+
+    logger = logging.getLogger(__name__)
+    logger.debug(
+        "Creating invitation notification for user %s and invitation %s",
+        invitation.user_id,
+        invitation.invitation_id,
+    )
+
+    payload = {
+        "category": "project_invitation",
+        "invitation_id": str(invitation.invitation_id),
+        "project_id": str(invitation.project_id) if invitation.project_id else None,
+        "project_name": project_name,
+        "role_id": str(invitation.role_id) if invitation.role_id else None,
+        "role_name": role_name,
+        "invited_by": str(inviter_id) if inviter_id else None,
+        "invited_by_name": inviter_name,
+        "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
+        "status": invitation.status,
+    }
+
+    notification_in = schemas.NotificationCreate(
+        user_id=invitation.user_id,
+        project_id=invitation.project_id,
+        notification_type="invitation",
+        title=f"Invitation to join {project_name}",
+        message=f"{inviter_name} invited you to join {project_name} as {role_name}.",
+        reference_id=invitation.invitation_id,
+        payload=payload,
+        is_read=False,
+    )
+
+    # Ensure idempotency if a notification already exists for this invitation
+    existing = await crud.crud_notification.get_multi(
+        db, reference_id=invitation.invitation_id
+    )
+    if existing:
+        notification = existing[0]
+        update_data = schemas.NotificationUpdate(
+            title=notification_in.title,
+            message=notification_in.message,
+            payload=payload,
+            is_read=False,
+        )
+        await crud.crud_notification.update(
+            db, db_obj=notification, obj_in=update_data
+        )
+        return notification
+
+    return await crud.crud_notification.create(db, obj_in=notification_in)
+
+
+async def update_invitation_notification_status(
+    db: AsyncSession,
+    invitation_id: UUID,
+    status: str,
+    mark_read: bool = True,
+    responded_at: Optional[datetime] = None,
+):
+    """Update the notification payload/status when an invitation is accepted/declined."""
+    notifications = await crud.crud_notification.get_multi(
+        db, reference_id=invitation_id
+    )
+    if not notifications:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "No invitation notifications found for invitation %s", invitation_id
+        )
+        return
+
+    for notification in notifications:
+        payload = dict(notification.payload or {})
+        payload["status"] = status
+        if responded_at:
+            payload["responded_at"] = responded_at.isoformat()
+
+        update_payload = schemas.NotificationUpdate(
+            payload=payload,
+            is_read=mark_read,
+        )
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            "Updating notification %s for invitation %s to status %s",
+            notification.notification_id,
+            invitation_id,
+            status,
+        )
+        await crud.crud_notification.update(
+            db, db_obj=notification, obj_in=update_payload
+        )

@@ -20,7 +20,7 @@ from db import Base, get_db
 
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)
 TestingSessionLocal = async_sessionmaker(
     autocommit=False, autoflush=False, bind=engine
 )

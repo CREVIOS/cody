@@ -30,6 +30,7 @@ async def read_notifications(
     user_id: Optional[UUID] = None,
     is_read: Optional[bool] = None,
     notification_type: Optional[str] = None,
+    reference_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db)
 ):
     filters = {}
@@ -39,6 +40,8 @@ async def read_notifications(
         filters["is_read"] = is_read
     if notification_type:
         filters["notification_type"] = notification_type
+    if reference_id:
+        filters["reference_id"] = reference_id
     
     notifications = await crud.crud_notification.get_multi(db, skip=skip, limit=limit, **filters)
     total = await crud.crud_notification.count(db, **filters)

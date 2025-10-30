@@ -1,5 +1,4 @@
-import { ProjectInvitationWithDetails } from "@/lib/projectAPI/TypeDefinitions";
-import { Project } from "@/lib/projectAPI/TypeDefinitions";
+import { InvitationNotification } from "@/lib/projectAPI/TypeDefinitions";
 import { LoadingState } from "./LoadingState";
 import { ErrorState } from "./ErrorState";
 import { EmptyState } from "./EmptyState";
@@ -9,9 +8,9 @@ import { InvitationList } from "./InvitationList";
 interface NotificationContentProps {
     loading: boolean;
     error: string | null;
-    invitations: ProjectInvitationWithDetails[];
+    notifications: InvitationNotification[];
     userId: string;
-    onInvitationAccepted: (projectId: string, projectData?: { project: Project; role: string }) => void;
+    onInvitationAccepted: () => void;
     onRefreshData: () => void;
     theme: string;
 }
@@ -19,7 +18,7 @@ interface NotificationContentProps {
 export function NotificationContent({ 
     loading, 
     error, 
-    invitations, 
+    notifications, 
     userId, 
     onInvitationAccepted, 
     onRefreshData, 
@@ -33,13 +32,13 @@ export function NotificationContent({
       return <ErrorState error={error} onRetry={onRefreshData} theme={theme} />;
     }
   
-    if (invitations.length === 0) {
+    if (notifications.length === 0) {
       return <EmptyState theme={theme} />;
     }
   
     return (
       <InvitationList
-        invitations={invitations}
+        notifications={notifications}
         userId={userId}
         onInvitationAccepted={onInvitationAccepted}
         onRefreshData={onRefreshData}

@@ -1,6 +1,5 @@
 import { useTheme } from "@/context/ThemeContext";
-import { ProjectInvitationWithDetails } from "@/lib/projectAPI/TypeDefinitions";
-import { Project } from "@/lib/projectAPI/TypeDefinitions";
+import { InvitationNotification } from "@/lib/projectAPI/TypeDefinitions";
 import { NotificationModalHeader } from "./NotificationModalHeader";
 import { NotificationContent } from "./NotificationContent";
 
@@ -9,10 +8,10 @@ interface NotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
   userId: string;
-  invitations: ProjectInvitationWithDetails[];
+  notifications: InvitationNotification[];
   loading: boolean;
   error: string | null;
-  onInvitationAccepted?: (projectId: string, projectData?: { project: Project; role: string }) => void;
+  onInvitationAccepted?: () => void;
   onRefreshData?: () => void;
 }
 
@@ -20,7 +19,7 @@ export default function NotificationModal({
   isOpen,
   onClose,
   userId,
-  invitations,
+  notifications,
   loading,
   error,
   onInvitationAccepted,
@@ -29,6 +28,10 @@ export default function NotificationModal({
   const { theme } = useTheme();
 
   if (!isOpen) return null;
+
+  const pendingNotifications = notifications.filter(
+    (notification) => (notification.payload?.status ?? "pending").toLowerCase() === "pending"
+  );
 
   const overlayClass = "fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4";
   
@@ -40,9 +43,9 @@ export default function NotificationModal({
     }
   `;
 
-  const handleInvitationAccepted = (projectId: string, projectData?: { project: Project; role: string }) => {
+  const handleInvitationAccepted = () => {
     if (onInvitationAccepted) {
-      onInvitationAccepted(projectId, projectData);
+      onInvitationAccepted();
     }
   };
 
@@ -56,7 +59,7 @@ export default function NotificationModal({
     <div className={overlayClass} onClick={onClose}>
       <div className={modalClass} onClick={(e) => e.stopPropagation()}>
         <NotificationModalHeader
-          invitationCount={invitations.length}
+          invitationCount={pendingNotifications.length}
           loading={loading}
           onClose={onClose}
           theme={theme}
@@ -66,7 +69,7 @@ export default function NotificationModal({
           <NotificationContent
             loading={loading}
             error={error}
-            invitations={invitations}
+            notifications={notifications}
             userId={userId}
             onInvitationAccepted={handleInvitationAccepted}
             onRefreshData={handleRefreshData}

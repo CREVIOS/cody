@@ -120,3 +120,20 @@ export interface User {
     size: number;
     pages: number;
   }
+
+  export interface Notification {
+    notification_id: string;
+    user_id: string;
+    project_id: string | null;
+    notification_type: string;
+    title: string;
+    message: string | null;
+    reference_id?: string | null;
+    payload?: Record<string, any>;
+    is_read: boolean;
+    created_at: string;
+  }
+
+  export interface InvitationNotification extends Notification {
+    payload: Record<string, any>;
+  }

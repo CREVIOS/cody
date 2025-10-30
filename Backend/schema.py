@@ -269,6 +269,9 @@ class NotificationBase(BaseSchema):
     notification_type: str
     title: str
     message: Optional[str] = None
+    reference_id: Optional[UUID] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    is_read: bool = False
 
 class NotificationCreate(NotificationBase):
     pass
@@ -278,6 +281,8 @@ class NotificationUpdate(BaseSchema):
     title: Optional[str] = None
     message: Optional[str] = None
     is_read: Optional[bool] = None
+    reference_id: Optional[UUID] = None
+    payload: Optional[Dict[str, Any]] = None
 
 class Notification(NotificationBase):
     notification_id: UUID
@@ -339,4 +344,3 @@ class UserProjectsResponse(BaseSchema):
 class AcceptInvitationRequest(BaseSchema):
     user_id: UUID
     
-

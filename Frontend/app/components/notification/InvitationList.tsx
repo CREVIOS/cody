@@ -1,17 +1,16 @@
-import { ProjectInvitationWithDetails } from "@/lib/projectAPI/TypeDefinitions";
-import { Project } from "@/lib/projectAPI/TypeDefinitions";
+import { InvitationNotification } from "@/lib/projectAPI/TypeDefinitions";
 import { InvitationItem } from "./InvitationItem";
 
 interface InvitationListProps {
-    invitations: ProjectInvitationWithDetails[];
+    notifications: InvitationNotification[];
     userId: string;
-    onInvitationAccepted: (projectId: string, projectData?: { project: Project; role: string }) => void;
+    onInvitationAccepted: () => Promise<void> | void;
     onRefreshData: () => void;
     theme: string;
   }
   
 export function InvitationList({ 
-    invitations, 
+    notifications, 
     userId, 
     onInvitationAccepted, 
     onRefreshData, 
@@ -19,10 +18,10 @@ export function InvitationList({
   }: InvitationListProps) {
     return (
       <div>
-        {invitations.map((invitation) => (
+        {notifications.map((notification) => (
           <InvitationItem
-            key={invitation.invitation_id}
-            invitation={invitation}
+            key={notification.notification_id}
+            notification={notification}
             userId={userId}
             onAccepted={onInvitationAccepted}
             onRefreshData={onRefreshData}

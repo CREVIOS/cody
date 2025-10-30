@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import { useRoles } from "@/context/RolesContext";
-import {  User, Project, ProjectWithRole,  ProjectInvitationWithDetails } from "@/lib/projectAPI/TypeDefinitions";
+import { User, Project, ProjectWithRole, InvitationNotification } from "@/lib/projectAPI/TypeDefinitions";
 import { deleteProject } from "@/lib/projectAPI/ProjectAPI";
-import { getPendingInvitationsByEmail } from "@/lib/projectAPI/InvitationAPI";
 import { getUserProjects } from "@/lib/projectAPI/UserAPI";
+import { getUserInvitationNotifications } from "@/lib/projectAPI/NotificationsAPI";
 import NotificationModal from "@/components/notification/NotificationModal";
 import ProjectCreateModal from "@/components/ProjectCreateModal";
 import ProfileModal from "@/components/ProfileModal";
@@ -34,7 +34,7 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [invitationsData, setInvitationsData] = useState<ProjectInvitationWithDetails[]>([]);
+  const [invitationNotifications, setInvitationNotifications] = useState<InvitationNotification[]>([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
   const [invitationsError, setInvitationsError] = useState<string | null>(null);
   const [invitationCount, setInvitationCount] = useState(0);
@@ -69,78 +69,80 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
     }
   };
 
-  // Load projects on component mount
-  useEffect(() => {
-    const loadProjects = async () => {
-      if (!user?.user_id) {
-        console.log('No user_id available, skipping project load');
+  const loadProjects = useCallback(async () => {
+    if (!user?.user_id) {
+      console.log('No user_id available, skipping project load');
+      return;
+    }
+    
+    try {
+      console.log('Loading projects for user:', user.user_id);
+      setLoadingProjects(true);
+      setProjectsError(null);
+      const response = await getUserProjects(user.user_id);
+      
+      if (!response?.items) {
+        console.warn('No items array in response');
+        setProjects([]);
         return;
       }
       
-      try {
-        console.log('Loading projects for user:', user.user_id);
-        setLoadingProjects(true);
-        setProjectsError(null);
-        const response = await getUserProjects(user.user_id);
-        console.log('Projects response:', response);
-        console.log('Response items:', response?.items);
-        console.log('Response items length:', response?.items?.length);
-        
-        if (!response?.items) {
-          console.warn('No items array in response');
-          setProjects([]);
-          return;
-        }
-        
-        setProjects(response.items);
-      } catch (err) {
-        console.error('Failed to load projects:', err);
-        setProjectsError('Failed to load projects');
-        setProjects([]);
-      } finally {
-        setLoadingProjects(false);
-      }
-    };
+      setProjects(response.items);
+    } catch (err) {
+      console.error('Failed to load projects:', err);
+      setProjectsError('Failed to load projects');
+      setProjects([]);
+    } finally {
+      setLoadingProjects(false);
+    }
+  }, [user?.user_id]);
 
+  // Load projects on component mount or user change
+  useEffect(() => {
     if (user?.user_id) {
       loadProjects();
+    }
+  }, [user?.user_id, loadProjects]);
+
+  const loadInvitationData = useCallback(async () => {
+    if (!user?.user_id) return;
+
+    try {
+      setLoadingInvitations(true);
+      setInvitationsError(null);
+      const notifications = await getUserInvitationNotifications(user.user_id, {
+        notification_type: "invitation",
+      });
+
+      setInvitationNotifications(notifications);
+
+      const pendingCount = notifications.filter((notification) => {
+        const status = (notification.payload?.status ?? "pending").toLowerCase();
+        return status === "pending" && !notification.is_read;
+      }).length;
+
+      setInvitationCount(pendingCount);
+    } catch (err) {
+      console.error('Failed to load invitations:', err);
+      setInvitationsError('Failed to load invitations');
+      setInvitationNotifications([]);
+      setInvitationCount(0);
+    } finally {
+      setLoadingInvitations(false);
     }
   }, [user?.user_id]);
 
   // Load invitation data on component mount or user change
   useEffect(() => {
-    const loadInvitationData = async () => {
-      if (!user?.email) return;
-      
-      try {
-        setLoadingInvitations(true);
-        setInvitationsError(null);
-        const invitations = await getPendingInvitationsByEmail(user.email);
-        setInvitationsData(invitations);
-        setInvitationCount(invitations.length);
-      } catch (err) {
-        console.error('Failed to load invitations:', err);
-        setInvitationsError('Failed to load invitations');
-        setInvitationsData([]);
-        setInvitationCount(0);
-      } finally {
-        setLoadingInvitations(false);
-      }
-    };
-
-    if (user?.email) {
+    if (user?.user_id) {
       loadInvitationData();
     }
-  }, [user?.email]);
+  }, [user?.user_id, loadInvitationData]);
 
   // Function to refresh invitation data
   const refreshInvitationData = async () => {
-    if (!user?.email) return;
-    
     try {
-      const invitations = await getPendingInvitationsByEmail(user.email);
-      setInvitationsData(invitations);
-      setInvitationCount(invitations.length);
+      await loadInvitationData();
     } catch (err) {
       console.error('Failed to refresh invitations:', err);
     }
@@ -158,25 +160,9 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
   };
 
   // Function to handle invitation acceptance
-  const handleInvitationAccepted = (projectId: string, projectData?: { project: Project; role: string }) => {
-    // Add the new project to the list
-    if (projectData?.project) {
-      const newProject: ProjectWithRole = {
-        project_id: projectData.project.project_id,
-        project_name: projectData.project.project_name,
-        description: projectData.project.description,
-        visibility: projectData.project.visibility,
-        created_at: projectData.project.created_at,
-        modified_at: projectData.project.modified_at,
-        owner_id: projectData.project.owner_id,
-        is_active: projectData.project.is_active,
-        project_settings: projectData.project.project_settings,
-        role_id: projectData.role
-      };
-      setProjects(prev => [...prev, newProject]);
-    }
-    // Refresh invitations
-    refreshInvitationData();
+  const handleInvitationAccepted = async () => {
+    await loadProjects();
+    await refreshInvitationData();
   };
 
   // Function to handle opening a project
@@ -282,15 +268,11 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
       <NotificationModal
         isOpen={showNotifications}
         onClose={() => setShowNotifications(false)}
-        userEmail={user.email}
         userId={user.user_id}
-        invitations={invitationsData}
+        notifications={invitationNotifications}
         loading={loadingInvitations}
         error={invitationsError}
-        onInvitationAccepted={(projectId, projectData) => {
-          console.log('Invitation accepted for project:', projectId);
-          handleInvitationAccepted(projectId, projectData);
-        }}
+        onInvitationAccepted={handleInvitationAccepted}
         onRefreshData={refreshInvitationData}
       />
 
