@@ -3,16 +3,17 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Role } from '@/lib/projectAPI/TypeDefinitions';
 import { getRoles, getRolePermissions } from '@/lib/projectAPI/RoleAPI';
+import { CANONICAL_PERMISSIONS, Permission } from '@/types/permissions';
 
 interface RoleWithPermissions extends Role {
-  permissions: Record<string, boolean>;
+  permissions: Record<Permission, boolean>;
 }
 
 interface RolesContextType {
   roles: RoleWithPermissions[];
   getRoleById: (roleId: string) => RoleWithPermissions | undefined;
   getRoleNameById: (roleId: string) => string;
-  hasPermission: (roleId: string, permission: string) => boolean;
+  hasPermission: (roleId: string, permission: Permission) => boolean;
   loading: boolean;
   error: string | null;
 }
@@ -30,32 +31,28 @@ export function RolesProvider({ children }: { children: ReactNode }) {
         setLoading(true);
         setError(null);
 
-        // Fetch roles
         const fetchedRoles = await getRoles();
-        console.log('Fetched roles:', fetchedRoles); // Debug log
 
-        // Fetch permissions for each role
         const rolesWithPermissions = await Promise.all(
           fetchedRoles.map(async (role) => {
             const permissions = await getRolePermissions(role.role_id);
-            console.log(`Permissions for role ${role.role_name}:`, permissions); // Debug log
-            
-            const permissionsMap = Array.isArray(permissions) 
-              ? permissions.reduce((acc, p) => ({ ...acc, [p]: true }), {} as Record<string, boolean>)
-              : {};
-            
+
+            const permissionsMap = mapRolePermissions(permissions);
+
             return {
               ...role,
               permissions: permissionsMap
             };
           })
         );
-
-        console.log('Roles with permissions:', rolesWithPermissions); // Debug log
         setRoles(rolesWithPermissions);
       } catch (err) {
         console.error('Failed to fetch roles and permissions:', err);
-        setError('Failed to load roles and permissions');
+        // Provide more specific error message
+        const errorMessage = err instanceof Error 
+          ? err.message 
+          : 'Failed to load roles and permissions';
+        setError(errorMessage);
       } finally {
         setLoading(false);
       }
@@ -89,7 +86,7 @@ export function RolesProvider({ children }: { children: ReactNode }) {
     return role.role_name;
   };
 
-  const hasPermission = (roleId: string, permission: string) => {
+  const hasPermission = (roleId: string, permission: Permission) => {
     const role = getRoleById(roleId);
     return !!role?.permissions[permission];
   };
@@ -117,3 +114,37 @@ export function useRoles() {
   }
   return context;
 } 
+
+const LEGACY_TO_CANONICAL: Record<string, Permission> = {
+  read: 'canView',
+  write: 'canEdit',
+  invite: 'canInvite',
+  manage_members: 'canManageMembers',
+  delete_project: 'canDeleteProject',
+};
+
+const mapRolePermissions = (raw: unknown): Record<Permission, boolean> => {
+  const base = CANONICAL_PERMISSIONS.reduce((acc, permission) => {
+    acc[permission] = false;
+    return acc;
+  }, {} as Record<Permission, boolean>);
+
+  if (!raw) {
+    return base;
+  }
+
+  const assign = (key: string, value: unknown) => {
+    const canonical = (LEGACY_TO_CANONICAL[key] ?? key) as Permission;
+    if (CANONICAL_PERMISSIONS.includes(canonical)) {
+      base[canonical] = Boolean(value);
+    }
+  };
+
+  if (Array.isArray(raw)) {
+    raw.forEach((key) => assign(String(key), true));
+  } else if (typeof raw === 'object') {
+    Object.entries(raw as Record<string, unknown>).forEach(([key, value]) => assign(key, value));
+  }
+
+  return base;
+};

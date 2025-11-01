@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
+from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/directories", tags=["directories"])
 
@@ -29,14 +30,17 @@ async def create_directory(
             detail="User not found"
         )
     
-    # Check if user is a member of the project
-    member = await crud.crud_project_member.get_by_project_and_user(
-        db, project_id=directory_in.project_id, user_id=directory_in.created_by
+    # Permission: creator must be able to edit in this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=directory_in.project_id,
+        user_id=directory_in.created_by,
+        permission="canEdit",
     )
-    if not member:
+    if not permission_eval.granted:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not a member of this project"
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     
     return await crud.crud_directory.create(db, obj_in=directory_in)
@@ -80,13 +84,26 @@ async def read_directory(
 async def update_directory(
     directory_id: UUID,
     directory_update: schemas.DirectoryUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
     directory = await crud.crud_directory.get(db, id=directory_id)
     if not directory:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Directory not found"
+        )
+    # Permission: actor must be able to edit in this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=directory.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     
     # If project_id is being updated, verify the new project exists
@@ -103,11 +120,25 @@ async def update_directory(
 @router.delete("/{directory_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_directory(
     directory_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
-    directory = await crud.crud_directory.remove(db, id=directory_id)
+    directory = await crud.crud_directory.get(db, id=directory_id)
     if not directory:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Directory not found"
         ) 
+    # Permission: actor must be able to edit in this project to delete
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=directory.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
+        )
+    await crud.crud_directory.remove(db, id=directory_id)

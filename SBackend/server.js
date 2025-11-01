@@ -117,19 +117,16 @@ async function initializeServices() {
     // Connect output manager to container service
     containerService.outputManager = outputManager;
     
-    // Wait for container service to initialize
+    // Wait for container service to initialize (no fallback resolve)
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Container service initialization timeout'));
-      }, 30000); // 30 second timeout
-      
+      }, 600000); // 10 minute timeout to allow image build
+
       containerService.once('ready', () => {
         clearTimeout(timeout);
         resolve();
       });
-      
-      // If no ready event, resolve after a short delay
-      setTimeout(resolve, 1000);
     });
     
     // Set up event handlers after services are initialized
@@ -156,6 +153,31 @@ const validateProjectId = (req, res, next) => {
     });
   }
   next();
+};
+
+const STORAGE_UNAVAILABLE_MESSAGE = 'Object storage service is unavailable. Please ensure MinIO is running (default endpoint http://localhost:9000).';
+
+const isStorageUnavailableError = (error) => {
+  if (!error) {
+    return false;
+  }
+
+  if (error.code === 'ECONNREFUSED') {
+    return true;
+  }
+
+  if (error.errors && Array.isArray(error.errors)) {
+    if (error.errors.some((inner) => inner && inner.code === 'ECONNREFUSED')) {
+      return true;
+    }
+  }
+
+  const message = typeof error.message === 'string' ? error.message : '';
+  if (message.includes('ECONNREFUSED') || message.includes('getaddrinfo ENOTFOUND')) {
+    return true;
+  }
+
+  return false;
 };
 
 // Health check with detailed status
@@ -224,8 +246,21 @@ app.get('/api/projects/:projectId/exists', validateProjectId, asyncHandler(async
 // File System API Routes
 app.get('/api/projects/:projectId/files', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId } = req.params;
-  const structure = await fileSystemService.getProjectStructure(projectId);
-  res.json({ success: true, structure });
+
+  try {
+    const structure = await fileSystemService.getProjectStructure(projectId);
+    return res.json({ success: true, structure });
+  } catch (error) {
+    if (isStorageUnavailableError(error)) {
+      console.error('❌ Object storage unavailable while loading file tree:', error);
+      return res.status(503).json({
+        success: false,
+        error: STORAGE_UNAVAILABLE_MESSAGE
+      });
+    }
+
+    throw error;
+  }
 }));
 
 // Add file refresh endpoint

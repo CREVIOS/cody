@@ -7,13 +7,15 @@ interface LayoutTopBarProps {
   projectId?: string;
   theme: Theme;
   onCollaboratorsClick: () => void;
+  onTerminalClick: () => void;
 }
 
 export function LayoutTopBar({ 
   currentProjectName, 
   projectId,
   theme, 
-  onCollaboratorsClick
+  onCollaboratorsClick,
+  onTerminalClick
 }: LayoutTopBarProps) {
   return (
     <div className="col-span-1 flex items-center justify-between border-b px-6 border-gray-200 dark:border-gray-700">
@@ -22,6 +24,7 @@ export function LayoutTopBar({
         projectId={projectId}
         theme={theme}
         onCollaboratorsClick={onCollaboratorsClick}
+        onTerminalClick={onTerminalClick}
       />
     </div>
   );

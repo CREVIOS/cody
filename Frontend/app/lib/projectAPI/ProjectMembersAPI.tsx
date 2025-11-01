@@ -1,4 +1,4 @@
-import { API_BASE_URL, fetchWithRetry } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry, NetworkError } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { ProjectMemberWithDetails, ProjectMember } from "./TypeDefinitions";
 
@@ -19,7 +19,13 @@ export const getProjectMembers = async (projectId: string): Promise<ProjectMembe
       const members: ProjectMemberWithDetails[] = await response.json();
       return members;
     } catch (error) {
-      console.error('Error fetching project members:', error);
+      // Network errors are expected when backend is unavailable - handle silently
+      if (error instanceof NetworkError) {
+        // Only log at debug level to reduce console noise
+        console.debug('Backend unavailable, returning empty members list');
+      } else {
+        console.error('Error fetching project members:', error);
+      }
       // Return empty array instead of throwing to prevent UI breakage
       return [];
     }

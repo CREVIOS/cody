@@ -344,3 +344,10 @@ class UserProjectsResponse(BaseSchema):
 class AcceptInvitationRequest(BaseSchema):
     user_id: UUID
     
+    
+class UserProjectPermissions(BaseSchema):
+    project_id: UUID
+    user_id: UUID
+    role_id: UUID
+    role_name: str
+    permissions: Dict[str, bool]

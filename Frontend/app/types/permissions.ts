@@ -1,38 +1,50 @@
-export type Permission = 
-  | 'read'
-  | 'write'
-  | 'delete'
-  | 'invite'
-  | 'deploy'
-  | 'manage_members'
-  | 'delete_project';
+export type Permission =
+  | 'canView'
+  | 'canEdit'
+  | 'canLock'
+  | 'canInvite'
+  | 'canApproveLock'
+  | 'canRequestLock'
+  | 'canDeleteProject'
+  | 'canManageMembers';
 
 export interface Permissions {
-  read: boolean;
-  write: boolean;
-  delete: boolean;
-  invite: boolean;
-  deploy: boolean;
-  manage_members: boolean;
-  delete_project: boolean;
+  canView: boolean;
+  canEdit: boolean;
+  canLock: boolean;
+  canInvite: boolean;
+  canApproveLock: boolean;
+  canRequestLock: boolean;
+  canDeleteProject: boolean;
+  canManageMembers: boolean;
 }
 
-export const DEFAULT_PERMISSIONS: Permissions = {
-  read: false,
-  write: false,
-  delete: false,
-  invite: false,
-  deploy: false,
-  manage_members: false,
-  delete_project: false,
-};
+export const CANONICAL_PERMISSIONS: Permission[] = [
+  'canView',
+  'canEdit',
+  'canLock',
+  'canInvite',
+  'canApproveLock',
+  'canRequestLock',
+  'canDeleteProject',
+  'canManageMembers',
+];
+
+export const DEFAULT_PERMISSIONS: Permissions = CANONICAL_PERMISSIONS.reduce(
+  (acc, permission) => {
+    acc[permission] = false;
+    return acc;
+  },
+  {} as Permissions
+);
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
-  read: 'Read Files',
-  write: 'Write Files',
-  delete: 'Delete Files',
-  invite: 'Invite Users',
-  deploy: 'Deploy Project',
-  manage_members: 'Manage Members',
-  delete_project: 'Delete Project',
-}; 
+  canView: 'View Project',
+  canEdit: 'Edit Files',
+  canLock: 'Manage Locks',
+  canInvite: 'Invite Users',
+  canApproveLock: 'Approve Lock Requests',
+  canRequestLock: 'Request Locks',
+  canDeleteProject: 'Delete Project',
+  canManageMembers: 'Manage Members',
+};

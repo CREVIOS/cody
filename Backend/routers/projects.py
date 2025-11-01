@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
+from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -76,12 +77,26 @@ async def update_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
-    project = await crud.crud_project.remove(db, id=project_id)
+    project = await crud.crud_project.get(db, id=project_id)
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
+    # Permission: actor must be able to delete the project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=project_id,
+        user_id=actor_id,
+        permission="canDeleteProject",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canDeleteProject permission",
+        )
+    await crud.crud_project.remove(db, id=project_id)
 

@@ -1,7 +1,43 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Use relative URLs when in browser to leverage Next.js rewrites (avoids CORS issues)
+// Use absolute URL when in server context or when NEXT_PUBLIC_API_URL is explicitly set
+const getApiBaseUrl = (): string => {
+  // If explicitly set via environment variable, use that
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  
+  // In browser context, use relative URLs to leverage Next.js rewrites
+  // This avoids CORS issues and allows Next.js to proxy the request
+  if (typeof window !== 'undefined') {
+    return '';
+  }
+  
+  // In server context (SSR), default to localhost:8000
+  return 'http://localhost:8000';
+};
 
-// Log the API base URL for debugging
-console.log('API_BASE_URL:', API_BASE_URL);
+// Note: This will be '' in browser, 'http://localhost:8000' in server
+// When empty string, fetch calls like '/api/v1/roles' will use Next.js rewrites
+const API_BASE_URL = getApiBaseUrl();
+
+// Log the API base URL for debugging (only in browser to avoid server-side noise)
+if (typeof window !== 'undefined') {
+  console.log('API_BASE_URL:', API_BASE_URL || '(relative - using Next.js rewrites)');
+}
+
+/**
+ * Custom error class for network errors that can be silently handled
+ */
+export class NetworkError extends Error {
+  isNetworkError: boolean = true;
+  originalError: unknown;
+  
+  constructor(message: string, originalError?: unknown) {
+    super(message);
+    this.name = 'NetworkError';
+    this.originalError = originalError;
+  }
+}
 
 /**
  * Enhanced fetch with timeout and retry logic
@@ -33,6 +69,16 @@ export const fetchWithRetry = async (
   } catch (error) {
     clearTimeout(timeoutId);
     
+    // Determine error type for better diagnostics
+    let errorMessage = 'Unknown error';
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      errorMessage = 'Network error: Unable to connect to server. Please ensure the backend is running.';
+    } else if (error instanceof Error && error.name === 'AbortError') {
+      errorMessage = `Request timeout: Server did not respond within ${timeout}ms`;
+    } else if (error instanceof Error) {
+      errorMessage = error.message;
+    }
+    
     if (retries > 0) {
       console.log(`Retrying fetch to ${url}, ${retries} retries left`);
       // Wait before retry (exponential backoff)
@@ -41,7 +87,8 @@ export const fetchWithRetry = async (
       return fetchWithRetry(url, options, retries - 1, timeout);
     }
     
-    throw new Error(`Failed to fetch: API may be unavailable (${url})`);
+    // Create a custom network error with more context
+    throw new NetworkError(`Failed to fetch: ${errorMessage} (${url})`, error);
   }
 };
 

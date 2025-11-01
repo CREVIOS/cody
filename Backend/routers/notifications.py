@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, func
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime, timezone
 import schema as schemas
 import crud
+import models
 from db import get_db
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -33,18 +36,57 @@ async def read_notifications(
     reference_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    filters = {}
-    if user_id:
-        filters["user_id"] = user_id
-    if is_read is not None:
-        filters["is_read"] = is_read
-    if notification_type:
-        filters["notification_type"] = notification_type
-    if reference_id:
-        filters["reference_id"] = reference_id
+    # Build base query
+    query = select(models.Notification)
     
-    notifications = await crud.crud_notification.get_multi(db, skip=skip, limit=limit, **filters)
-    total = await crud.crud_notification.count(db, **filters)
+    # Apply filters
+    conditions = []
+    if user_id:
+        conditions.append(models.Notification.user_id == user_id)
+    if is_read is not None:
+        conditions.append(models.Notification.is_read == is_read)
+    if notification_type:
+        conditions.append(models.Notification.notification_type == notification_type)
+    if reference_id:
+        conditions.append(models.Notification.reference_id == reference_id)
+    
+    # For invitation notifications, filter out accepted/declined/expired invitations
+    if notification_type == "invitation":
+        # Join with project_invitations to check actual invitation status
+        query = query.outerjoin(
+            models.ProjectInvitation,
+            models.Notification.reference_id == models.ProjectInvitation.invitation_id
+        )
+        # Only include pending invitations that haven't expired
+        conditions.append(
+            and_(
+                models.ProjectInvitation.status == 'pending',
+                models.ProjectInvitation.accepted_at.is_(None),
+                models.ProjectInvitation.expires_at >= datetime.now(timezone.utc)
+            )
+        )
+    
+    # Apply all conditions
+    if conditions:
+        query = query.where(and_(*conditions))
+    
+    # Get total count
+    count_query = select(func.count()).select_from(models.Notification)
+    if notification_type == "invitation":
+        count_query = count_query.outerjoin(
+            models.ProjectInvitation,
+            models.Notification.reference_id == models.ProjectInvitation.invitation_id
+        )
+    if conditions:
+        count_query = count_query.where(and_(*conditions))
+    
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+    
+    # Apply pagination and get results
+    query = query.offset(skip).limit(limit)
+    result = await db.execute(query)
+    notifications = result.scalars().all()
     
     return schemas.PaginatedResponse[schemas.Notification](
         items=notifications,

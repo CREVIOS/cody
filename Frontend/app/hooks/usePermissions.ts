@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Permission, Permissions, DEFAULT_PERMISSIONS } from '@/types/permissions';
+import { Permission, Permissions, DEFAULT_PERMISSIONS, CANONICAL_PERMISSIONS } from '@/types/permissions';
 import { getRolePermissions } from '@/lib/projectAPI/RoleAPI';
+import { getUserProjectPermissions } from '@/lib/projectAPI/PermissionsAPI';
 
 interface UsePermissionsProps {
   roleId: string | null;
+  projectId?: string;
+  userId?: string;
 }
 
 interface UsePermissionsReturn {
@@ -11,66 +14,126 @@ interface UsePermissionsReturn {
   loading: boolean;
   error: string | null;
   hasPermission: (permission: Permission) => boolean;
+  hasAnyPermission: (permissions: Permission[]) => boolean;
+  hasAllPermissions: (permissions: Permission[]) => boolean;
+  getPermissionDetails: (permission: Permission) => { granted: boolean; reason: string };
   refreshPermissions: () => Promise<void>;
 }
 
-export function usePermissions({ roleId }: UsePermissionsProps): UsePermissionsReturn {
-  const [permissions, setPermissions] = useState<Permissions>(DEFAULT_PERMISSIONS);
+const LEGACY_TO_CANONICAL: Record<string, Permission> = {
+  read: 'canView',
+  write: 'canEdit',
+  invite: 'canInvite',
+  manage_members: 'canManageMembers',
+  delete_project: 'canDeleteProject',
+};
+
+const createPermissionsFromMap = (source: Record<string, any> | undefined): Permissions => {
+  const base: Permissions = { ...DEFAULT_PERMISSIONS };
+
+  if (!source) {
+    return base;
+  }
+
+  const assignValue = (key: string, value: unknown) => {
+    const canonical = (LEGACY_TO_CANONICAL[key] ?? key) as Permission;
+    if (CANONICAL_PERMISSIONS.includes(canonical)) {
+      base[canonical] = Boolean(value);
+    }
+  };
+
+  Object.entries(source).forEach(([key, value]) => assignValue(key, value));
+
+  return base;
+};
+
+const createPermissionsFromArray = (permissions: string[]): Permissions => {
+  const map: Record<string, boolean> = {};
+  permissions.forEach((key) => {
+    map[key] = true;
+  });
+  return createPermissionsFromMap(map);
+};
+
+export function usePermissions({ roleId, projectId, userId }: UsePermissionsProps): UsePermissionsReturn {
+  const [permissions, setPermissions] = useState<Permissions>({ ...DEFAULT_PERMISSIONS });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchPermissions = useCallback(async () => {
-    if (!roleId) {
-      setPermissions(DEFAULT_PERMISSIONS);
-      return;
-    }
-
     try {
       setLoading(true);
       setError(null);
-      const permissionsList = await getRolePermissions(roleId);
-      
-      // Convert array of permissions to permissions object
-      const newPermissions = { ...DEFAULT_PERMISSIONS };
-      
-      // Handle both array and object formats
-      if (Array.isArray(permissionsList)) {
-        permissionsList.forEach((permission: string) => {
-          if (permission in newPermissions) {
-            (newPermissions as Record<string, boolean>)[permission] = true;
-          }
-        });
-      } else if (typeof permissionsList === 'object' && permissionsList !== null) {
-        Object.entries(permissionsList).forEach(([permission, value]) => {
-          if (permission in newPermissions) {
-            (newPermissions as Record<string, boolean>)[permission] = Boolean(value);
-          }
-        });
+
+      if (projectId && userId) {
+        try {
+          const resp = await getUserProjectPermissions(projectId, userId);
+          setPermissions(createPermissionsFromMap(resp.permissions));
+          return;
+        } catch (err) {
+          console.warn('Falling back to role-based permissions:', err);
+        }
       }
-      
-      setPermissions(newPermissions);
+
+      if (!roleId) {
+        setPermissions({ ...DEFAULT_PERMISSIONS });
+        return;
+      }
+
+      const result = await getRolePermissions(roleId);
+      if (Array.isArray(result)) {
+        setPermissions(createPermissionsFromArray(result));
+      } else if (result && typeof result === 'object') {
+        setPermissions(createPermissionsFromMap(result as Record<string, any>));
+      } else {
+        setPermissions({ ...DEFAULT_PERMISSIONS });
+      }
     } catch (err) {
       console.error('Failed to load permissions:', err);
       setError('Failed to load permissions');
-      setPermissions(DEFAULT_PERMISSIONS);
+      setPermissions({ ...DEFAULT_PERMISSIONS });
     } finally {
       setLoading(false);
     }
-  }, [roleId]);
+  }, [projectId, userId, roleId]);
 
   useEffect(() => {
     fetchPermissions();
   }, [fetchPermissions]);
 
-  const hasPermission = (permission: Permission): boolean => {
-    return permissions[permission];
-  };
+  const hasPermission = useCallback(
+    (permission: Permission) => Boolean(permissions[permission]),
+    [permissions]
+  );
+
+  const hasAnyPermission = useCallback(
+    (permissionList: Permission[]) => permissionList.some((permission) => permissions[permission]),
+    [permissions]
+  );
+
+  const hasAllPermissions = useCallback(
+    (permissionList: Permission[]) => permissionList.every((permission) => permissions[permission]),
+    [permissions]
+  );
+
+  const getPermissionDetails = useCallback(
+    (permission: Permission) => ({
+      granted: Boolean(permissions[permission]),
+      reason: permissions[permission]
+        ? 'Granted by backend permission evaluation'
+        : 'Not granted by backend permission evaluation',
+    }),
+    [permissions]
+  );
 
   return {
     permissions,
     loading,
     error,
     hasPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    getPermissionDetails,
     refreshPermissions: fetchPermissions,
   };
-} 
+}

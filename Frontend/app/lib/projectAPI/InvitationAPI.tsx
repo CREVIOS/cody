@@ -1,4 +1,4 @@
-import { API_BASE_URL, fetchWithRetry } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry, NetworkError } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { ProjectInvitation, ProjectInvitationCreate, ProjectInvitationUpdate, ProjectInvitationWithDetails, PaginatedResponse } from "./TypeDefinitions";
 import { findUserByEmail } from "./UserAPI";
@@ -64,7 +64,13 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
       const data: PaginatedResponse<ProjectInvitation> = await response.json();
       return data.items || [];
     } catch (error) {
-      console.error('Error fetching project invitations:', error);
+      // Network errors are expected when backend is unavailable - handle silently
+      if (error instanceof NetworkError) {
+        // Only log at debug level to reduce console noise
+        console.debug('Backend unavailable, returning empty invitations list');
+      } else {
+        console.error('Error fetching project invitations:', error);
+      }
       // Return empty array instead of throwing to prevent UI breakage
       return [];
     }
