@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import EntryPage from "@/components/welcomepage/EntryPage";
 import Layout from "@/components/layout/Layout";
 import AppWrapper from "@/components/AppWrapper";
@@ -13,6 +13,77 @@ export default function Home() {
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState("");
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Local storage keys
+  const SELECTED_USER_KEY = "app-selected-user";
+  const CURRENT_VIEW_KEY = "app-current-view";
+  const CURRENT_PROJECT_ID_KEY = "app-current-project-id";
+  const CURRENT_PROJECT_NAME_KEY = "app-current-project-name";
+
+  // Rehydrate state from localStorage on first load
+  useEffect(() => {
+    try {
+      const storedUser = localStorage.getItem(SELECTED_USER_KEY);
+      const storedView = localStorage.getItem(CURRENT_VIEW_KEY);
+      const storedProjectId = localStorage.getItem(CURRENT_PROJECT_ID_KEY);
+      const storedProjectName = localStorage.getItem(CURRENT_PROJECT_NAME_KEY);
+
+      if (storedUser) {
+        const parsedUser: User = JSON.parse(storedUser);
+        setSelectedUser(parsedUser);
+      }
+
+      if (storedView) {
+        setCurrentView(storedView);
+      }
+
+      if (storedProjectId) {
+        setProjectId(storedProjectId);
+      }
+      if (storedProjectName) {
+        setProjectName(storedProjectName);
+      }
+    } catch (e) {
+      // If parsing fails, clear invalid data
+      localStorage.removeItem(SELECTED_USER_KEY);
+      localStorage.removeItem(CURRENT_VIEW_KEY);
+      localStorage.removeItem(CURRENT_PROJECT_ID_KEY);
+      localStorage.removeItem(CURRENT_PROJECT_NAME_KEY);
+    } finally {
+      setHydrated(true);
+    }
+  }, []);
+
+  // Persist selected user
+  useEffect(() => {
+    if (!hydrated) return;
+    if (selectedUser) {
+      localStorage.setItem(SELECTED_USER_KEY, JSON.stringify(selectedUser));
+    } else {
+      localStorage.removeItem(SELECTED_USER_KEY);
+    }
+  }, [selectedUser, hydrated]);
+
+  // Persist current view
+  useEffect(() => {
+    if (!hydrated) return;
+    if (currentView) {
+      localStorage.setItem(CURRENT_VIEW_KEY, currentView);
+    }
+  }, [currentView, hydrated]);
+
+  // Persist project context when on layout
+  useEffect(() => {
+    if (!hydrated) return;
+    if (currentView === "layout") {
+      if (projectId) localStorage.setItem(CURRENT_PROJECT_ID_KEY, projectId);
+      if (projectName) localStorage.setItem(CURRENT_PROJECT_NAME_KEY, projectName);
+    } else {
+      localStorage.removeItem(CURRENT_PROJECT_ID_KEY);
+      localStorage.removeItem(CURRENT_PROJECT_NAME_KEY);
+    }
+  }, [currentView, projectId, projectName, hydrated]);
 
   // Navigation handlers
   const goToEntry = () => {
@@ -81,7 +152,17 @@ export default function Home() {
   const handleLogout = () => {
     setSelectedUser(null);
     setCurrentView("userSelection");
+    // Clear persisted state
+    localStorage.removeItem(SELECTED_USER_KEY);
+    localStorage.removeItem(CURRENT_VIEW_KEY);
+    localStorage.removeItem(CURRENT_PROJECT_ID_KEY);
+    localStorage.removeItem(CURRENT_PROJECT_NAME_KEY);
   };
+
+  // Avoid flicker/mismatch before hydration
+  if (!hydrated) {
+    return null;
+  }
 
   // Render the appropriate component based on currentView
   if (currentView === "userSelection" || !selectedUser) {

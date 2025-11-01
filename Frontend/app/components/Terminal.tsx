@@ -201,7 +201,9 @@ export default function EnhancedTerminal({
           convertEol: true,
           disableStdin: false,
           logLevel: 'warn',
-          allowTransparency: false
+          allowTransparency: false,
+          // Disable bracketed paste mode to fix ls output issues
+          bracketedPasteMode: false
       });
 
       // Create addons
@@ -471,6 +473,35 @@ export default function EnhancedTerminal({
       terminal.options.theme = terminalThemes[currentTheme];
     }
   }, [currentTheme, terminal, terminalThemes]);
+
+  // Refit terminal on container resize (e.g., sidebar width changes or height drag)
+  useEffect(() => {
+    if (!terminalContainerRef.current || !fitAddon) return;
+
+    const container = terminalContainerRef.current;
+    const observer = new ResizeObserver(() => {
+      try {
+        fitAddon.fit();
+      } catch (e) {
+        // ignore fit errors during rapid resize
+      }
+    });
+
+    observer.observe(container);
+
+    // Also refit on window resize as a fallback
+    const handleWindowResize = () => {
+      try {
+        fitAddon.fit();
+      } catch {}
+    };
+    window.addEventListener('resize', handleWindowResize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
+    };
+  }, [fitAddon]);
 
   // SSH functions
   const copySshCommand = useCallback(async () => {

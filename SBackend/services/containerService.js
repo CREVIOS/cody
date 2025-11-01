@@ -5,13 +5,15 @@ const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs-extra');
 const EventEmitter = require('events');
+const ContainerBuilder = require('./containerBuilder');
+const { ContainerWrapper, StoppedState, RunningState, RemovedState, ErrorState } = require('./containerStates');
 
 class ContainerService extends EventEmitter {
   constructor(fileSystemService) {
     super();
     this.docker = new Docker();
     this.fileSystemService = fileSystemService;
-    this.containers = new Map(); // projectId -> containerInfo
+    this.containers = new Map(); // projectId -> ContainerWrapper
     this.sessions = new Map(); // sessionId -> sessionInfo
     this.creatingContainers = new Set(); // Track containers being created
     this.IMAGE_NAME = 'project-sandbox:latest';
@@ -65,19 +67,25 @@ class ContainerService extends EventEmitter {
 FROM node:18-bullseye
 ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC PYTHONUNBUFFERED=1
 
-      # Install packages including git and OpenSSH
-      RUN apt-get update && \
-          apt-get install -y --no-install-recommends \
-              bash zsh fish vim nano emacs \
-              git curl wget htop tree jq ripgrep fd-find \
-              openssh-server \
-              build-essential gfortran make \
-              python3 python3-pip python3-dev \
-              locales \
-              net-tools iproute2 \
-          && ln -s /usr/bin/fd-find /usr/local/bin/fd \
-          && locale-gen en_US.UTF-8 \
-          && rm -rf /var/lib/apt/lists/*
+# Install packages including git, OpenSSH, Python, and Java (OpenJDK 17)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        bash zsh fish vim nano emacs \
+        git curl wget htop tree jq ripgrep fd-find \
+        openssh-server \
+        build-essential gfortran make \
+        python3 python3-pip python3-dev \
+        locales \
+        net-tools iproute2 \
+        openjdk-17-jdk default-jre \
+    && ln -s /usr/bin/fd-find /usr/local/bin/fd \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure Java environment
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="$JAVA_HOME/bin:$PATH"
 
 # Configure SSH and generate host keys
 RUN mkdir /var/run/sshd && \
@@ -199,6 +207,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async createContainer(projectId) {
     try {
+      // Ensure the sandbox image exists before proceeding
+      await this.ensureImage();
+
       // Prevent concurrent container creation for the same project
       if (this.creatingContainers.has(projectId)) {
         console.log(`Container creation already in progress for project: ${projectId}`);
@@ -218,22 +229,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
       // Check if container already exists and is running
       if (this.containers.has(projectId)) {
-        const containerInfo = this.containers.get(projectId);
-        const container = this.docker.getContainer(containerInfo.id);
+        const containerWrapper = this.containers.get(projectId);
         
         try {
-          const info = await container.inspect();
-          if (info.State.Running) {
-            containerInfo.lastActivity = new Date();
-            return containerInfo;
+          // Check current state and try to start if needed
+          if (containerWrapper.canStart()) {
+            await containerWrapper.start();
           }
-          // Start stopped container
-          await container.start();
-          containerInfo.lastActivity = new Date();
-          return containerInfo;
+          await this.configureShellEnvironment(containerWrapper.dockerContainer);
+          containerWrapper.updateActivity();
+          return containerWrapper;
         } catch (error) {
           // Container doesn't exist, remove from map and clean up
-          console.log(`Container ${containerInfo.id} no longer exists, cleaning up`);
+          console.log(`Container ${containerWrapper.dockerContainer.id} no longer exists, cleaning up`);
           this.containers.delete(projectId);
         }
       }
@@ -261,102 +269,31 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       // Sync project files first
       await this.syncProjectFiles(projectId, workspacePath);
 
-      // Create container with security hardening
-      const container = await this.docker.createContainer({
-        Image: this.IMAGE_NAME,
-        name: containerName,
-        Hostname: 'sandbox',
-        AttachStdin: true,
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: true,
-        OpenStdin: true,
-        StdinOnce: false,
-        Env: [
-          'TERM=xterm-256color',
-          'NODE_ENV=development',
-          `PROJECT_ID=${projectId}`,
-          'SHELL=/bin/bash',
-          'HOME=/home/developer',
-          'USER=developer'
-        ],
-        WorkingDir: '/workspace',
-        User: 'root',
-        HostConfig: {
-          // Security settings
-          ReadonlyRootfs: false,
-          CapDrop: ['ALL'],
-          CapAdd: ['CHOWN', 'SETUID', 'SETGID', 'DAC_OVERRIDE'],
-          SecurityOpt: ['no-new-privileges'],
-          NoNewPrivileges: true,
-          
-          // Resource limits
-          Memory: this.config.containerMemory,
-          MemorySwap: this.config.containerMemory,
-          CpuShares: Math.floor(this.config.containerCpu * 1024),
-          PidsLimit: 512,
-          
-          // Network isolation
-          NetworkMode: 'bridge',
-          DnsSearch: [],
-          Dns: ['8.8.8.8', '8.8.4.4'],
-          
-          // File system
-          Binds: [`${workspacePath}:/workspace:rw`],
-          
-          // Port bindings (moved from above for clarity)
-          PortBindings: {
-            '22/tcp': [{ HostPort: '0' }],
-            '3000/tcp': [{ HostPort: '0' }],
-            '3001/tcp': [{ HostPort: '0' }],
-            '4000/tcp': [{ HostPort: '0' }],
-            '5000/tcp': [{ HostPort: '0' }],
-            '8000/tcp': [{ HostPort: '0' }],
-            '8080/tcp': [{ HostPort: '0' }],
-            '8888/tcp': [{ HostPort: '0' }],
-            '9000/tcp': [{ HostPort: '0' }]
-          },
-          Tmpfs: {
-            '/tmp': 'rw,size=100m',
-            '/var/tmp': 'rw,size=100m'
-          },
-          
-          // Ulimits
-          Ulimits: [
-            { Name: 'nofile', Soft: 1024, Hard: 2048 },
-            { Name: 'nproc', Soft: 256, Hard: 512 },
-            { Name: 'fsize', Soft: 100000000, Hard: 100000000 } // 100MB
-          ],
-          
-          // Auto remove on stop
-          AutoRemove: false
-        },
-        
-        // Networking
-        ExposedPorts: {
-          '22/tcp': {},
-          '3000/tcp': {},
-          '3001/tcp': {},
-          '4000/tcp': {},
-          '5000/tcp': {},
-          '8000/tcp': {},
-          '8080/tcp': {},
-          '8888/tcp': {},
-          '9000/tcp': {}
-        },
-        
-        // Labels for identification
-        Labels: {
-          'project.id': projectId,
-          'service': 'sandbox',
-          'created.by': 'container-service'
-        }
-      });
+      // Create container configuration using Builder Pattern
+      const containerConfig = new ContainerBuilder()
+        .createSandboxConfiguration(projectId, containerName, workspacePath, {
+          IMAGE_NAME: this.IMAGE_NAME,
+          containerMemory: this.config.containerMemory,
+          containerCpu: this.config.containerCpu
+        })
+        .build();
 
-      // Start container
-      await container.start();
-      
-      // Get container info
+      // Create container with the built configuration
+      const container = await this.docker.createContainer(containerConfig);
+
+      // Create container wrapper with State Pattern
+      const containerWrapper = new ContainerWrapper(container, projectId);
+
+      // Initialize wrapper to StoppedState before starting
+      await containerWrapper.initialize(workspacePath, null);
+
+      // Start container using state pattern
+      await containerWrapper.start();
+
+      // Configure shell environment for interactive sessions
+      await this.configureShellEnvironment(container);
+
+      // Get container info after start
       const containerInfo = await container.inspect();
 
       // Determine mapped SSH host port
@@ -371,22 +308,21 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
         console.warn('Could not determine SSH host port:', err.message);
       }
 
-      const info = {
-        id: container.id,
-        projectId,
-        name: containerInfo.Name,
-        createdAt: new Date(),
-        lastActivity: new Date(),
-        sessions: new Map(),
-        workspacePath,
-        state: 'running',
-        sshPort: sshHostPort
-      };
+      // Store SSH host port on wrapper once known
+      containerWrapper.sshPort = sshHostPort || null;
 
-      this.containers.set(projectId, info);
+      // Mark as running after successful start
+      await containerWrapper.markAsRunning();
+
+      this.containers.set(projectId, containerWrapper);
       
       // Emit event
       this.emit('container:created', { projectId, containerId: container.id });
+      
+      // Listen to container state changes
+      containerWrapper.on('state:changed', (data) => {
+        this.emit('container:state:changed', data);
+      });
       
       console.log(`✅ Container created for project: ${projectId}`);
       
@@ -431,7 +367,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       }, 3000);
       
       this.creatingContainers.delete(projectId);
-      return info;
+      return containerWrapper;
       
     } catch (error) {
       this.creatingContainers.delete(projectId);
@@ -477,7 +413,23 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
           const fileResult = await this.fileSystemService.readFile(projectId, item.path);
           if (fileResult.success) {
             await fs.ensureDir(path.dirname(itemPath));
-            await fs.writeFile(itemPath, fileResult.content);
+            let content = fileResult.content;
+
+            if (this.shouldSanitizeFile(item.path)) {
+              const sanitized = this.sanitizeTextContent(content);
+              if (sanitized !== content) {
+                console.log(`🔧 Sanitized control characters in ${item.path}`);
+                content = sanitized;
+                try {
+                  await this.fileSystemService.updateFile(projectId, item.path, content);
+                  console.log(`💾 Normalized MinIO object: ${item.path}`);
+                } catch (updateError) {
+                  console.warn(`⚠️  Failed to normalize MinIO object ${item.path}:`, updateError.message || updateError);
+                }
+              }
+            }
+
+            await fs.writeFile(itemPath, content);
             console.log(`📄 Synced file: ${item.path} (${fileResult.content.length} bytes)`);
           }
         } catch (error) {
@@ -487,17 +439,66 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
     }
   }
 
+  async configureShellEnvironment(container) {
+    const shellSetupScript = `
+set -e
+BASHRC="/home/developer/.bashrc"
+MARKER="### Cody Terminal Configuration (managed by ContainerService)"
+
+if [ -f "$BASHRC" ]; then
+  sed -i "s/en_US.UTF-8/C.UTF-8/g" "$BASHRC" || true
+  sed -i '/alias ls=.*/d' "$BASHRC" || true
+  sed -i '/enable-bracketed-paste/d' "$BASHRC" || true
+  sed -i '/\\e\\[?2004l/d' "$BASHRC" || true
+  sed -i "/$MARKER/,+10d" "$BASHRC" || true
+else
+  touch "$BASHRC"
+fi
+
+cat <<'EOF' >> "$BASHRC"
+$MARKER
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+alias ls="ls --color=never -F"
+bind 'set enable-bracketed-paste off'
+printf '\e[?2004l'
+EOF
+`;
+
+    try {
+      const exec = await container.exec({
+        Cmd: ['/bin/bash', '-lc', shellSetupScript],
+        AttachStdout: true,
+        AttachStderr: true,
+        User: 'developer'
+      });
+
+      const stream = await exec.start({ hijack: true });
+
+      await new Promise((resolve, reject) => {
+        stream.on('error', reject);
+        stream.on('end', resolve);
+        // Drain output to avoid hanging on full buffers
+        stream.on('data', () => {});
+      });
+
+      console.log('✅ Shell environment configured for interactive sessions');
+    } catch (error) {
+      console.error('❌ Failed to configure shell environment:', error.message || error);
+    }
+  }
+
   async createTerminalSession(projectId) {
     try {
       // Create or get container
-      const containerInfo = await this.createContainer(projectId);
+      const containerWrapper = await this.createContainer(projectId);
       
       // Check session limits
-      if (containerInfo.sessions.size >= this.config.maxSessionsPerContainer) {
+      if (containerWrapper.sessions.size >= this.config.maxSessionsPerContainer) {
         throw new Error('Maximum sessions per container reached');
       }
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       const sessionId = uuidv4();
       
       // Create exec instance with proper shell
@@ -513,7 +514,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
           'TERM=xterm-256color',
           'HOME=/home/developer',
           'USER=developer',
-          'SHELL=/bin/bash'
+          'SHELL=/bin/bash',
+          'LANG=C.UTF-8',
+          'LC_ALL=C.UTF-8'
         ]
       });
 
@@ -565,8 +568,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
       // Store session
       this.sessions.set(sessionId, sessionInfo);
-      containerInfo.sessions.set(sessionId, sessionInfo);
-      containerInfo.lastActivity = new Date();
+      containerWrapper.sessions.set(sessionId, sessionInfo);
+      containerWrapper.updateActivity();
 
       // Handle stream end
       stream.on('end', () => {
@@ -658,22 +661,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
         }
       }, 2000);
 
-      // Handle data from container to client with proper demultiplexing
+      // Handle data from container to client; in TTY mode, forward raw stream
       stream.on('data', (data) => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
-            // Demultiplex Docker stream data
-            const demuxedData = this.demultiplexDockerStream(data);
-            if (demuxedData && demuxedData.length > 0) {
-              // Send the original data first
+            const payload = data; // TTY=true: raw stream
+            if (payload && payload.length > 0) {
               ws.send(JSON.stringify({
                 type: 'terminal:output',
                 sessionId,
-                data: demuxedData.toString('base64')
+                data: payload.toString('base64')
               }));
-              
-              // Check if this looks like a bash prompt and send banner after it
-              const dataStr = demuxedData.toString();
+
+              const dataStr = payload.toString();
               if (!bannerSent && (dataStr.includes('bash-') || dataStr.includes('$ ') || dataStr.includes('developer@'))) {
                 setTimeout(() => {
                   try {
@@ -824,6 +824,30 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
     return Buffer.concat(result);
   }
 
+  shouldSanitizeFile(filePath) {
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const textExtensions = new Set([
+      'py', 'java', 'js', 'jsx', 'ts', 'tsx', 'json', 'md', 'txt', 'html', 'css',
+      'scss', 'sass', 'yml', 'yaml', 'sh', 'c', 'cpp', 'cc', 'h', 'hpp', 'go', 'rb', 'php'
+    ]);
+
+    return ext ? textExtensions.has(ext) : false;
+  }
+
+  sanitizeTextContent(content) {
+    if (content == null) {
+      return '';
+    }
+
+    if (typeof content !== 'string') {
+      content = content.toString('utf8');
+    }
+
+    const withoutBOM = content.replace(/^\uFEFF/, '');
+    const cleaned = withoutBOM.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    return cleaned;
+  }
+
   cleanupSession(sessionId) {
     const sessionInfo = this.sessions.get(sessionId);
     if (sessionInfo) {
@@ -832,9 +856,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
         this.sessions.delete(sessionId);
         
         // Remove from container sessions
-        const containerInfo = this.containers.get(sessionInfo.projectId);
-        if (containerInfo) {
-          containerInfo.sessions.delete(sessionId);
+        const containerWrapper = this.containers.get(sessionInfo.projectId);
+        if (containerWrapper) {
+          containerWrapper.sessions.delete(sessionId);
         }
         
         console.log(`🧹 Cleaned up session: ${sessionId}`);
@@ -846,10 +870,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async syncFileToContainer(projectId, filePath, content) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) return;
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) return;
 
-      const fullPath = path.join(containerInfo.workspacePath, filePath);
+      const fullPath = path.join(containerWrapper.workspacePath, filePath);
       await fs.ensureDir(path.dirname(fullPath));
       await fs.writeFile(fullPath, content);
       
@@ -865,8 +889,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       return; // Already monitoring
     }
 
-    const containerInfo = this.containers.get(projectId);
-    if (!containerInfo) return;
+    const containerWrapper = this.containers.get(projectId);
+    if (!containerWrapper) return;
 
     console.log(`🔍 Starting port monitoring for project: ${projectId}`);
     
@@ -895,16 +919,16 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async checkContainerPorts(projectId) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) return;
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) return;
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       const currentPorts = this.activePorts.get(projectId) || new Set();
       const newActivePorts = new Set();
 
       // Check each monitored port
       for (const port of this.config.monitoredPorts) {
-        const isActive = await this.isPortActive(containerInfo.id, port);
+        const isActive = await this.isPortActive(containerWrapper.dockerContainer.id, port);
         
         if (isActive) {
           newActivePorts.add(port);
@@ -914,7 +938,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
             console.log(`🌐 New web server detected on port ${port} for project: ${projectId}`);
             
             // Get the host port mapping
-            const hostPort = await this.getHostPortMapping(containerInfo.id, port);
+            const hostPort = await this.getHostPortMapping(containerWrapper.dockerContainer.id, port);
             
             this.emit('port:detected', {
               projectId,
@@ -1031,9 +1055,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
     const portInfo = [];
     
     for (const port of activePorts) {
-      const containerInfo = this.containers.get(projectId);
-      if (containerInfo) {
-        const hostPort = await this.getHostPortMapping(containerInfo.id, port);
+      const containerWrapper = this.containers.get(projectId);
+      if (containerWrapper) {
+        const hostPort = await this.getHostPortMapping(containerWrapper.dockerContainer.id, port);
         portInfo.push({
           containerPort: port,
           hostPort,
@@ -1052,8 +1076,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       return; // Already watching
     }
 
-    const containerInfo = this.containers.get(projectId);
-    if (!containerInfo) return;
+    const containerWrapper = this.containers.get(projectId);
+    if (!containerWrapper) return;
 
     console.log(`👁️  Starting file system watching for project: ${projectId}`);
     
@@ -1088,10 +1112,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async getContainerFileState(projectId) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) return new Map();
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) return new Map();
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       
       // Use find command to get both files AND directories with their modification times
       const exec = await container.exec({
@@ -1243,10 +1267,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async syncContainerFileToMinIO(projectId, filePath) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) return;
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) return;
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       
       // Read file content from container
       const exec = await container.exec({
@@ -1258,13 +1282,30 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
       const stream = await exec.start({ hijack: true });
       
-      let content = '';
+      const contentChunks = [];
       stream.on('data', (data) => {
-        content += data.toString();
+        const cleaned = this.demultiplexDockerStream(data);
+        if (cleaned && cleaned.length > 0) {
+          contentChunks.push(cleaned);
+        }
       });
-      
+
+      stream.on('error', (error) => {
+        console.error(`Error streaming file from container: ${filePath}`, error);
+      });
+
       stream.on('end', async () => {
         try {
+          let content = Buffer.concat(contentChunks).toString();
+
+          if (this.shouldSanitizeFile(filePath)) {
+            const sanitized = this.sanitizeTextContent(content);
+            if (sanitized !== content) {
+              console.log(`🔧 Sanitized control characters before syncing ${filePath}`);
+              content = sanitized;
+            }
+          }
+
           // Update file in MinIO
           await this.fileSystemService.updateFile(projectId, filePath, content);
           console.log(`💾 Synced container file to MinIO: ${filePath} (${content.length} bytes)`);
@@ -1281,10 +1322,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
   // Process management methods
   async getRunningProcesses(projectId) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) return [];
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) return [];
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       
       // Use ps command to get running processes
       const exec = await container.exec({
@@ -1352,10 +1393,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async killProcess(projectId, pid) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) throw new Error('Container not found');
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) throw new Error('Container not found');
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       
       // Use kill command to terminate process
       const exec = await container.exec({
@@ -1384,10 +1425,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
 
   async executeCommand(projectId, command, options = {}) {
     try {
-      const containerInfo = this.containers.get(projectId);
-      if (!containerInfo) throw new Error('Container not found');
+      const containerWrapper = this.containers.get(projectId);
+      if (!containerWrapper) throw new Error('Container not found');
 
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       
       const execOptions = {
         Cmd: command.split(' '),
@@ -1434,8 +1475,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
   }
 
   async stopContainer(projectId) {
-    const containerInfo = this.containers.get(projectId);
-    if (!containerInfo) return;
+    const containerWrapper = this.containers.get(projectId);
+    if (!containerWrapper) return;
 
     try {
       // Stop port monitoring and file watching
@@ -1443,29 +1484,22 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       await this.stopFileWatching(projectId);
       
       // Kill all sessions
-      for (const [sessionId] of containerInfo.sessions) {
+      for (const [sessionId] of containerWrapper.sessions) {
         this.cleanupSession(sessionId);
       }
 
-      // Stop and remove container
-      const container = this.docker.getContainer(containerInfo.id);
-      
-      try {
-        await container.stop({ t: 10 });
-      } catch (error) {
-        // Container might already be stopped
-        console.log(`Container ${containerInfo.id} already stopped`);
+      // Use state pattern to stop and remove container
+      if (containerWrapper.canStop()) {
+        await containerWrapper.stop();
       }
       
-      try {
-        await container.remove({ force: true });
-      } catch (error) {
-        console.error('Error removing container:', error);
+      if (containerWrapper.canRemove()) {
+        await containerWrapper.remove();
       }
 
       // Cleanup workspace
-      if (containerInfo.workspacePath) {
-        await fs.remove(containerInfo.workspacePath);
+      if (containerWrapper.workspacePath) {
+        await fs.remove(containerWrapper.workspacePath);
       }
 
       // Remove from map
@@ -1483,21 +1517,14 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
   async listContainers() {
     const containers = [];
     
-    for (const [projectId, info] of this.containers) {
+    for (const [projectId, containerWrapper] of this.containers) {
       try {
-        const container = this.docker.getContainer(info.id);
-        const inspect = await container.inspect();
+        const inspect = await containerWrapper.inspect();
+        const info = containerWrapper.getInfo();
         
         containers.push({
-          projectId,
-          id: info.id,
-          name: info.name,
-          state: inspect.State.Status,
-          created: info.createdAt,
-          lastActivity: info.lastActivity,
-          sessions: info.sessions.size,
-          uptime: Date.now() - info.createdAt.getTime(),
-          sshPort: info.sshPort
+          ...info,
+          dockerState: inspect.State.Status
         });
       } catch (error) {
         // Container doesn't exist anymore
@@ -1523,9 +1550,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
     const now = new Date();
     const inactiveContainers = [];
     
-    for (const [projectId, info] of this.containers) {
-      if (info.sessions.size === 0) {
-        const idleTime = (now - info.lastActivity) / 1000 / 60;
+    for (const [projectId, containerWrapper] of this.containers) {
+      if (containerWrapper.sessions.size === 0) {
+        const idleTime = (now - containerWrapper.lastActivity) / 1000 / 60;
         if (idleTime > maxIdleMinutes) {
           inactiveContainers.push(projectId);
         }
@@ -1560,18 +1587,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
   }
 
   async getContainerStats(projectId) {
-    const containerInfo = this.containers.get(projectId);
-    if (!containerInfo) return null;
+    const containerWrapper = this.containers.get(projectId);
+    if (!containerWrapper) return null;
 
     try {
-      const container = this.docker.getContainer(containerInfo.id);
+      const container = containerWrapper.dockerContainer;
       const stats = await container.stats({ stream: false });
       
       return {
         cpu: this.calculateCpuPercent(stats),
         memory: this.calculateMemoryUsage(stats),
         network: stats.networks,
-        sessions: containerInfo.sessions.size
+        sessions: containerWrapper.sessions.size,
+        state: containerWrapper.getStateName()
       };
     } catch (error) {
       console.error('Error getting container stats:', error);

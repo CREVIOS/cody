@@ -12,6 +12,7 @@ import { SidebarHeader } from "./SidebarHeader";
 import { LayoutTopBar } from "./LayoutTopBar";
 import { MainContentArea } from "./MainContentArea";
 import { DraggableCollaborators } from "./DraggableCollaborators";
+import PermissionGate from "@/components/PermissionGate";
 
 
 
@@ -44,11 +45,15 @@ export default function Layout({
   const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
   const [userRoleId, setUserRoleId] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const projectNameInputRef = useRef<HTMLInputElement>(null);
+  const sidebarResizeRef = useRef<HTMLDivElement>(null);
 
-  // Use the new permissions hook
   const { hasPermission } = usePermissions({
     roleId: userRoleId,
+    projectId: projectId,
+    userId: user?.user_id,
   });
 
   // Fetch project data when project opens
@@ -173,12 +178,37 @@ export default function Layout({
     }
   };
 
-  // Function to check if user is owner/admin
-  const isOwnerOrAdmin = () => {
-    const userMember = projectMembers.find(member => member.user_id === user?.user_id);
-    return userMember?.role.role_name.toLowerCase() === 'owner' || 
-           userMember?.role.role_name.toLowerCase() === 'admin';
-  };
+  // Enhanced permission checking with Chain of Responsibility
+  // The new system automatically handles role hierarchy and permissions
+
+  // Sidebar resize handlers
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingSidebar) return;
+      const newWidth = e.clientX;
+      if (newWidth >= 150 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+    };
+
+    if (isResizingSidebar) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingSidebar]);
 
   const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
   const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
@@ -187,9 +217,9 @@ export default function Layout({
 
   return (
     <FileSystemProvider projectId={projectId || currentProjectName}>
-      <div className={`h-screen w-screen grid grid-cols-[250px_1fr] grid-rows-[60px_1fr] ${backgroundClass}`}>
+      <div className={`h-screen w-screen grid grid-rows-[60px_1fr] ${backgroundClass}`} style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
         {/* Sidebar with project name */}
-        <div className={`row-span-2 border-r flex flex-col ${borderClass}`}>
+        <div className={`row-span-2 border-r flex flex-col relative ${borderClass}`} style={{ width: sidebarWidth }}>
           <SidebarHeader
             isEditingName={isEditingName}
             currentProjectName={currentProjectName}
@@ -198,9 +228,8 @@ export default function Layout({
             onNameSubmit={handleNameSubmit}
             onKeyDown={handleKeyDown}
             onHome={onHome}
-            canInviteUsers={isOwnerOrAdmin() && !!user && !!projectId}
+            canInviteUsers={hasPermission('canInvite') && !!user && !!projectId}
             onInviteClick={() => setShowInviteModal(true)}
-            theme={theme}
             borderClass={borderClass}
             inputClass={inputClass}
             iconHoverClass={iconHoverClass}
@@ -210,6 +239,19 @@ export default function Layout({
           <div className="flex-1 overflow-y-auto">
             <Sidebar />
           </div>
+
+          {/* Resize handle */}
+          <div
+            ref={sidebarResizeRef}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsResizingSidebar(true);
+            }}
+            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-500/50 transition-colors ${
+              isResizingSidebar ? 'bg-indigo-500' : ''
+            }`}
+            style={{ zIndex: 10 }}
+          />
         </div>
 
         {/* Topbar */}
@@ -218,6 +260,7 @@ export default function Layout({
           projectId={projectId}
           theme={theme}
           onCollaboratorsClick={() => setShowCollaborators(!showCollaborators)}
+          onTerminalClick={() => setShowTerminal(prev => !prev)}
         />
 
         {/* Main content with editor and draggable box */}
@@ -238,18 +281,24 @@ export default function Layout({
           }
         />
 
-        {/* Invite Modal */}
-        {showInviteModal && user && projectId && isOwnerOrAdmin() && (
-          <InviteModal
-            onClose={() => setShowInviteModal(false)}
+          {/* Invite Modal (permission-gated) */}
+        {showInviteModal && user && projectId && (
+          <PermissionGate
+            roleId={userRoleId}
             projectId={projectId}
-            projectName={currentProjectName}
-            onInviteSent={refreshProjectData}
-            canManageMembers={isOwnerOrAdmin()}
-            theme={theme}
-            user={user}
-            pendingInvitations={pendingInvitations}
-          />
+            userId={user.user_id}
+            permission="canInvite"
+          >
+            <InviteModal
+              onClose={() => setShowInviteModal(false)}
+              projectId={projectId}
+              projectName={currentProjectName}
+              onInviteSent={refreshProjectData}
+              theme={theme}
+              user={user}
+              pendingInvitations={pendingInvitations}
+            />
+          </PermissionGate>
         )}
       </div>
     </FileSystemProvider>

@@ -176,6 +176,53 @@ class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCrea
         return result.scalars().all()
 
 class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectInvitationCreate, schemas.ProjectInvitationUpdate]):
+    def _apply_active_invitation_filters(self, query):
+        """Helper method to filter out accepted, declined, and expired invitations"""
+        from datetime import datetime, timezone
+        return query.where(
+            self.model.status == 'pending'
+        ).where(
+            self.model.accepted_at.is_(None)
+        ).where(
+            self.model.expires_at >= datetime.now(timezone.utc)
+        )
+    
+    async def get_multi(
+        self, 
+        db: AsyncSession, 
+        *, 
+        skip: int = 0, 
+        limit: int = 100,
+        **filters
+    ) -> List[models.ProjectInvitation]:
+        query = select(self.model)
+        
+        # Apply custom filters for invitations first
+        query = self._apply_active_invitation_filters(query)
+        
+        # Apply additional filters
+        for key, value in filters.items():
+            if hasattr(self.model, key) and value is not None:
+                query = query.where(getattr(self.model, key) == value)
+        
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
+        return result.scalars().all()
+    
+    async def count(self, db: AsyncSession, **filters) -> int:
+        query = select(func.count()).select_from(self.model)
+        
+        # Apply custom filters for invitations first
+        query = self._apply_active_invitation_filters(query)
+        
+        # Apply additional filters
+        for key, value in filters.items():
+            if hasattr(self.model, key) and value is not None:
+                query = query.where(getattr(self.model, key) == value)
+        
+        result = await db.execute(query)
+        return result.scalar()
+
     async def get_by_token(self, db: AsyncSession, *, token: str) -> Optional[models.ProjectInvitation]:
         result = await db.execute(
             select(self.model)
@@ -189,43 +236,36 @@ class CRUDProjectInvitation(CRUDBase[models.ProjectInvitation, schemas.ProjectIn
         return result.scalar_one_or_none()
 
     async def get_by_project(self, db: AsyncSession, *, project_id: UUID) -> List[models.ProjectInvitation]:
-        result = await db.execute(
-            select(self.model)
-            .where(self.model.project_id == project_id)
-            .options(
-                selectinload(self.model.project),
-                selectinload(self.model.role),
-                selectinload(self.model.inviter)
-            )
+        query = select(self.model).where(self.model.project_id == project_id)
+        query = self._apply_active_invitation_filters(query)
+        query = query.options(
+            selectinload(self.model.project),
+            selectinload(self.model.role),
+            selectinload(self.model.inviter)
         )
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
-        result = await db.execute(
-            select(self.model)
-            .where(self.model.email == email)
-            .options(
-                selectinload(self.model.project),
-                selectinload(self.model.role),
-                selectinload(self.model.inviter)
-            )
+        query = select(self.model).where(self.model.email == email)
+        query = self._apply_active_invitation_filters(query)
+        query = query.options(
+            selectinload(self.model.project),
+            selectinload(self.model.role),
+            selectinload(self.model.inviter)
         )
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_pending_for_email(self, db: AsyncSession, *, email: str) -> List[models.ProjectInvitation]:
-        from datetime import datetime
-        
-        result = await db.execute(
-            select(self.model)
-            .where(self.model.email == email)
-            .where(self.model.status == 'pending')
-            .where(self.model.expires_at >= datetime.utcnow())  # Only non-expired invitations
-            .options(
-                selectinload(self.model.project).selectinload(models.Project.owner),
-                selectinload(self.model.role),
-                selectinload(self.model.inviter)
-            )
+        query = select(self.model).where(self.model.email == email)
+        query = self._apply_active_invitation_filters(query)
+        query = query.options(
+            selectinload(self.model.project).selectinload(models.Project.owner),
+            selectinload(self.model.role),
+            selectinload(self.model.inviter)
         )
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_email_and_project(self, db: AsyncSession, *, email: str, project_id: UUID) -> Optional[models.ProjectInvitation]:

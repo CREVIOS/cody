@@ -9,6 +9,7 @@ import schema as schemas
 import crud
 import models
 from db import get_db
+from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/project-invitations", tags=["project-invitations"])
 
@@ -47,6 +48,19 @@ async def create_project_invitation(
     inviter_name = inviter.full_name or inviter.username or "Project member"
 
     
+    # Permission: inviter must have canInvite for this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=invitation_in.project_id,
+        user_id=invitation_in.invited_by,
+        permission="canInvite",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canInvite permission",
+        )
+
     # Check if user is already a member of the project (if user_id provided)
     if invitation_in.user_id:
         existing_member = await crud.crud_project_member.get_by_project_and_user(

@@ -40,7 +40,11 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
         setUsers(userList);
       } catch (err) {
         console.error('Failed to load users:', err);
-        setError('Failed to load users');
+        // Provide more specific error message
+        const errorMessage = err instanceof Error 
+          ? err.message 
+          : 'Failed to load users';
+        setError(errorMessage);
       } finally {
         setLoading(false);
       }

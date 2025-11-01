@@ -9,7 +9,7 @@ from db import engine, Base
 from sqlalchemy import text
 
 # Import routers
-from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications
+from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -101,6 +101,7 @@ app.include_router(file_types.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
 app.include_router(file_versions.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
+app.include_router(permissions.router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/")

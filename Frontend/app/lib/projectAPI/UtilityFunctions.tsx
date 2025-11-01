@@ -2,14 +2,21 @@ import { API_BASE_URL } from "./APIConfiguration";
 import { ProjectInvitation } from "./TypeDefinitions";
 
 /**
- * Test backend connection
+ * Test backend connection using health endpoint
  */
 export const testBackendConnection = async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users?limit=1`);
+      const response = await fetch(`${API_BASE_URL}/health`, {
+        signal: AbortSignal.timeout(3000) // 3 second timeout
+      });
       return response.ok;
     } catch (error) {
-      console.error('Backend connection test failed:', error);
+      // Network errors are expected when backend is down - log at debug level
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        console.debug('Backend health check failed: Server is not available');
+      } else {
+        console.debug('Backend health check failed:', error);
+      }
       return false;
     }
   };

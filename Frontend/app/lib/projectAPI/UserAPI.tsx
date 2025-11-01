@@ -10,7 +10,11 @@ import { Project } from "./TypeDefinitions";
  */
 export const listUsers = async (): Promise<User[]> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users`);
+      const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
@@ -20,6 +24,14 @@ export const listUsers = async (): Promise<User[]> => {
       const data: PaginatedResponse<User> = await response.json();
       return data.items || [];
     } catch (error) {
+      // Handle network errors with a more helpful message
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        const networkError = new Error(
+          `Unable to connect to backend server at ${API_BASE_URL}. Please ensure the backend is running on port 8000.`
+        );
+        console.error('Network error listing users:', networkError);
+        throw networkError;
+      }
       console.error('Error listing users:', error);
       throw error;
     }
