@@ -1,23 +1,11 @@
 // Use relative URLs when in browser to leverage Next.js rewrites (avoids CORS issues)
 // Use absolute URL when in server context or when NEXT_PUBLIC_API_URL is explicitly set
 const getApiBaseUrl = (): string => {
-  // If explicitly set via environment variable, use that
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
-  }
-  
-  // In browser context, use relative URLs to leverage Next.js rewrites
-  // This avoids CORS issues and allows Next.js to proxy the request
-  if (typeof window !== 'undefined') {
-    return '';
-  }
-  
-  // In server context (SSR), default to localhost:8000
-  return 'http://localhost:8000';
+  // Prefer explicit env; otherwise default to backend URL
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 };
 
-// Note: This will be '' in browser, 'http://localhost:8000' in server
-// When empty string, fetch calls like '/api/v1/roles' will use Next.js rewrites
+// Note: Defaults to 'http://localhost:8000' if NEXT_PUBLIC_API_URL is not set
 const API_BASE_URL = getApiBaseUrl();
 
 // Log the API base URL for debugging (only in browser to avoid server-side noise)
