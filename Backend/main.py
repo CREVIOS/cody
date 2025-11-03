@@ -5,92 +5,113 @@ from contextlib import asynccontextmanager
 import time
 import logging
 import traceback
-from db import engine, Base
 from sqlalchemy import text
 
+# ---------- Import core ----------
+from db import engine
+from routers import (
+    users, projects, roles, project_members, project_invitations,
+    directories, file_types, files, file_versions, notifications, locks
+)
+from routers import websocket_connections  # 👈 our new route
 # Import routers
 from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions
 
-# Configure logging
+# ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
-# Lifespan context manager
+# ---------- Lifespan ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting up...")
+    logger.info("🚀 Starting up...")
     try:
-        # Test connection first
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-            logger.info("Database connection successful")
-            
-            # # Create tables
-            # await conn.run_sync(Base.metadata.create_all)
-            # logger.info("Database tables created successfully")
-            
-            # Commit the transaction
+            logger.info("✅ Database connection successful")
+
+            # Defensive schema guard
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='file_locks' AND column_name='updated_at'
+                    ) THEN
+                        ALTER TABLE file_locks ADD COLUMN updated_at TIMESTAMPTZ NULL;
+                    END IF;
+                END$$;
+            """))
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='file_locks' AND column_name='expires_at'
+                    ) THEN
+                        ALTER TABLE file_locks ADD COLUMN expires_at TIMESTAMPTZ NULL;
+                    END IF;
+                END$$;
+            """))
             await conn.commit()
+            logger.info("🛠️ Schema guard applied")
     except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
+        logger.error(f"❌ Error during startup: {e}")
         logger.error(traceback.format_exc())
         raise
     yield
-    # Shutdown
-    logger.info("Shutting down...")
+    logger.info("🛑 Shutting down...")
     await engine.dispose()
 
-# Create FastAPI app
+# ---------- App ----------
 app = FastAPI(
     title="Project Management API",
-    description="A comprehensive project management system with file management, collaboration, and execution environments",
+    description="Project management with file collaboration & locks",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# CORS middleware
+# ---------- CORS ----------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],        # or ["http://localhost:3000"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Request timing middleware
+# ---------- Middleware for request timing ----------
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
+    start = time.time()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.error("💥 Exception in %s %s: %s", request.method, request.url.path, exc)
+        raise
+    dur = time.time() - start
+    response.headers["X-Process-Time"] = f"{dur:.4f}"
+    logger.info("⬅️  %s %s -> %s (%.3fs)", request.method, request.url.path, response.status_code, dur)
     return response
 
-# Global exception handler
+# ---------- Global exception handler ----------
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    error_detail = str(exc)
-    stack_trace = traceback.format_exc()
-    logger.error(f"Global exception: {error_detail}\n{stack_trace}")
-    
-    # Return a more detailed error response
+    logger.error("🌋 Global exception %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": error_detail,
-            "type": type(exc).__name__,
-            "path": request.url.path
-        }
+        content={"detail": str(exc), "type": type(exc).__name__, "path": request.url.path},
     )
 
-# Health check endpoint
+# ---------- Health ----------
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
-
-# Include routers
+# ---------- Routers ----------
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")
@@ -101,9 +122,11 @@ app.include_router(file_types.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
 app.include_router(file_versions.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
+app.include_router(locks.router, prefix="/api/v1")
+app.include_router(websocket_connections.router, prefix="/api/v1")   # 👈 crucial
 app.include_router(permissions.router, prefix="/api/v1")
 
-# Root endpoint
+# ---------- Root ----------
 @app.get("/")
 async def root():
     return {
@@ -115,11 +138,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
-
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

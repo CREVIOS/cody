@@ -1,35 +1,49 @@
 "use client";
+
 import { useTheme } from "@/context/ThemeContext";
 import { ProjectMemberWithDetails } from "@/lib/projectAPI/TypeDefinitions";
+import { useOnlinePresence } from "@/hooks/useOnlinePresence";
 
 interface CollaboratorsProps {
   members: ProjectMemberWithDetails[];
   loading?: boolean;
   error?: string | null;
+  projectId: string;
+  currentUserId: string;
+  currentUsername?: string;
 }
 
-export default function Collaborators({ members, loading, error }: CollaboratorsProps) {
+export default function Collaborators({
+  members = [],
+  loading,
+  error,
+  projectId,
+  currentUserId,
+  currentUsername,
+}: CollaboratorsProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
-  
-  // Get initials from name
-  const getInitials = (name: string) => {
-    return name.split(' ').map(n => n.charAt(0)).join('').toUpperCase().slice(0, 2);
+
+  const { isOnline } = useOnlinePresence(projectId, {
+    userId: currentUserId,
+    username: currentUsername,
+  });
+
+  const getInitials = (name?: string): string => {
+    if (!name?.trim()) return "NA";
+    const parts = name.replace(/[_.-]+/g, " ").trim().split(/\s+/);
+    return parts.slice(0, 2).map(p => p[0]!).join("").toUpperCase() || "NA";
   };
 
-  // Simple online/offline status simulation based on last activity
-  // In a real application, this would be managed by websockets or periodic API calls
-  const getOnlineStatus = (member: ProjectMemberWithDetails): boolean => {
-    if (!member.last_activity) return false;
-    
-    // Consider user online if last activity was within 5 minutes
-    const lastActivity = new Date(member.last_activity);
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    return lastActivity > fiveMinutesAgo;
+  const getUserId = (m: ProjectMemberWithDetails): string | null => {
+    const u = m.user as { id?: string; user_id?: string; uid?: string };
+    return u.id ?? u.user_id ?? u.uid ?? null;
   };
 
-  // Filter online members for count
-  const onlineMembers = members.filter(member => getOnlineStatus(member));
+  const onlineCount = members.reduce(
+    (acc, m) => acc + (isOnline(getUserId(m)) ? 1 : 0),
+    0
+  );
 
   if (loading) {
     return (
@@ -40,10 +54,10 @@ export default function Collaborators({ members, loading, error }: Collaborators
         <div className="mt-2 max-h-[240px] overflow-y-auto pr-1">
           {[...Array(3)].map((_, index) => (
             <div key={index} className="flex items-center py-2.5 animate-pulse">
-              <div className={`w-9 h-9 rounded-full mr-3 ${isDark ? "bg-[#4D4D7F]/50" : "bg-[#A78BFA]/50"}`}></div>
+              <div className={`w-9 h-9 rounded-full mr-3 ${isDark ? "bg-[#4D4D7F]/50" : "bg-[#A78BFA]/50"}`} />
               <div className="flex-grow">
-                <div className={`h-4 rounded mb-1 ${isDark ? "bg-[#4D4D7F]/50" : "bg-gray-300"} w-20`}></div>
-                <div className={`h-3 rounded ${isDark ? "bg-[#4D4D7F]/30" : "bg-gray-200"} w-16`}></div>
+                <div className={`h-4 rounded mb-1 ${isDark ? "bg-[#4D4D7F]/50" : "bg-gray-300"} w-20`} />
+                <div className={`h-3 rounded ${isDark ? "bg-[#4D4D7F]/30" : "bg-gray-200"} w-16`} />
               </div>
             </div>
           ))}
@@ -58,36 +72,35 @@ export default function Collaborators({ members, loading, error }: Collaborators
         <div className={`mb-2 text-sm ${isDark ? "text-red-400" : "text-red-600"}`}>
           Error loading collaborators
         </div>
-        <div className={`text-xs ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>
-          {error}
-        </div>
+        <div className={`text-xs ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>{error}</div>
       </div>
     );
   }
 
   return (
     <div className="relative z-10">
-      {/* Online count indicator */}
       <div className={`mb-2 text-sm ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>
-        <span className="font-medium">{onlineMembers.length}</span> users online
+        <span className="font-medium">{onlineCount}</span> users online
       </div>
-      
-      {/* Collaborators list - showing all users with their status */}
+
       <div className="mt-2 max-h-[240px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-rounded-full scrollbar-track-transparent">
         {members.length > 0 ? (
-          members.map((member) => {
-            const isOnline = getOnlineStatus(member);
-            const displayName = member.user.full_name || member.user.username;
-            
+          members.map((member, idx) => {
+            const displayName =
+              member.user.full_name || member.user.username || "Unknown User";
+            const uid = getUserId(member);
+            const online = isOnline(uid);
+            const isLast = idx === members.length - 1;
+
             return (
-              <div 
-                key={member.project_member_id}
+              <div
+                key={member.project_member_id ?? `${uid ?? "anon"}-${idx}`}
                 className={`flex items-center py-2.5 ${
-                  members.indexOf(member) !== members.length - 1 && (
-                    isDark 
+                  !isLast
+                    ? isDark
                       ? "border-b border-white/10"
                       : "border-b border-black/10"
-                  )
+                    : ""
                 }`}
               >
                 <div
@@ -97,27 +110,28 @@ export default function Collaborators({ members, loading, error }: Collaborators
                 >
                   {getInitials(displayName)}
                 </div>
+
                 <div className="flex-grow">
                   <div className="text-sm font-medium">{displayName}</div>
-                  <div className={`text-xs mb-1 ${
-                    isDark ? "text-[#A0A0A0]" : "text-[#666666]"
-                  }`}>
-                    Role: {member.role.role_name}
+                  <div className={`text-xs mb-1 ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>
+                    Role: {member.role.role_name ?? "—"}
                   </div>
-                  <div className={`text-xs flex items-center ${
-                    isDark ? "text-[#A0A0A0]" : "text-[#666666]"
-                  }`}>
-                    <span 
+                  <div className={`text-xs flex items-center ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>
+                    <span
                       className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
-                        isOnline ? "bg-green-500" : "bg-gray-500"
+                        online ? "bg-green-500" : "bg-gray-500"
                       }`}
-                    ></span>
-                    {isOnline ? "Online" : "Offline"}
+                    />
+                    {online ? "Online" : "Offline"}
                   </div>
                 </div>
-                <button className={`border-none bg-transparent cursor-pointer opacity-70 ${
-                  isDark ? "text-[#E0E0E0]" : "text-[#2D2D2D]"
-                }`}>
+
+                <button
+                  className={`border-none bg-transparent cursor-pointer opacity-70 ${
+                    isDark ? "text-[#E0E0E0]" : "text-[#2D2D2D]"
+                  }`}
+                  aria-label="More actions"
+                >
                   •••
                 </button>
               </div>
