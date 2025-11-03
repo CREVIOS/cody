@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import { FileSystemProvider } from "@/context/FileSystemContext";
 import Sidebar from "@/components/Sidebar";
@@ -13,6 +13,8 @@ import { LayoutTopBar } from "./LayoutTopBar";
 import { MainContentArea } from "./MainContentArea";
 import { DraggableCollaborators } from "./DraggableCollaborators";
 import PermissionGate from "@/components/PermissionGate";
+
+
 
 interface LayoutProps {
   projectName: string;
@@ -31,7 +33,8 @@ export default function Layout({
   user,
 }: LayoutProps) {
   const { theme } = useTheme();
-  useRoles();
+  const { getRoleNameById } = useRoles();
+  const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -42,9 +45,6 @@ export default function Layout({
   const [pendingInvitations, setPendingInvitations] = useState<ProjectInvitation[]>([]);
   const [userRoleId, setUserRoleId] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
-
-  // Use the new permissions hook
-  usePermissions({
   const [sidebarWidth, setSidebarWidth] = useState(250);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const projectNameInputRef = useRef<HTMLInputElement>(null);
@@ -66,6 +66,7 @@ export default function Layout({
           setMembersLoading(true);
           setMembersError(null);
           const members = await getProjectMembers(projectId);
+          // Handle the case where we get an empty array due to API error
           if (members && members.length > 0) {
             setProjectMembers(members);
             
@@ -91,6 +92,7 @@ export default function Layout({
       const fetchPendingInvitations = async () => {
         try {
           const invitations = await getProjectInvitations(projectId, 'pending');
+          // Check if we got a valid response
           if (invitations && Array.isArray(invitations)) {
             const now = new Date();
             const validInvitations = invitations.filter(inv => {
@@ -105,6 +107,7 @@ export default function Layout({
         }
       };
 
+      // Execute both API calls but handle errors independently
       try {
         await fetchMembers();
       } catch (e) {
@@ -120,17 +123,22 @@ export default function Layout({
 
     if (projectId && user) {
       fetchProjectData();
+      
       const refreshInterval = setInterval(fetchProjectData, 30000);
+      
       return () => clearInterval(refreshInterval);
     }
-  }, [projectId, user]);
+  }, [projectId, user, getRoleNameById]);
 
   // Function to refresh project data
   const refreshProjectData = async () => {
     if (!projectId) return;
     
     try {
-      const members = await getProjectMembers(projectId);
+      const [members] = await Promise.all([
+        getProjectMembers(projectId)
+      ]);
+      
       setProjectMembers(members);
       
       if (user) {
@@ -202,13 +210,6 @@ export default function Layout({
     };
   }, [isResizingSidebar]);
 
-  // Get user's role name for the lock system
-  const getUserRoleName = (): string => {
-    if (!user || projectMembers.length === 0) return "editor";
-    const userMember = projectMembers.find(member => member.user_id === user.user_id);
-    return userMember?.role.role_name.toLowerCase() || "editor";
-  };
-
   const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
   const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
   const inputClass = theme === "dark" ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]" : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
@@ -234,6 +235,7 @@ export default function Layout({
             iconHoverClass={iconHoverClass}
           />
 
+          {/* Regular sidebar content */}
           <div className="flex-1 overflow-y-auto">
             <Sidebar />
           </div>
@@ -268,7 +270,6 @@ export default function Layout({
           showCollaborators={showCollaborators}
           projectId={projectId}
           user={user}
-          userRole={getUserRoleName()}
           collaboratorsComponent={
             <DraggableCollaborators
               projectMembers={projectMembers}
@@ -285,12 +286,6 @@ export default function Layout({
           <PermissionGate
             roleId={userRoleId}
             projectId={projectId}
-            projectName={currentProjectName}
-            onInviteSent={refreshProjectData}
-            theme={theme}
-            user={user}
-            pendingInvitations={pendingInvitations}
-          />
             userId={user.user_id}
             permission="canInvite"
           >

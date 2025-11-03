@@ -344,61 +344,6 @@ class UserProjectsResponse(BaseSchema):
 class AcceptInvitationRequest(BaseSchema):
     user_id: UUID
     
-# schema.py
-from pydantic import BaseModel
-from typing import Optional, Literal
-
-class LockedState(BaseModel):
-    state: Literal["LOCKED"]
-    holder_user_id: str
-    expires_at: Optional[str] = None  # ISO
-    queue_size: Optional[int] = None
-
-class UnlockedState(BaseModel):
-    state: Literal["UNLOCKED"]
-
-LockState = LockedState | UnlockedState
-
-from datetime import datetime
-from pydantic import BaseModel
-from uuid import UUID
-from typing import Optional, Generic, List, TypeVar
-
-# Base schema for creation
-class WebSocketConnectionBase(BaseModel):
-    user_id: UUID
-    connection_type: str = "websocket"
-    is_active: bool = True
-
-# Create schema
-class WebSocketConnectionCreate(WebSocketConnectionBase):
-    pass
-
-# Update schema
-class WebSocketConnectionUpdate(BaseModel):
-    is_active: Optional[bool] = None
-    last_error: Optional[str] = None
-
-# Response schema
-class WebSocketConnection(WebSocketConnectionBase):
-    id: UUID
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    last_error: Optional[str] = None
-
-    class Config:
-        orm_mode = True
-
-
-# Optional paginated response schema if you use it
-T = TypeVar("T")
-
-class PaginatedResponse(BaseModel, Generic[T]):
-    items: List[T]
-    total: int
-    page: int
-    size: int
-    pages: int
     
 class UserProjectPermissions(BaseSchema):
     project_id: UUID

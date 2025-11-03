@@ -7,13 +7,6 @@ import crud
 from db import get_db
 from services.permission_enforcer import evaluate_user_permission
 
-from pydantic import BaseModel  # <-- add this
-
-class RealtimeKey(BaseModel):   # <-- add this
-    room_name: str
-    doc_key: str
-
-
 router = APIRouter(prefix="/files", tags=["files"])
 
 @router.post("/", response_model=schemas.File, status_code=status.HTTP_201_CREATED)
@@ -194,24 +187,6 @@ async def delete_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
         ) 
-        
-@router.get("/{file_id}/realtime-key", response_model=RealtimeKey)
-async def get_file_realtime_key(
-    file_id: UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    file = await crud.crud_file.get(db, id=file_id)
-    if not file:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found"
-        )
-
-    # One shared channel per project, unique doc scope per file
-    room_name = f"project:{file.project_id}"
-    doc_key = f"doc:{file.project_id}:{file.id}"
-
-    return RealtimeKey(room_name=room_name, doc_key=doc_key)
     # Permission: actor must be able to edit in this project to delete
     permission_eval = await evaluate_user_permission(
         db,

@@ -1,25 +1,14 @@
-'use client';
 import { Editor } from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
 import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
 import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
 import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
 
-import { Editor, type OnMount } from '@monaco-editor/react';
-import { useEffect, useRef } from 'react';
-import type * as monacoTypes from 'monaco-editor';
-import { useRealtimeCursors } from '@/hooks/use-realtime-cursors';
-
-type Props = {
+interface MonacoEditorWrapperProps {
   language: string;
   content: string;
   onChange: (value: string | undefined) => void;
   isDark: boolean;
-  userId?: string;   // optional external id; otherwise a per-tab id is used
-  username: string;
-  roomName: string;  // websocket channel (can be shared across files)
-  docKey?: string;   // per-file key; defaults to roomName
-};
 
   // Collaboration options (optional)
   collaboration?: {
@@ -40,28 +29,6 @@ export function MonacoEditorWrapper({
   content,
   onChange,
   isDark,
-  userId,
-  username,
-  roomName,
-  docKey,
-}: Props) {
-  const editorRef = useRef<monacoTypes.editor.IStandaloneCodeEditor | null>(null);
-
-  const { isEditor, activeEditor, inactivitySeconds, lockEvent } = useRealtimeCursors({
-    roomName,
-    username,
-    userId,
-    throttleMs: 50,
-    docKey: docKey ?? roomName, // IMPORTANT: scope lock/queue to this file
-  });
-
-  // Apply read-only when I am not the editor
-  useEffect(() => {
-    const ed = editorRef.current;
-    if (!ed) return;
-    ed.updateOptions({
-      readOnly: !isEditor,
-      readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
   collaboration
 }: MonacoEditorWrapperProps) {
   const editorRef = useRef<any>(null);
@@ -133,25 +100,9 @@ export function MonacoEditorWrapper({
         editor.trigger('keyboard', 'editor.unfoldAll');
       });
     });
-    const node = ed.getDomNode();
-    if (node) node.style.outline = !isEditor ? '1px dashed #ef4444' : 'none';
-  }, [isEditor]);
-
-  const handleMount: OnMount = (editor) => {
-    editorRef.current = editor;
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-2 py-1 text-xs border-b bg-black-50 dark:bg-zinc-900/60 flex items-center gap-4">
-        <span>Room: {roomName}</span>
-        <span>{isEditor ? '✅ You can edit' : '🔒 Read-only'}</span>
-        {!isEditor && activeEditor ? <span className="opacity-70">editor: {activeEditor}</span> : null}
-        <span className="opacity-70">
-          Inactivity: {Math.floor(inactivitySeconds / 60)}m {inactivitySeconds % 60}s
-        </span>
-        <span className="opacity-70">{lockEvent}</span>
-      </div>
     <div className="flex-1 relative">
       {/* Collaboration UI */}
       {collaboration?.enabled && (
@@ -177,22 +128,231 @@ export function MonacoEditorWrapper({
 
       <Editor
         height="100%"
-        theme={isDark ? 'vs-dark' : 'light'}
+        width="100%"
+        theme={isDark ? "vs-dark" : "light"}
         language={language}
-        value={content}
-        onChange={(v) => {
-          if (isEditor) onChange(v);
-        }}
-        onMount={handleMount}
         value={collaboration?.enabled ? undefined : content}
         onChange={collaboration?.enabled ? undefined : onChange}
         onMount={handleEditorDidMount}
         options={{
-          readOnly: !isEditor,
           fontSize: 14,
-          minimap: { enabled: true },
+          lineHeight: 21,
+          
+          // Enable minimap (right overview)
+          minimap: { 
+            enabled: true,
+            side: 'right',
+            showSlider: 'always',
+            renderCharacters: true,
+            maxColumn: 120,
+            scale: 1
+          },
+          
+          // Enhanced scrollbar
+          scrollbar: {
+            vertical: 'visible',
+            horizontal: 'visible',
+            useShadows: true,
+            verticalHasArrows: false,
+            horizontalHasArrows: false,
+            verticalScrollbarSize: 12,
+            horizontalScrollbarSize: 12
+          },
+          
+          // Overview ruler (shows errors, warnings, etc.)
+          overviewRulerLanes: 3,
+          overviewRulerBorder: false,
+          
+          // Code folding
+          folding: true,
+          foldingStrategy: 'indentation',
+          foldingHighlight: true,
+          foldingImportsByDefault: false,
+          unfoldOnClickAfterEndOfLine: true,
+          showFoldingControls: 'always',
+          
+          // Multi-cursor editing
+          multiCursorModifier: 'ctrlCmd',
+          multiCursorMergeOverlapping: true,
+          multiCursorPaste: 'spread',
+          
+          // Enhanced find/replace
+          find: {
+            seedSearchStringFromSelection: 'always',
+            autoFindInSelection: 'never',
+            addExtraSpaceOnTop: true,
+            loop: true
+          },
+          
+          // Advanced editing features
+          wordWrap: "on",
+          wordWrapColumn: 120,
+          wrappingIndent: 'indent',
+          wordWrapBreakAfterCharacters: '\t})]?|/&,;',
+          wordWrapBreakBeforeCharacters: '{([+',
+          
+          // Indentation and formatting
+          tabSize: 2,
+          insertSpaces: true,
+          detectIndentation: true,
+          trimAutoWhitespace: true,
+          
+          // Visual enhancements
+          renderWhitespace: "selection",
+          renderControlCharacters: true,
+          renderLineHighlight: 'all',
+          renderLineHighlightOnlyWhenFocus: false,
+          
+          // Bracket pair colorization
+          bracketPairColorization: { 
+            enabled: true,
+            independentColorPoolPerBracketType: true
+          },
+          
+          // Guides
+          guides: {
+            bracketPairs: true,
+            bracketPairsHorizontal: true,
+            highlightActiveBracketPair: true,
+            indentation: true,
+            highlightActiveIndentation: true
+          },
+          
+          // Enhanced bracket matching
+          showUnused: true,
+          
+          // Code lens
+          codeLens: true,
+          
+          // Suggestions and IntelliSense
+          suggest: {
+            showKeywords: true,
+            showSnippets: true,
+            showClasses: true,
+            showFunctions: true,
+            showVariables: true,
+            showModules: true,
+            showProperties: true,
+            showEvents: true,
+            showOperators: true,
+            showUnits: true,
+            showValues: true,
+            showConstants: true,
+            showEnums: true,
+            showEnumMembers: true,
+            showColors: true,
+            showFiles: true,
+            showReferences: true,
+            showFolders: true,
+            showTypeParameters: true,
+            showStructs: true,
+            showFields: true,
+            showInterfaces: true,
+            showIssues: true,
+            showUsers: true,
+            insertMode: 'insert',
+            filterGraceful: true,
+            snippetsPreventQuickSuggestions: false,
+            localityBonus: true,
+            shareSuggestSelections: true,
+            showInlineDetails: true,
+            showStatusBar: true
+          },
+          
+          // Quick suggestions
+          quickSuggestions: {
+            other: true,
+            comments: true,
+            strings: true
+          },
+          quickSuggestionsDelay: 100,
+          
+          // Parameter hints
+          parameterHints: {
+            enabled: true,
+            cycle: true
+          },
+          
+          // Hover
+          hover: {
+            enabled: true,
+            delay: 300,
+            sticky: true
+          },
+          
+          // Auto-closing
+          autoClosingBrackets: 'languageDefined',
+          autoClosingComments: 'languageDefined',
+          autoClosingQuotes: 'languageDefined',
+          autoClosingOvertype: 'auto',
+          autoSurround: 'languageDefined',
+          
+          // Auto-indentation
+          autoIndent: 'full',
+          
+          // Formatting
+          formatOnType: true,
+          formatOnPaste: true,
+          
+          // Layout and behavior
+          automaticLayout: true,
+          padding: { top: 10, bottom: 10 },
+          glyphMargin: true,
+          lineNumbers: 'on',
+          lineNumbersMinChars: 3,
+          lineDecorationsWidth: 20,
+          
+          // Selection
+          selectOnLineNumbers: true,
+          selectionHighlight: true,
+          selectionClipboard: true,
+          
+          // Cursor
+          cursorBlinking: 'blink',
+          cursorSmoothCaretAnimation: 'on',
+          cursorStyle: 'line',
+          cursorSurroundingLines: 3,
+          cursorSurroundingLinesStyle: 'default',
+          cursorWidth: 2,
+          
+          // Smooth scrolling
+          smoothScrolling: true,
+          
+          // Mouse
+          mouseWheelZoom: true,
+          mouseWheelScrollSensitivity: 1,
+          fastScrollSensitivity: 5,
+          
+          // Accessibility
+          accessibilitySupport: 'auto',
+          
+          // Performance
+          disableLayerHinting: false,
+          disableMonospaceOptimizations: false,
+          
+          // Links
+          links: true,
+          
+          // Color decorators
+          colorDecorators: true,
+          
+          // Drag and drop
+          dragAndDrop: true,
+          
+          // Matching brackets
+          matchBrackets: 'always',
+          
+          // Rulers (vertical lines)
+          rulers: [80, 120],
+          
+          // Sticky scroll
+          stickyScroll: {
+            enabled: true,
+            maxLineCount: 5,
+            defaultModel: 'outlineModel'
+          }
         }}
       />
     </div>
   );
-} 
+}

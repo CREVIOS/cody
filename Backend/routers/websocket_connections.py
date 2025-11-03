@@ -1,37 +1,27 @@
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
+from typing import List, Optional
 from uuid import UUID
-import crud
 import schema as schemas
+import crud
 from db import get_db
 
 router = APIRouter(prefix="/websocket-connections", tags=["websocket-connections"])
 
-
-# Room summary API
-@router.get("/room/{room_name}/summary")
-async def room_summary(room_name: str, db: AsyncSession = Depends(get_db)):
-    conns = await crud.crud_websocket_connection.get_multi(
-        db, room_name=room_name, is_active=True, limit=1000
-    )
-    if not conns:
-        return {
-            "room_name": room_name,
-            "active": 0,
-            "editor_user_id": None,
-            "editor_connection_id": None,
-        }
-
-    conns_sorted = sorted(conns, key=lambda c: c.created_at or c.id.hex)
-    editor = conns_sorted[0]
-    return {
-        "room_name": room_name,
-        "active": len(conns),
-        "editor_user_id": str(editor.user_id),
-        "editor_connection_id": str(editor.id),
-    }
-
+@router.post("/", response_model=schemas.WebSocketConnection, status_code=status.HTTP_201_CREATED)
+async def create_websocket_connection(
+    connection_in: schemas.WebSocketConnectionCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    # Verify user exists
+    user = await crud.crud_user.get(db, id=connection_in.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    return await crud.crud_websocket_connection.create(db, obj_in=connection_in)
 
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.WebSocketConnection])
 async def read_websocket_connections(
@@ -40,7 +30,6 @@ async def read_websocket_connections(
     user_id: Optional[UUID] = None,
     is_active: Optional[bool] = None,
     connection_type: Optional[str] = None,
-    room_name: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     filters = {}
@@ -50,58 +39,110 @@ async def read_websocket_connections(
         filters["is_active"] = is_active
     if connection_type:
         filters["connection_type"] = connection_type
-    if room_name:
-        filters["room_name"] = room_name
-
-    items = await crud.crud_websocket_connection.get_multi(db, skip=skip, limit=limit, **filters)
+    
+    connections = await crud.crud_websocket_connection.get_multi(db, skip=skip, limit=limit, **filters)
     total = await crud.crud_websocket_connection.count(db, **filters)
+    
     return schemas.PaginatedResponse[schemas.WebSocketConnection](
-        items=items,
+        items=connections,
         total=total,
         page=skip // limit + 1,
-        size=len(items),
+        size=len(connections),
         pages=(total + limit - 1) // limit
     )
 
+@router.get("/{connection_id}", response_model=schemas.WebSocketConnection)
+async def read_websocket_connection(
+    connection_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    connection = await crud.crud_websocket_connection.get(db, id=connection_id)
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="WebSocket connection not found"
+        )
+    return connection
 
-@router.websocket("/ws/{room_name}/{user_id}")
+@router.put("/{connection_id}", response_model=schemas.WebSocketConnection)
+async def update_websocket_connection(
+    connection_id: UUID,
+    connection_update: schemas.WebSocketConnectionUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    connection = await crud.crud_websocket_connection.get(db, id=connection_id)
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="WebSocket connection not found"
+        )
+    
+    return await crud.crud_websocket_connection.update(db, db_obj=connection, obj_in=connection_update)
+
+@router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_websocket_connection(
+    connection_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    connection = await crud.crud_websocket_connection.remove(db, id=connection_id)
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="WebSocket connection not found"
+        )
+
+@router.websocket("/ws/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
-    room_name: str,
     user_id: UUID,
     db: AsyncSession = Depends(get_db)
 ):
+    # Verify user exists
     user = await crud.crud_user.get(db, id=user_id)
     if not user:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-
+    
+    # Accept the connection
     await websocket.accept()
-    connection = None
+    
     try:
+        # Create connection record
         connection = await crud.crud_websocket_connection.create(
             db,
             obj_in=schemas.WebSocketConnectionCreate(
                 user_id=user_id,
-                room_name=room_name,
                 connection_type="websocket",
                 is_active=True
             )
         )
-
+        
         while True:
-            msg = await websocket.receive_text()
-            await websocket.send_text(f"ack:{msg}")
-
+            # Receive and process messages
+            data = await websocket.receive_text()
+            # Process the message here
+            # You can add your message handling logic
+            
+            # Send response
+            await websocket.send_text(f"Message received: {data}")
+            
     except WebSocketDisconnect:
+        # Update connection status when disconnected
         if connection:
             await crud.crud_websocket_connection.update(
-                db, db_obj=connection, obj_in=schemas.WebSocketConnectionUpdate(is_active=False)
+                db,
+                db_obj=connection,
+                obj_in=schemas.WebSocketConnectionUpdate(is_active=False)
             )
     except Exception as e:
+        # Handle any other exceptions
         if connection:
             await crud.crud_websocket_connection.update(
-                db, db_obj=connection,
-                obj_in=schemas.WebSocketConnectionUpdate(is_active=False, last_error=str(e))
+                db,
+                db_obj=connection,
+                obj_in=schemas.WebSocketConnectionUpdate(
+                    is_active=False,
+                    last_error=str(e)
+                )
             )
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR) 
