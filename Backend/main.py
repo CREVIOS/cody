@@ -9,11 +9,17 @@ from db import engine, Base
 from sqlalchemy import text
 
 # Import routers
-from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions
+from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions, locks
+from routers import websocket_connections
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
 
 # Lifespan context manager
 @asynccontextmanager
@@ -30,8 +36,35 @@ async def lifespan(app: FastAPI):
             # await conn.run_sync(Base.metadata.create_all)
             # logger.info("Database tables created successfully")
             
+            # Defensive schema guard
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='file_locks' AND column_name='updated_at'
+                    ) THEN
+                        ALTER TABLE file_locks ADD COLUMN updated_at TIMESTAMPTZ NULL;
+                    END IF;
+                END$$;
+            """))
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='file_locks' AND column_name='expires_at'
+                    ) THEN
+                        ALTER TABLE file_locks ADD COLUMN expires_at TIMESTAMPTZ NULL;
+                    END IF;
+                END$$;
+            """))
+            
+            
+            
             # Commit the transaction
             await conn.commit()
+            logger.info("🛠️ Schema guard applied")
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         logger.error(traceback.format_exc())
@@ -102,6 +135,9 @@ app.include_router(files.router, prefix="/api/v1")
 app.include_router(file_versions.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(permissions.router, prefix="/api/v1")
+app.include_router(locks.router, prefix="/api/v1")
+app.include_router(websocket_connections.router, prefix="/api/v1")   # 👈 crucial
+
 
 # Root endpoint
 @app.get("/")

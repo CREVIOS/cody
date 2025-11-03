@@ -3,11 +3,14 @@ import { FileSystemItem } from '@/types/fileSystem';
 import { getLanguageFromExtension } from './LanguageDetection';
 import { FileInfoBar } from './FileInfoBar';
 import { MonacoEditorWrapper } from './MonacoEditorWrapper';
+import { User } from "@/lib/projectAPI/TypeDefinitions";
 
 interface OpenFileContent {
   item: FileSystemItem;
   content: string;
   isDirty: boolean;
+  projectId?: string;
+  user?: User;
 }
 
 interface FileEditorContentProps {
@@ -17,15 +20,21 @@ interface FileEditorContentProps {
   saveFile: (path: string, content: string) => void;
   openFiles: Map<string, OpenFileContent>;
   isDark: boolean;
+  projectId?: string;
+  user?: User;
+  userRole?: string;
 }
 
-export function FileEditorContent({ 
-  selectedFile, 
-  currentFileContent, 
-  updateCurrentContent, 
-  saveFile, 
-  openFiles, 
-  isDark 
+export function FileEditorContent({
+  selectedFile,
+  currentFileContent,
+  updateCurrentContent,
+  saveFile,
+  openFiles,
+  isDark,
+  projectId,
+  user,
+  userRole,
 }: FileEditorContentProps) {
   const [language, setLanguage] = useState("javascript");
 
@@ -38,7 +47,7 @@ export function FileEditorContent({
   }, [selectedFile]);
 
   const handleEditorChange = (value: string | undefined) => {
-    updateCurrentContent(value || '');
+    updateCurrentContent(value || "");
   };
 
   const handleSave = useCallback(() => {
@@ -50,14 +59,14 @@ export function FileEditorContent({
   // Handle Ctrl+S / Cmd+S for save
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         handleSave();
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [handleSave]);
 
   const isModified = () => {
@@ -67,7 +76,7 @@ export function FileEditorContent({
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col min-w-0 overflow-hidden">
       <FileInfoBar
         selectedFile={selectedFile}
         language={language}
@@ -81,6 +90,10 @@ export function FileEditorContent({
         content={currentFileContent}
         onChange={handleEditorChange}
         isDark={isDark}
+        roomName={projectId || 'default'}
+        username={user?.username || 'User'}
+        userId={user?.user_id || ''}
+        docKey={selectedFile.path}
       />
     </div>
   );

@@ -594,115 +594,131 @@ export default function EnhancedTerminal({
 
   return (
     <div
-      className={`flex flex-col h-full bg-gray-900 text-gray-100 ${
-        isMaximized ? 'fixed inset-0 z-50' : ''
-      } ${className}`}
+      className={`flex flex-col h-full ${
+        theme === 'dark' ? 'bg-[#1e1e1e] text-[#cccccc]' : 'bg-[#ffffff] text-[#333333]'
+      } ${isMaximized ? 'fixed inset-0 z-50' : ''} ${className}`}
       style={{
         fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace'
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
-        <div className="flex items-center gap-3">
-          <Terminal size={18} className="text-green-500" />
-          <span className="text-sm font-semibold">Terminal</span>
-          <div className="flex items-center gap-4 text-xs text-gray-400">
-            <div className="flex items-center gap-2">
-            {connectionStats.connected ? (
-              <>
-                <Activity className="w-3 h-3 text-green-500" />
-                <span>{connectionStats.latency}ms</span>
-              </>
-            ) : (
-              <WifiOff className="w-3 h-3 text-red-500" />
-            )}
+      {/* Header - VSCode style */}
+      <div className={`flex items-center justify-between px-3 py-1.5 shrink-0 ${
+        theme === 'dark' 
+          ? 'bg-[#252526] border-b border-[#3e3e42]' 
+          : 'bg-[#f3f3f3] border-b border-[#e5e5e5]'
+      }`}>
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {/* Tabs */}
+          <div className="flex items-center gap-1 min-w-0">
+            {/* Single tab display - VSCode style */}
+            <div className={`px-3 py-1.5 text-xs flex items-center gap-2 transition-colors duration-150 ${
+              theme === 'dark'
+                ? 'bg-[#1e1e1e] text-[#ffffff] border-t-2 border-t-[#007acc]'
+                : 'bg-[#ffffff] text-[#333333] border-t-2 border-t-[#007acc]'
+            }`}>
+              {getStatusIndicator()}
+              <span className="truncate">Terminal</span>
+            </div>
           </div>
-            {sshInfo && (
-              <div className="flex items-center gap-2">
-            <button
-                  onClick={openSshTerminal}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-green-600 hover:bg-green-700 text-white transition-colors"
-                  title="Open SSH terminal (like Replit)"
-            >
-                  <span>🚀</span>
-                  <span>SSH Terminal</span>
-            </button>
-        <button
-                  onClick={copySshCommand}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-blue-600 hover:bg-blue-700 text-white transition-colors"
-                  title="Copy SSH command to clipboard"
-        >
-                  <span>🔑</span>
-                  <span>Port: {sshInfo.port}</span>
-        </button>
+
+          {/* Connection info */}
+          <div className="flex items-center gap-3 ml-4 text-xs opacity-70">
+            {connectionStats.connected ? (
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                <span className="text-[10px]">{connectionStats.latency}ms</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
+                <span className="text-[10px]">Disconnected</span>
               </div>
             )}
-          </div>
-      </div>
-
-        {/* Tabs */}
-       
-        <div className="flex-1 flex items-center gap-1 mx-6">
-          {/* Single tab display */}
-          <div className="px-3 py-1.5 text-xs rounded-md flex items-center gap-2 bg-gray-700 text-white">
-            {getStatusIndicator()}
-            <span>Terminal</span>
+            {sshInfo && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={copySshCommand}
+                  className={`px-2 py-0.5 rounded text-[10px] transition-colors duration-150 ${
+                    theme === 'dark'
+                      ? 'bg-[#2d2d30] hover:bg-[#3e3e42] text-[#cccccc]'
+                      : 'bg-[#e5e5e5] hover:bg-[#d1d1d1] text-[#333333]'
+                  }`}
+                  title="Copy SSH command to clipboard"
+                >
+                  Port: {sshInfo.port}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5 ml-2 shrink-0">
           <button
             onClick={() => setShowSearch(!showSearch)}
-            className={`p-1.5 rounded-md hover:bg-gray-700 transition-colors ${
-              showSearch ? 'bg-gray-700' : ''
+            className={`p-1.5 rounded transition-colors duration-150 ${
+              showSearch 
+                ? (theme === 'dark' ? 'bg-[#3e3e42] text-[#ffffff]' : 'bg-[#e5e5e5] text-[#333333]')
+                : (theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]')
             }`}
             title="Search (Ctrl+Shift+F)"
           >
-            <Search size={16} />
+            <Search size={14} />
           </button>
           
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="p-1.5 rounded-md hover:bg-gray-700 transition-colors"
+            className={`p-1.5 rounded transition-colors duration-150 ${
+              theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]'
+            }`}
             title="Upload File"
           >
-            <Upload size={16} />
+            <Upload size={14} />
           </button>
           
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className={`p-1.5 rounded-md hover:bg-gray-700 transition-colors ${
-              showSettings ? 'bg-gray-700' : ''
+            className={`p-1.5 rounded transition-colors duration-150 ${
+              showSettings 
+                ? (theme === 'dark' ? 'bg-[#3e3e42] text-[#ffffff]' : 'bg-[#e5e5e5] text-[#333333]')
+                : (theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]')
             }`}
             title="Settings"
           >
-            <Settings size={16} />
+            <Settings size={14} />
           </button>
           
           <button
             onClick={() => setIsMaximized(!isMaximized)}
-            className="p-1.5 rounded-md hover:bg-gray-700 transition-colors"
+            className={`p-1.5 rounded transition-colors duration-150 ${
+              theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]'
+            }`}
             title={isMaximized ? "Restore" : "Maximize"}
           >
-            {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
           
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1.5 rounded-md hover:bg-red-600 transition-colors"
+              className={`p-1.5 rounded transition-colors duration-150 ${
+                theme === 'dark' ? 'hover:bg-[#e81123] text-[#ffffff]' : 'hover:bg-[#e81123] text-[#ffffff]'
+              }`}
               title="Close Terminal"
             >
-              <X size={16} />
+              <X size={14} />
             </button>
           )}
         </div>
       </div>
 
-      {/* Search bar */}
+      {/* Search bar - VSCode style */}
       {showSearch && (
-        <div className="px-4 py-2 bg-gray-800 border-b border-gray-700">
+        <div className={`px-3 py-2 shrink-0 ${
+          theme === 'dark' 
+            ? 'bg-[#252526] border-b border-[#3e3e42]' 
+            : 'bg-[#f3f3f3] border-b border-[#e5e5e5]'
+        }`}>
           <div className="flex items-center gap-2">
             <input
               ref={searchInputRef}
@@ -713,7 +729,11 @@ export default function EnhancedTerminal({
                 setSearchTerm(e.target.value);
                 handleSearch(e.target.value);
               }}
-              className="flex-1 px-3 py-1.5 text-sm bg-gray-900 border border-gray-600 rounded-md focus:outline-none focus:border-blue-500"
+              className={`flex-1 px-2 py-1 text-xs rounded transition-colors duration-150 ${
+                theme === 'dark'
+                  ? 'bg-[#3c3c3c] border border-[#3e3e42] text-[#cccccc] placeholder-[#858585] focus:border-[#007acc]'
+                  : 'bg-[#ffffff] border border-[#e5e5e5] text-[#333333] placeholder-[#858585] focus:border-[#007acc]'
+              } focus:outline-none`}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   handleSearch(searchTerm, e.shiftKey ? 'previous' : 'next');
@@ -726,14 +746,18 @@ export default function EnhancedTerminal({
             />
             <button
               onClick={() => handleSearch(searchTerm, 'previous')}
-              className="p-1.5 rounded-md hover:bg-gray-700"
+              className={`p-1 rounded transition-colors duration-150 ${
+                theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]'
+              }`}
               title="Previous"
             >
               ↑
             </button>
             <button
               onClick={() => handleSearch(searchTerm, 'next')}
-              className="p-1.5 rounded-md hover:bg-gray-700"
+              className={`p-1 rounded transition-colors duration-150 ${
+                theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]'
+              }`}
               title="Next"
             >
               ↓
@@ -743,42 +767,68 @@ export default function EnhancedTerminal({
                 setShowSearch(false);
                 setSearchTerm('');
               }}
-              className="p-1.5 rounded-md hover:bg-gray-700"
+              className={`p-1 rounded transition-colors duration-150 ${
+                theme === 'dark' ? 'hover:bg-[#2a2d2e] text-[#cccccc]' : 'hover:bg-[#ececec] text-[#616161]'
+              }`}
             >
-              <X size={14} />
+              <X size={12} />
             </button>
           </div>
         </div>
       )}
 
-      {/* Settings panel */}
+      {/* Settings panel - VSCode style */}
       {showSettings && (
-        <div className="px-4 py-3 bg-gray-800 border-b border-gray-700">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className={`px-3 py-2 shrink-0 border-b ${
+          theme === 'dark' 
+            ? 'bg-[#252526] border-[#3e3e42]' 
+            : 'bg-[#f3f3f3] border-[#e5e5e5]'
+        }`}>
+          <div className="grid grid-cols-2 gap-4 text-xs">
             <div>
-              <label className="font-medium mb-2 block">Theme:</label>
+              <label className={`font-medium mb-1.5 block ${
+                theme === 'dark' ? 'text-[#cccccc]' : 'text-[#333333]'
+              }`}>Theme:</label>
               <select
                 value={currentTheme}
                 onChange={(e) => setCurrentTheme(e.target.value as keyof typeof terminalThemes)}
-                className="w-full px-2 py-1 bg-gray-900 border border-gray-600 rounded-md"
+                className={`w-full px-2 py-1 text-xs rounded transition-colors duration-150 ${
+                  theme === 'dark'
+                    ? 'bg-[#3c3c3c] border border-[#3e3e42] text-[#cccccc]'
+                    : 'bg-[#ffffff] border border-[#e5e5e5] text-[#333333]'
+                } focus:outline-none focus:border-[#007acc]`}
               >
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
               </select>
             </div>
             <div>
-              <label className="font-medium mb-2 block">Connection:</label>
-              <div className="text-xs text-gray-400">
-                <div>URL: {wsConfig.fullUrl}</div>
+              <label className={`font-medium mb-1.5 block ${
+                theme === 'dark' ? 'text-[#cccccc]' : 'text-[#333333]'
+              }`}>Connection:</label>
+              <div className={`text-xs ${
+                theme === 'dark' ? 'text-[#969696]' : 'text-[#616161]'
+              }`}>
+                <div className="truncate">URL: {wsConfig.fullUrl}</div>
                 <div>Project: {projectId}</div>
                 <div>Status: {connectionStatus}</div>
                 {sshInfo && (
-                  <div className="mt-2 p-2 bg-gray-800 rounded border">
-                    <div className="font-medium text-green-400 mb-1">SSH Access:</div>
-                    <div>Host: {sshInfo.host}</div>
-                    <div>Port: {sshInfo.port}</div>
-                    <div>User: {sshInfo.user}</div>
-                    <div className="mt-1 font-mono text-xs text-blue-400">
+                  <div className={`mt-2 p-2 rounded border ${
+                    theme === 'dark'
+                      ? 'bg-[#2d2d30] border-[#3e3e42]'
+                      : 'bg-[#f3f3f3] border-[#e5e5e5]'
+                  }`}>
+                    <div className={`font-medium mb-1 ${
+                      theme === 'dark' ? 'text-[#4ec9b0]' : 'text-[#007acc]'
+                    }`}>SSH Access:</div>
+                    <div className="space-y-0.5">
+                      <div>Host: {sshInfo.host}</div>
+                      <div>Port: {sshInfo.port}</div>
+                      <div>User: {sshInfo.user}</div>
+                    </div>
+                    <div className={`mt-1 font-mono text-xs ${
+                      theme === 'dark' ? 'text-[#4fc1ff]' : 'text-[#007acc]'
+                    }`}>
                       ssh {sshInfo.user}@{sshInfo.host} -p {sshInfo.port}
                     </div>
                   </div>
@@ -788,17 +838,23 @@ export default function EnhancedTerminal({
           </div>
           
           {/* Debug logs */}
-          <div className="mt-4">
-            <label className="font-medium mb-2 block">Debug Logs (last 10):</label>
-            <div className="bg-gray-900 rounded border border-gray-600 p-2 h-32 overflow-y-auto text-xs font-mono">
+          <div className="mt-3">
+            <label className={`font-medium mb-1.5 block ${
+              theme === 'dark' ? 'text-[#cccccc]' : 'text-[#333333]'
+            }`}>Debug Logs (last 10):</label>
+            <div className={`rounded border p-2 h-32 overflow-y-auto text-xs font-mono scrollbar-thin ${
+              theme === 'dark'
+                ? 'bg-[#1e1e1e] border-[#3e3e42]'
+                : 'bg-[#ffffff] border-[#e5e5e5]'
+            }`}>
               {debugLogs.slice(-10).map((log, index) => (
                 <div key={index} className={`mb-1 ${
-                  log.type === 'error' ? 'text-red-400' :
-                  log.type === 'warning' ? 'text-yellow-400' :
-                  log.type === 'success' ? 'text-green-400' :
-                  'text-gray-300'
+                  log.type === 'error' ? (theme === 'dark' ? 'text-[#f48771]' : 'text-[#a1260d]') :
+                  log.type === 'warning' ? (theme === 'dark' ? 'text-[#cca700]' : 'text-[#b89500]') :
+                  log.type === 'success' ? (theme === 'dark' ? 'text-[#89d185]' : 'text-[#0e7c0e]') :
+                  (theme === 'dark' ? 'text-[#cccccc]' : 'text-[#333333]')
                 }`}>
-                  <span className="text-gray-500">[{log.timestamp}]</span> {log.message}
+                  <span className={theme === 'dark' ? 'text-[#858585]' : 'text-[#858585]'}>[{log.timestamp}]</span> {log.message}
                 </div>
               ))}
             </div>
@@ -806,39 +862,46 @@ export default function EnhancedTerminal({
         </div>
       )}
 
-      {/* Terminal container */}
+      {/* Terminal container - VSCode style */}
       <div
-  ref={terminalContainerRef}
-        className="flex-1 overflow-hidden min-h-0"
-  style={{ backgroundColor: terminalThemes[currentTheme].background }}
+        ref={terminalContainerRef}
+        className="flex-1 overflow-hidden min-h-0 relative"
+        style={{ 
+          backgroundColor: terminalThemes[currentTheme].background,
+          transition: 'background-color 0.2s ease'
+        }}
         onClick={() => {
           if (terminal) {
             terminal.focus();
           }
         }}
-/>
+      />
 
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-4 py-1.5 text-xs bg-gray-800 border-t border-gray-700">
-        <div className="flex items-center gap-4">
+      {/* Status bar - VSCode style */}
+      <div className={`flex items-center justify-between px-3 py-0.5 text-[10px] shrink-0 border-t ${
+        theme === 'dark'
+          ? 'bg-[#007acc] text-[#ffffff] border-t-[#007acc]'
+          : 'bg-[#007acc] text-[#ffffff] border-t-[#007acc]'
+      }`}>
+        <div className="flex items-center gap-3">
           {terminal && (
             <>
-              <span className="text-gray-400">
+              <span className="opacity-90">
                 {terminal.cols}×{terminal.rows}
               </span>
-              <span className={`flex items-center gap-1 ${
-                connectionStatus === 'connected' ? 'text-green-400' : 
-                connectionStatus === 'connecting' ? 'text-yellow-400' :
-                'text-red-400'
+              <span className={`flex items-center gap-1.5 opacity-90 ${
+                connectionStatus === 'connected' ? '' : 
+                connectionStatus === 'connecting' ? 'opacity-70' :
+                'opacity-70'
               }`}>
                 {getStatusIndicator()}
-                {connectionStatus}
+                <span className="capitalize">{connectionStatus}</span>
               </span>
             </>
           )}
         </div>
-        <div className="flex items-center gap-4 text-gray-400">
-          <span>Project: {projectId}</span>
+        <div className="flex items-center gap-3 opacity-90">
+          <span className="truncate max-w-[200px]">Project: {projectId}</span>
           {connectionStats.connected && (
             <span>Ping: {connectionStats.latency}ms</span>
           )}

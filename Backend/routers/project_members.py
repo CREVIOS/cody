@@ -4,6 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 import schema as schemas
 import crud
+from sqlalchemy import select
 from db import get_db
 from services.permission_enforcer import evaluate_user_permission
 
@@ -169,30 +170,26 @@ async def delete_project_member(
     # Now perform deletion
     await crud.crud_project_member.remove(db, id=member_id)
 
-@router.get("/by-project/{project_id}", response_model=List[schemas.ProjectMemberWithDetails])
+# NOTE: Return plain JSON dicts to avoid response_model validation issues when adding a virtual owner entry.
+@router.get("/by-project/{project_id}")
 async def get_project_members_with_details(
     project_id: UUID,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all members of a specific project with full user and role details"""
-    from sqlalchemy import select, or_
+    """Get all members of a specific project with full user and role details as uniform JSON."""
     from sqlalchemy.orm import selectinload
-    
-    # Verify project exists and load owner details
+
+    # Verify project exists and load owner relation
     project_result = await db.execute(
         select(crud.crud_project.model)
         .where(crud.crud_project.model.project_id == project_id)
         .options(selectinload(crud.crud_project.model.owner))
     )
     project = project_result.scalar_one_or_none()
-    
     if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
-        )
-    
-    # Get regular project members (invited users who joined)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    # Load active members with relations
     result = await db.execute(
         select(crud.crud_project_member.model)
         .where(crud.crud_project_member.model.project_id == project_id)
@@ -200,41 +197,84 @@ async def get_project_members_with_details(
         .options(
             selectinload(crud.crud_project_member.model.user),
             selectinload(crud.crud_project_member.model.role),
-            selectinload(crud.crud_project_member.model.inviter)
+            selectinload(crud.crud_project_member.model.inviter),
         )
     )
-    
-    members = result.scalars().all()
-    
-    # Check if owner is already in members list
-    owner_is_member = any(member.user_id == project.owner_id for member in members)
-    
-    # If owner is not in members list, add them with owner role
-    if not owner_is_member:
-        # Get the "Owner" role
+    rows = result.scalars().all()
+
+    # Build a uniform JSON list
+    def to_str(v):
+        return str(v) if v is not None else None
+
+    out = []
+    for m in rows:
+        out.append({
+            "project_member_id": to_str(getattr(m, "project_member_id", None)),
+            "project_id": to_str(getattr(m, "project_id", None)),
+            "user_id": to_str(getattr(m, "user_id", None)),
+            "role_id": to_str(getattr(m, "role_id", None)),
+            "invited_by": to_str(getattr(m, "invited_by", None)),
+            "joined_at": (getattr(m, "created_at", None).isoformat()
+                          if getattr(m, "created_at", None) else None),
+            "last_activity": (getattr(m, "last_activity", None).isoformat()
+                              if getattr(m, "last_activity", None) else None),
+            "is_active": bool(getattr(m, "is_active", True)),
+            "user": ({
+                "user_id": to_str(getattr(m.user, "user_id", None)),
+                "name": getattr(m.user, "name", None),
+                "email": getattr(m.user, "email", None),
+                "avatar_url": getattr(m.user, "avatar_url", None),
+            } if getattr(m, "user", None) else None),
+            "role": ({
+                "role_id": to_str(getattr(m.role, "role_id", None)),
+                "role_name": getattr(m.role, "role_name", None),
+                "permissions": getattr(m.role, "permissions", None),
+            } if getattr(m, "role", None) else None),
+            "inviter": ({
+                "user_id": to_str(getattr(m.inviter, "user_id", None)),
+                "name": getattr(m.inviter, "name", None),
+                "email": getattr(m.inviter, "email", None),
+            } if getattr(m, "inviter", None) else None),
+            "is_owner": False,
+        })
+
+    # Ensure owner is first; add virtual entry if missing
+    owner_in_list = any(item["user_id"] == to_str(project.owner_id) for item in out)
+    if not owner_in_list:
+        # Find "Owner" role (case-insensitive); optional
         owner_role_result = await db.execute(
-            select(crud.crud_role.model)
-            .where(crud.crud_role.model.role_name == "Owner")
+            select(crud.crud_role.model).where(crud.crud_role.model.role_name.ilike("owner"))
         )
         owner_role = owner_role_result.scalar_one_or_none()
-        
-        if owner_role:
-            # Create a virtual member object for the owner
-            from types import SimpleNamespace
-            owner_member = SimpleNamespace()
-            owner_member.project_member_id = f"owner-{project.owner_id}"
-            owner_member.project_id = project_id
-            owner_member.user_id = project.owner_id
-            owner_member.role_id = owner_role.role_id
-            owner_member.invited_by = None
-            owner_member.joined_at = project.created_at
-            owner_member.last_activity = None
-            owner_member.is_active = True
-            owner_member.user = project.owner
-            owner_member.role = owner_role
-            owner_member.inviter = None
-            
-            # Add owner to the beginning of the list
-            members = [owner_member] + list(members)
-    
-    return members 
+
+        out_owner = {
+            "project_member_id": None,  # no fabricated UUID to avoid type issues
+            "project_id": to_str(project_id),
+            "user_id": to_str(project.owner_id),
+            "role_id": to_str(getattr(owner_role, "role_id", None)),
+            "invited_by": None,
+            "joined_at": (project.created_at.isoformat()
+                          if getattr(project, "created_at", None) else None),
+            "last_activity": None,
+            "is_active": True,
+            "user": ({
+                "user_id": to_str(getattr(project.owner, "user_id", None)),
+                "name": getattr(project.owner, "name", None),
+                "email": getattr(project.owner, "email", None),
+                "avatar_url": getattr(project.owner, "avatar_url", None),
+            } if getattr(project, "owner", None) else None),
+            "role": ({
+                "role_id": to_str(getattr(owner_role, "role_id", None)),
+                "role_name": getattr(owner_role, "role_name", "Owner"),
+                "permissions": getattr(owner_role, "permissions", None),
+            } if owner_role else {
+                "role_id": None,
+                "role_name": "Owner",
+                "permissions": None,
+            }),
+            "inviter": None,
+            "is_owner": True,
+        }
+        out = [out_owner] + out
+
+    return out

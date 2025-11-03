@@ -1,21 +1,49 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
 import { ProjectMemberWithDetails } from "@/lib/projectAPI/TypeDefinitions";
+import { useOnlinePresence } from "@/hooks/useOnlinePresence";
 
 interface CollaboratorsProps {
   members: ProjectMemberWithDetails[];
   loading?: boolean;
   error?: string | null;
+  projectId: string;
+  currentUserId: string;
+  currentUsername?: string;
 }
 
-export default function Collaborators({ members, loading, error }: CollaboratorsProps) {
+export default function Collaborators({
+  members = [],
+  loading,
+  error,
+  projectId,
+  currentUserId,
+  currentUsername,
+}: CollaboratorsProps) {  
   const { theme } = useTheme();
   const isDark = theme === "dark";
   
   // Get initials from name
-  const getInitials = (name: string) => {
-    return name.split(' ').map(n => n.charAt(0)).join('').toUpperCase().slice(0, 2);
+  const { isOnline } = useOnlinePresence(projectId, {
+    userId: currentUserId,
+    username: currentUsername,
+  });
+
+  const getInitials = (name?: string): string => {
+    if (!name?.trim()) return "NA";
+    const parts = name.replace(/[_.-]+/g, " ").trim().split(/\s+/);
+    return parts.slice(0, 2).map(p => p[0]!).join("").toUpperCase() || "NA";
   };
+
+  const getUserId = (m: ProjectMemberWithDetails): string | null => {
+    const u = m.user as { id?: string; user_id?: string; uid?: string };
+    return u.id ?? u.user_id ?? u.uid ?? null;
+  };
+
+  const onlineCount = members.reduce(
+    (acc, m) => acc + (isOnline(getUserId(m)) ? 1 : 0),
+    0
+  );
 
   // Simple online/offline status simulation based on last activity
   // In a real application, this would be managed by websockets or periodic API calls
@@ -69,25 +97,28 @@ export default function Collaborators({ members, loading, error }: Collaborators
     <div className="relative z-10">
       {/* Online count indicator */}
       <div className={`mb-2 text-sm ${isDark ? "text-[#A0A0A0]" : "text-[#666666]"}`}>
-        <span className="font-medium">{onlineMembers.length}</span> users online
+        <span className="font-medium">{onlineCount}</span> users online
       </div>
       
       {/* Collaborators list - showing all users with their status */}
       <div className="mt-2 max-h-[240px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-rounded-full scrollbar-track-transparent">
         {members.length > 0 ? (
-          members.map((member) => {
-            const isOnline = getOnlineStatus(member);
-            const displayName = member.user.full_name || member.user.username;
-            
+          members.map((member, idx) => {
+            const displayName =
+              member.user.full_name || member.user.username || "Unknown User";
+            const uid = getUserId(member);
+            const online = isOnline(uid);
+            const isLast = idx === members.length - 1;
+
             return (
               <div 
-                key={member.project_member_id}
+                key={member.project_member_id ?? `${uid ?? "anon"}-${idx}`}
                 className={`flex items-center py-2.5 ${
-                  members.indexOf(member) !== members.length - 1 && (
-                    isDark 
+                  !isLast
+                    ? isDark
                       ? "border-b border-white/10"
                       : "border-b border-black/10"
-                  )
+                    : ""
                 }`}
               >
                 <div
@@ -109,15 +140,17 @@ export default function Collaborators({ members, loading, error }: Collaborators
                   }`}>
                     <span 
                       className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
-                        isOnline ? "bg-green-500" : "bg-gray-500"
+                        online ? "bg-green-500" : "bg-gray-500"
                       }`}
                     ></span>
-                    {isOnline ? "Online" : "Offline"}
+                    {online ? "Online" : "Offline"}
                   </div>
                 </div>
                 <button className={`border-none bg-transparent cursor-pointer opacity-70 ${
                   isDark ? "text-[#E0E0E0]" : "text-[#2D2D2D]"
-                }`}>
+                }`}
+                aria-label="More actions"
+                >
                   •••
                 </button>
               </div>

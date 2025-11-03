@@ -1,14 +1,26 @@
-import { Editor } from "@monaco-editor/react";
-import { useEffect, useRef } from "react";
+'use client';
+
 import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
 import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
 import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
+import { Editor } from '@monaco-editor/react';
+import { useEffect, useRef } from 'react';
+// Using any to avoid depending on monaco-editor type package
+import { useRealtimeCursors } from '@/hooks/use-realtime-cursors';
+
+
+// Define the type for the editor instance
+type MonacoEditor = any;
 
 interface MonacoEditorWrapperProps {
   language: string;
   content: string;
   onChange: (value: string | undefined) => void;
   isDark: boolean;
+  userId?: string;   // optional external id; otherwise a per-tab id is used
+  username: string;
+  roomName: string;  // websocket channel (can be shared across files)
+  docKey?: string; 
 
   // Collaboration options (optional)
   collaboration?: {
@@ -29,9 +41,34 @@ export function MonacoEditorWrapper({
   content,
   onChange,
   isDark,
-  collaboration
+  collaboration, 
+  userId,
+  username,
+  roomName,
+  docKey,
 }: MonacoEditorWrapperProps) {
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<any | null>(null);
+
+  // Realtime cursors / locking (top-level hook usage)
+  const { isEditor, activeEditor, inactivitySeconds, lockEvent } = useRealtimeCursors({
+    roomName,
+    username,
+    userId,
+    throttleMs: 50,
+    docKey: docKey ?? roomName,
+  });
+
+  // Apply read-only mode based on current leader/editor
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.updateOptions({
+      readOnly: !isEditor,
+      readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
+    });
+    const node = ed.getDomNode();
+    if (node) node.style.outline = !isEditor ? '1px dashed #ef4444' : 'none';
+  }, [isEditor]);
 
   // Setup collaboration if enabled
   const [collabState, collabActions] = useCollaborativeEditor(
@@ -100,17 +137,19 @@ export function MonacoEditorWrapper({
         editor.trigger('keyboard', 'editor.unfoldAll');
       });
     });
+
+    // Hook usage moved to top-level; mount handler only sets ref and keybindings
   };
 
   return (
-    <div className="flex-1 relative">
+    <div className="flex-1 relative flex flex-col min-w-0 overflow-hidden">
       {/* Collaboration UI */}
       {collaboration?.enabled && (
         <>
           {/* User avatars in top-right corner */}
           <div className="absolute top-2 right-4 z-10">
             <CollaborativeUserAvatars
-              awareness={collabState.users.size > 0 ? { getStates: () => collabState.users } as any : null}
+              awareness={collabActions.getAwareness?.() || null}
               connectionStatus={collabState.status}
               currentUserId={collaboration.user.id}
             />
@@ -120,21 +159,39 @@ export function MonacoEditorWrapper({
           {editorRef.current && (
             <RemoteCursors
               editor={editorRef.current}
-              awareness={collabActions.getAwarenessStates ? { getStates: collabActions.getAwarenessStates, on: () => {}, off: () => {} } as any : null}
+              awareness={collabActions.getAwareness?.() || null}
             />
           )}
         </>
       )}
+      
 
-      <Editor
-        height="100%"
-        width="100%"
-        theme={isDark ? "vs-dark" : "light"}
-        language={language}
-        value={collaboration?.enabled ? undefined : content}
-        onChange={collaboration?.enabled ? undefined : onChange}
-        onMount={handleEditorDidMount}
+      <div className={`px-3 py-1.5 text-xs border-b flex items-center gap-4 shrink-0 ${
+        isDark 
+          ? 'bg-[#1e1e1e] border-[#3e3e42] text-[#cccccc]' 
+          : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838]'
+      }`}>
+        <span>Room: {roomName}</span>
+        <span>{isEditor ? '✅ You can edit' : '🔒 Read-only'}</span>
+        {!isEditor && activeEditor ? <span className="opacity-70">editor: {activeEditor}</span> : null}
+        <span className="opacity-70">
+          Inactivity: {Math.floor(inactivitySeconds / 60)}m {inactivitySeconds % 60}s
+        </span>
+        <span className="opacity-70">{lockEvent}</span>
+      </div>
+      <div className="flex-1 min-w-0 min-h-0 overflow-hidden" style={{ transition: 'opacity 0.2s ease' }}>
+        <Editor
+          height="100%"
+          width="100%"
+          theme={isDark ? "vs-dark" : "light"}
+          language={language}
+          value={collaboration?.enabled ? undefined : content}
+          onChange={collaboration?.enabled ? undefined : onChange}
+          onMount={handleEditorDidMount}
+          loading={<div className="flex items-center justify-center h-full text-[#cccccc]">Loading editor...</div>}
         options={{
+          readOnly: !isEditor,
+          readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
           fontSize: 14,
           lineHeight: 21,
           
@@ -315,13 +372,30 @@ export function MonacoEditorWrapper({
           cursorSurroundingLinesStyle: 'default',
           cursorWidth: 2,
           
-          // Smooth scrolling
+          // Smooth scrolling - Enhanced for better UX
           smoothScrolling: true,
+          scrollBeyondLastLine: false,
+          scrollBeyondLastColumn: 3,
           
-          // Mouse
+          // Mouse - Enhanced responsiveness
           mouseWheelZoom: true,
           mouseWheelScrollSensitivity: 1,
           fastScrollSensitivity: 5,
+          enableMultiCursorModifier: 'ctrlCmd',
+          
+          // Render optimization for smoothness
+          renderValidationDecorations: 'on',
+          renderWhitespace: 'selection',
+          
+          // Performance optimizations
+          renderLineHighlight: 'all',
+          renderIndentGuides: true,
+          renderFinalNewline: 'on',
+          renderControlCharacters: false,
+          
+          // Enhanced smoothness
+          cursorSmoothCaretAnimation: 'on',
+          cursorBlinking: 'smooth',
           
           // Accessibility
           accessibilitySupport: 'auto',
@@ -351,8 +425,11 @@ export function MonacoEditorWrapper({
             maxLineCount: 5,
             defaultModel: 'outlineModel'
           }
+
+          
         }}
-      />
+        />
+      </div>
     </div>
   );
 }

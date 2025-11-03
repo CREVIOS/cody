@@ -121,7 +121,8 @@ export class WebSocketProvider extends EventTarget {
 
     // Awareness handlers
     this.awarenessUpdateHandler = (changes, origin) => {
-      if (origin !== this) {
+      // Only forward LOCAL changes. Remote applies call awareness with origin === this
+      if (origin === this) {
         return;
       }
 

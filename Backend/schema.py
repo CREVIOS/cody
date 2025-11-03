@@ -1,7 +1,8 @@
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator, Field
-from typing import Optional, List, Dict, Any, TypeVar, Generic, Union
+from typing import Optional, List, Dict, Any, TypeVar, Generic, Union, Literal
 from datetime import datetime
 from uuid import UUID
+
 
 # Base schemas
 class BaseSchema(BaseModel):
@@ -351,3 +352,52 @@ class UserProjectPermissions(BaseSchema):
     role_id: UUID
     role_name: str
     permissions: Dict[str, bool]
+    
+
+
+
+
+# Lock State Schemas
+class LockedState(BaseModel):
+    state: Literal["LOCKED"]
+    holder_user_id: str
+    expires_at: Optional[str] = None  # ISO
+    queue_size: Optional[int] = None
+
+class UnlockedState(BaseModel):
+    state: Literal["UNLOCKED"]
+
+LockState = LockedState | UnlockedState
+
+
+
+# Base schema for creation
+class WebSocketConnectionBase(BaseModel):
+    user_id: UUID
+    connection_type: str = "websocket"
+    is_active: bool = True
+class WebSocketConnectionCreate(WebSocketConnectionBase):
+    pass
+class WebSocketConnectionUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    last_error: Optional[str] = None
+
+class WebSocketConnection(WebSocketConnectionBase):
+    id: UUID
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# Optional paginated response schema if you use it
+T = TypeVar("T")
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    total: int
+    page: int
+    size: int
+    pages: int

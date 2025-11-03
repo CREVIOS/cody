@@ -36,11 +36,11 @@ export function TabBar({ isDark }: TabBarProps) {
   if (openFiles.size === 0) return null;
 
   return (
-    <div className={`flex overflow-x-auto border-b ${
+    <div className={`flex overflow-x-auto scrollbar-hide border-b ${
       isDark 
-        ? 'bg-[#2d2d30] border-[#3e3e42]' 
+        ? 'bg-[#252526] border-[#3e3e42]' 
         : 'bg-[#f3f3f3] border-[#e5e5e5]'
-    }`}>
+    }`} style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
       {Array.from(openFiles.entries()).map(([path, openFile]) => {
         const isActive = selectedFile?.path === path;
         const modified = isModified(path);

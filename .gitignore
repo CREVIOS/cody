@@ -1,12 +1,28 @@
 # Dependencies
 node_modules/
 */node_modules/
-.specstory/
+
 # Build outputs
 Frontend/.next/
+Frontend/node_modules/
 Frontend/out/
 Backend/dist/
 Backend/build/
+Backend/coverage/
+Backend/htmlcov/
+Backend/__pycache__
+Backend/routers/__pycache__
+Backend/services/__pycache__
+Backend/tests/__pycache__
+SBackend/node_modules/
+SBackend/.DS_Store
+
+
+# Cursor indexing ignore
+.cursorindexingignore
+.DS_Store
+gh
+gh.pub
 
 # Environment variables
 .env
@@ -69,7 +85,8 @@ minio-data/
 __pycache__/
 .specstory/
 
+
+# Cursor indexing ignore
 .cursorindexingignore
 .DS_Store
-gh
-gh.pub
+

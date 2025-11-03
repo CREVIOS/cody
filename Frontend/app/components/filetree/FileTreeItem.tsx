@@ -97,7 +97,7 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
     transition-all duration-150 ease-out
     ${isSelected 
       ? (isDark 
-          ? 'bg-[#094771] text-[#cccccc]' // VSCode dark selection
+          ? 'bg-[#094771] text-[#ffffff]' // VSCode dark selection - brighter text
           : 'bg-[#e8f4fd] text-[#000000]'  // VSCode light selection
         ) 
       : (isDark 
@@ -120,13 +120,13 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
         {item.type === 'folder' && (
           <div 
             className={`w-4 h-4 flex items-center justify-center mr-1 transition-all duration-150 ${
-              hasChildren ? 'cursor-pointer hover:bg-black/10 rounded' : 'cursor-default'
+              hasChildren ? 'cursor-pointer hover:bg-[#ffffff]/10 rounded active:scale-90' : 'cursor-default'
             }`}
             onClick={handleExpanderClick}
           >
             {hasChildren && (
               <span 
-                className={`text-xs transition-all duration-200 ease-out ${
+                className={`text-xs transition-all duration-150 ease-out ${
                   isExpanded ? 'rotate-90' : ''
                 } ${isDark ? 'text-[#cccccc]' : 'text-[#646465]'} ${
                   isAnimating ? 'scale-110' : ''
@@ -194,12 +194,12 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
       {item.type === 'folder' && hasChildren && (
         <div 
           ref={childrenRef}
-          className={`overflow-hidden transition-all duration-200 ease-out ${
+          className={`overflow-hidden transition-all duration-150 ease-out ${
             isExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
           }`}
         >
-          <div className={`transition-all duration-200 ${
-            isExpanded ? 'transform translate-y-0' : 'transform -translate-y-2'
+          <div className={`transition-all duration-150 ${
+            isExpanded ? 'transform translate-y-0' : 'transform -translate-y-1'
           }`}>
             {item.children!.map((child) => (
               <FileTreeItem
