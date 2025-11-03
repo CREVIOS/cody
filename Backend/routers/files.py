@@ -1,11 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
 from services.permission_enforcer import evaluate_user_permission
+from pydantic import BaseModel
+
+class RealtimeKey(BaseModel):
+    room_name: str
+    doc_key: str
+
+class LockNotification(BaseModel):
+    leader_id: Optional[str] = None
+
+class QueueItem(BaseModel):
+    userId: str
+
+class QueueNotification(BaseModel):
+    queue: List[QueueItem] = []
+
+
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -200,3 +216,51 @@ async def delete_file(
             detail=permission_eval.reason or "User lacks canEdit permission",
         )
     await crud.crud_file.remove(db, id=file_id)
+    
+    
+    
+@router.get("/{file_id}/realtime-key", response_model=RealtimeKey)
+async def get_file_realtime_key(
+    file_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    file = await crud.crud_file.get(db, id=file_id)
+    if not file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+
+    # One shared channel per project, unique doc scope per file
+    room_name = f"project:{file.project_id}"
+    doc_key = f"doc:{file.project_id}:{file.id}"
+
+    return RealtimeKey(room_name=room_name, doc_key=doc_key)
+
+@router.post("/{file_key}/lock")
+async def notify_lock(
+    file_key: str,
+    notification: LockNotification,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Notification endpoint for lock state changes from frontend realtime system.
+    This endpoint accepts notifications about which user holds the lock.
+    """
+    # Log the notification (can be enhanced later to sync with database)
+    print(f"🔒 Lock notification: file_key={file_key}, leader_id={notification.leader_id}")
+    return {"status": "acknowledged", "file_key": file_key, "leader_id": notification.leader_id}
+
+@router.post("/{file_key}/queue")
+async def notify_queue(
+    file_key: str,
+    notification: QueueNotification,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Notification endpoint for queue state changes from frontend realtime system.
+    This endpoint accepts notifications about the queue of users waiting for the lock.
+    """
+    # Log the notification (can be enhanced later to sync with database)
+    print(f"📋 Queue notification: file_key={file_key}, queue_size={len(notification.queue)}")
+    return {"status": "acknowledged", "file_key": file_key, "queue_size": len(notification.queue)}

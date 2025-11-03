@@ -185,7 +185,7 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
         isDark={isDark}
       />
 
-      <div className={`overflow-hidden transition-all duration-300 ease-out ${
+      <div className={`overflow-hidden transition-all duration-200 ease-out ${
         isCollapsed ? 'max-h-0 opacity-0' : 'max-h-full opacity-100'
       }`}>
         <SearchBar
@@ -195,7 +195,11 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
           isDark={isDark}
         />
 
-        <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-400 hover:scrollbar-thumb-gray-500">
+        <div className={`flex-1 overflow-y-auto scrollbar-thin ${
+          isDark 
+            ? 'scrollbar-thumb-[#424242] hover:scrollbar-thumb-[#4e4e4e]' 
+            : 'scrollbar-thumb-[#c1c1c1] hover:scrollbar-thumb-[#a8a8a8]'
+        } scrollbar-track-transparent`} style={{ scrollbarWidth: 'thin' }}>
           {error && (
             <div className={`p-3 text-sm border-l-2 mx-2 mb-2 rounded-r transition-all duration-200 ${
               isDark 

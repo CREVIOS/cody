@@ -57,10 +57,10 @@ export function FileInfoBar({
   };
 
   return (
-    <div className={`px-4 py-2 text-sm border-b ${
+    <div className={`px-4 py-2 text-sm border-b shrink-0 ${
       isDark 
         ? 'bg-[#1e1e1e] border-[#3e3e42] text-[#cccccc]' 
-        : 'bg-[#f8f8f8] border-[#e5e5e5] text-[#383838]'
+        : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838]'
     }`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center min-w-0 flex-1">
@@ -70,12 +70,12 @@ export function FileInfoBar({
               <div key={breadcrumb.path} className="flex items-center min-w-0">
                 <button
                   onClick={() => handleBreadcrumbClick(breadcrumb)}
-                  className={`text-sm truncate transition-colors duration-100 ${
+                  className={`text-sm truncate transition-colors duration-150 ${
                     breadcrumb.isLast
                       ? (isDark ? 'text-[#ffffff] font-medium' : 'text-[#333333] font-medium')
                       : (isDark 
-                          ? 'text-[#969696] hover:text-[#cccccc]' 
-                          : 'text-[#616161] hover:text-[#333333]'
+                          ? 'text-[#969696] hover:text-[#cccccc] hover:bg-[#2a2d2e] px-1 py-0.5 rounded' 
+                          : 'text-[#616161] hover:text-[#333333] hover:bg-[#e8e8e8] px-1 py-0.5 rounded'
                         )
                   }`}
                   title={breadcrumb.path}
@@ -83,7 +83,7 @@ export function FileInfoBar({
                   {breadcrumb.name}
                 </button>
                 {!breadcrumb.isLast && (
-                  <span className={`mx-2 text-xs ${
+                  <span className={`mx-1.5 text-xs ${
                     isDark ? 'text-[#616161]' : 'text-[#969696]'
                   }`}>
                     ›
@@ -95,7 +95,7 @@ export function FileInfoBar({
 
           {/* Modified indicator */}
           {isModified && (
-            <span className={`ml-3 text-xs px-2 py-1 rounded ${
+            <span className={`ml-3 text-xs px-2 py-0.5 rounded ${
               isDark 
                 ? 'bg-[#5a5a00] text-[#ffff00]' 
                 : 'bg-[#fff3cd] text-[#856404]'
@@ -105,12 +105,12 @@ export function FileInfoBar({
           )}
         </div>
         
-        <div className="flex items-center space-x-3 ml-4">
+        <div className="flex items-center space-x-2 ml-4 shrink-0">
           {/* Language indicator */}
-          <span className={`text-xs px-2 py-1 rounded ${
+          <span className={`text-xs px-2 py-0.5 rounded ${
             isDark 
-              ? 'bg-[#2d2d30] text-[#969696]' 
-              : 'bg-[#f3f3f3] text-[#616161]'
+              ? 'bg-[#2d2d30] text-[#969696] border border-[#3e3e42]' 
+              : 'bg-[#f3f3f3] text-[#616161] border border-[#e5e5e5]'
           }`}>
             {language.toUpperCase()}
           </span>
@@ -118,15 +118,15 @@ export function FileInfoBar({
           {/* Save button */}
           <button
             onClick={onSave}
-            className={`px-3 py-1 text-xs rounded transition-colors duration-100 ${
+            className={`px-3 py-1 text-xs rounded transition-colors duration-150 font-medium ${
               isModified
                 ? (isDark
-                    ? 'bg-[#007acc] hover:bg-[#005a9e] text-[#ffffff]'
-                    : 'bg-[#0066cc] hover:bg-[#005a9e] text-[#ffffff]'
+                    ? 'bg-[#0e639c] hover:bg-[#1177bb] text-[#ffffff]'
+                    : 'bg-[#007acc] hover:bg-[#005a9e] text-[#ffffff]'
                   )
                 : (isDark
-                    ? 'bg-[#3e3e42] text-[#969696] cursor-not-allowed'
-                    : 'bg-[#e5e5e5] text-[#969696] cursor-not-allowed'
+                    ? 'bg-[#3e3e42] text-[#969696] cursor-not-allowed opacity-60'
+                    : 'bg-[#e5e5e5] text-[#969696] cursor-not-allowed opacity-60'
                   )
             }`}
             disabled={!isModified}

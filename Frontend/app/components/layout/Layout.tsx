@@ -210,6 +210,18 @@ export default function Layout({
     };
   }, [isResizingSidebar]);
 
+
+
+// Get user's role name for the lock system
+  const getUserRoleName = (): string => {
+    if (!user || projectMembers.length === 0) return "editor";
+    const userMember = projectMembers.find(member => member.user_id === user.user_id);
+    return userMember?.role.role_name.toLowerCase() || "editor";
+  };
+
+
+
+
   const backgroundClass = theme === "dark" ? "bg-[#212124] text-[#E0E0E0]" : "bg-[#F5F5F0] text-[#2D2D2D]";
   const borderClass = theme === "dark" ? "border-[#2A2A2E]" : "border-[#D1D1CC]";
   const inputClass = theme === "dark" ? "bg-[#2A2A2E] border-[#3A3A3E] focus:border-indigo-500/50 text-[#E0E0E0]" : "bg-white/80 border-gray-300 focus:border-indigo-500 text-[#2D2D2D]";
@@ -236,19 +248,21 @@ export default function Layout({
           />
 
           {/* Regular sidebar content */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto min-h-0">
             <Sidebar />
           </div>
 
-          {/* Resize handle */}
+          {/* Resize handle - VSCode style */}
           <div
             ref={sidebarResizeRef}
             onMouseDown={(e) => {
               e.preventDefault();
               setIsResizingSidebar(true);
             }}
-            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-500/50 transition-colors ${
-              isResizingSidebar ? 'bg-indigo-500' : ''
+            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize transition-colors duration-150 ${
+              isResizingSidebar 
+                ? 'bg-[#007acc]' 
+                : 'bg-transparent hover:bg-[#007acc]/50'
             }`}
             style={{ zIndex: 10 }}
           />
@@ -270,6 +284,7 @@ export default function Layout({
           showCollaborators={showCollaborators}
           projectId={projectId}
           user={user}
+          userRole={getUserRoleName()}
           collaboratorsComponent={
             <DraggableCollaborators
               projectMembers={projectMembers}

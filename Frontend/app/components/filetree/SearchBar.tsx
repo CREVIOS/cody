@@ -14,13 +14,13 @@ export function SearchBar({ searchQuery, onSearchChange, isSearching, isDark }: 
             placeholder="Search files..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className={`w-full pl-8 pr-10 py-2 text-sm rounded border transition-all duration-200 ${
+            className={`w-full pl-8 pr-10 py-1.5 text-xs rounded border transition-all duration-150 ${
               isDark 
                 ? 'bg-[#3c3c3c] border-[#3e3e42] text-[#cccccc] placeholder-[#858585] focus:border-[#007acc] focus:bg-[#404040]' 
                 : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838] placeholder-[#6c6c6c] focus:border-[#005fb8] focus:bg-[#fafafa]'
-            } outline-none focus:ring-2 ${
-              isDark ? 'focus:ring-[#007acc]/20' : 'focus:ring-[#005fb8]/20'
-            } focus:scale-[1.02]`}
+            } outline-none focus:ring-1 ${
+              isDark ? 'focus:ring-[#007acc]/30' : 'focus:ring-[#005fb8]/30'
+            }`}
           />
           <div className={`absolute left-2.5 top-1/2 transform -translate-y-1/2 transition-all duration-200 ${
             searchQuery ? 'scale-110' : ''

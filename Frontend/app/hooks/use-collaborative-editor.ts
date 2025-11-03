@@ -5,6 +5,7 @@ import * as Y from 'yjs';
 import type * as Monaco from 'monaco-editor';
 import { MonacoBinding } from '../lib/collaboration/MonacoBinding';
 import { WebSocketProvider, ConnectionStatus } from '../lib/collaboration/WebSocketProvider';
+import type { Awareness } from 'y-protocols/awareness';
 import { IndexedDBProvider } from '../lib/collaboration/IndexedDBProvider';
 import { CollaborativeUndoManager } from '../lib/collaboration/UndoManager';
 
@@ -126,6 +127,11 @@ export interface CollaborativeEditorActions {
    * Get awareness states
    */
   getAwarenessStates: () => Map<number, any>;
+
+  /**
+   * Get the Awareness instance
+   */
+  getAwareness: () => Awareness | null;
 }
 
 export function useCollaborativeEditor(
@@ -305,6 +311,10 @@ export function useCollaborativeEditor(
     return wsProviderRef.current?.awareness.getStates() || new Map();
   }, []);
 
+  const getAwareness = useCallback(() => {
+    return wsProviderRef.current?.awareness || null;
+  }, []);
+
   const actions: CollaborativeEditorActions = {
     disconnect,
     reconnect,
@@ -312,6 +322,7 @@ export function useCollaborativeEditor(
     redo,
     getText,
     getAwarenessStates,
+    getAwareness,
   };
 
   return [state, actions];

@@ -23,6 +23,39 @@ async def create_websocket_connection(
     
     return await crud.crud_websocket_connection.create(db, obj_in=connection_in)
 
+
+
+
+
+# Room summary API
+@router.get("/room/{room_name}/summary")
+async def room_summary(room_name: str, db: AsyncSession = Depends(get_db)):
+    conns = await crud.crud_websocket_connection.get_multi(
+        db, room_name=room_name, is_active=True, limit=1000
+    )
+    if not conns:
+        return {
+            "room_name": room_name,
+            "active": 0,
+            "editor_user_id": None,
+            "editor_connection_id": None,
+        }
+
+    conns_sorted = sorted(conns, key=lambda c: c.created_at or c.id.hex)
+    editor = conns_sorted[0]
+    return {
+        "room_name": room_name,
+        "active": len(conns),
+        "editor_user_id": str(editor.user_id),
+        "editor_connection_id": str(editor.id),
+    }
+
+
+
+
+
+
+
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.WebSocketConnection])
 async def read_websocket_connections(
     skip: int = Query(0, ge=0),
@@ -30,6 +63,7 @@ async def read_websocket_connections(
     user_id: Optional[UUID] = None,
     is_active: Optional[bool] = None,
     connection_type: Optional[str] = None,
+    room_name: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     filters = {}
@@ -40,6 +74,9 @@ async def read_websocket_connections(
     if connection_type:
         filters["connection_type"] = connection_type
     
+    if room_name:
+        filters["room_name"] = room_name
+        
     connections = await crud.crud_websocket_connection.get_multi(db, skip=skip, limit=limit, **filters)
     total = await crud.crud_websocket_connection.count(db, **filters)
     
@@ -50,6 +87,7 @@ async def read_websocket_connections(
         size=len(connections),
         pages=(total + limit - 1) // limit
     )
+
 
 @router.get("/{connection_id}", response_model=schemas.WebSocketConnection)
 async def read_websocket_connection(
@@ -91,9 +129,13 @@ async def delete_websocket_connection(
             detail="WebSocket connection not found"
         )
 
-@router.websocket("/ws/{user_id}")
+
+
+
+@router.websocket("/ws/{room_name}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
+    room_name: str,
     user_id: UUID,
     db: AsyncSession = Depends(get_db)
 ):
@@ -106,12 +148,16 @@ async def websocket_endpoint(
     # Accept the connection
     await websocket.accept()
     
+    
+    connection = None
+    
     try:
         # Create connection record
         connection = await crud.crud_websocket_connection.create(
             db,
             obj_in=schemas.WebSocketConnectionCreate(
                 user_id=user_id,
+                room_name=room_name,
                 connection_type="websocket",
                 is_active=True
             )

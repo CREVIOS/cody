@@ -1,0 +1,43 @@
+RBAC + exclusive edit locks with a request queue that the OWNER can override at any time, and automatic, fair handoff if the OWNER does nothing. Here’s a crisp blueprint that matches exactly what you described.
+
+Mental model (states & rules)
+
+States per file
+
+UNLOCKED
+
+LOCKED(holder, expiresAt) + QUEUE = [requests...]
+
+Actors
+
+OWNER (can lock/unlock/transfer at will)
+
+EDITOR (can request a lock; cannot preempt)
+
+VIEWER (read-only)
+
+Policy
+
+If UNLOCKED:
+
+Owner can lock immediately.
+
+If an Editor requests a lock and no one intervenes, the next lock will be granted automatically when the file becomes UNLOCKED (i.e., after current holder releases), in FIFO order.
+
+If LOCKED by holder:
+
+Others are read-only.
+
+Editors can request a lock (enqueue).
+
+OWNER can transfer the lock right now to any requester (preempt), or deny requests.
+
+If OWNER does nothing, when holder releases (or lock expires), the server auto-grants the lock to the head of queue.
+
+Heartbeats/lease:
+
+Holder must renew before expiresAt; otherwise lock auto-releases → queue auto-grants next.
+
+Preemption:
+
+Only OWNER can preempt. Editors cannot.

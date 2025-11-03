@@ -39,12 +39,12 @@ export function SidebarHeader({
   }, [isEditingName]);
 
   return (
-    <div className={`p-3 border-b flex flex-col ${borderClass}`}>
+    <div className={`p-3 border-b flex flex-col shrink-0 ${borderClass}`}>
       {/* Top row with home and invite icons */}
       <div className="flex items-center mb-3">
         <button
           onClick={onHome}
-          className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-all duration-200 group relative`}
+          className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
           title="Back to Home"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -63,7 +63,7 @@ export function SidebarHeader({
         {canInviteUsers && (
           <button
             onClick={onInviteClick}
-            className={`w-8 h-8 rounded-full flex items-center justify-center ${iconHoverClass} transition-all duration-200 group relative`}
+            className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
             title="Invite Users"
           >
             <UserPlus className="w-4 h-4" />
@@ -86,7 +86,7 @@ export function SidebarHeader({
             onChange={(e) => onProjectNameChange(e.target.value)}
             onBlur={onNameSubmit}
             onKeyDown={onKeyDown}
-            className={`w-full px-2 py-1 rounded border ${inputClass} focus:outline-none focus:ring-1 focus:ring-indigo-500/50 text-sm font-medium`}
+            className={`w-full px-2 py-1 rounded border ${inputClass} focus:outline-none focus:ring-1 focus:ring-[#007acc]/50 text-sm font-medium transition-all duration-150`}
           />
         ) : (
           <div
