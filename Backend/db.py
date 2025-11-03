@@ -39,13 +39,13 @@ class JsonEncoded(TypeDecorator):
 # Database URLs - Supabase Postgres (pooled for app, direct for migrations)
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres.igbmvsodtgfmbcxmalha:%2AbeHA%40%24p-E4%2A6X%21@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
+    "postgresql+asyncpg://postgres.igbmvsodtgfmbcxmalha:M6KPIqpWntaF4nAN@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
 )
 
 # Optional: direct (non-pooled) sync URL for migrations/tools
 DIRECT_URL = os.getenv(
     "DIRECT_URL",
-    "postgresql://postgres.igbmvsodtgfmbcxmalha:%2AbeHA%40%24p-E4%2A6X%21@aws-1-ap-south-1.pooler.supabase.com:5432/postgres",
+    "postgresql://postgres.igbmvsodtgfmbcxmalha:M6KPIqpWntaF4nAN@aws-1-ap-south-1.pooler.supabase.com:5432/postgres",
 )
 
 # Prefer JSONB for Postgres, JSON for others (e.g., SQLite in tests)

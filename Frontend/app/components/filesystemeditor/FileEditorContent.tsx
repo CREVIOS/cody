@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { FileSystemItem } from '@/types/fileSystem';
-import { getLanguageFromExtension } from './LanguageDetection';
-import { FileInfoBar } from './FileInfoBar';
-import { MonacoEditorWrapper } from './MonacoEditorWrapper';
+import { useState, useEffect, useCallback } from "react";
+import { FileSystemItem } from "@/types/fileSystem";
+import { getLanguageFromExtension } from "./LanguageDetection";
+import { FileInfoBar } from "./FileInfoBar";
+import { MonacoEditorWrapper } from "./MonacoEditorWrapper";
+import { User } from "@/lib/projectAPI/TypeDefinitions";
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -17,28 +18,32 @@ interface FileEditorContentProps {
   saveFile: (path: string, content: string) => void;
   openFiles: Map<string, OpenFileContent>;
   isDark: boolean;
+  projectId?: string;
+  user?: User;
 }
 
-export function FileEditorContent({ 
-  selectedFile, 
-  currentFileContent, 
-  updateCurrentContent, 
-  saveFile, 
-  openFiles, 
-  isDark 
+export function FileEditorContent({
+  selectedFile,
+  currentFileContent,
+  updateCurrentContent,
+  saveFile,
+  openFiles,
+  isDark,
+  projectId,
+  user,
 }: FileEditorContentProps) {
   const [language, setLanguage] = useState("javascript");
 
-  // Determine language based on file extension
+  // detect language by file extension
   useEffect(() => {
     if (selectedFile) {
-      const detectedLanguage = getLanguageFromExtension(selectedFile.name);
-      setLanguage(detectedLanguage);
+      const detected = getLanguageFromExtension(selectedFile.name);
+      setLanguage(detected);
     }
   }, [selectedFile]);
 
   const handleEditorChange = (value: string | undefined) => {
-    updateCurrentContent(value || '');
+    updateCurrentContent(value || "");
   };
 
   const handleSave = useCallback(() => {
@@ -47,17 +52,16 @@ export function FileEditorContent({
     }
   }, [selectedFile, currentFileContent, saveFile]);
 
-  // Handle Ctrl+S / Cmd+S for save
+  // Ctrl/Cmd + S save shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         handleSave();
       }
     };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [handleSave]);
 
   const isModified = () => {
@@ -75,12 +79,13 @@ export function FileEditorContent({
         onSave={handleSave}
         isDark={isDark}
       />
-
       <MonacoEditorWrapper
         language={language}
         content={currentFileContent}
         onChange={handleEditorChange}
         isDark={isDark}
+        fileId={projectId || selectedFile.path}
+        userId={user?.user_id || ""}
       />
     </div>
   );

@@ -353,3 +353,64 @@ async def remove_project_invitation(db: AsyncSession, invitation_id: UUID) -> Op
 async def count_project_invitations(db: AsyncSession, **filters) -> int:
     return await crud_project_invitation.count(db, **filters)
 
+
+# ----------------------------
+# CRUD for WebSocketConnection
+# ----------------------------
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from typing import Any, List, Optional
+
+# ✅ Fixed import — works when you have a single models.py file
+from models import WebSocketConnection
+
+from schema import WebSocketConnectionCreate, WebSocketConnectionUpdate
+
+
+class CRUDWebSocketConnection:
+    async def get(self, db: AsyncSession, id: Any) -> Optional[WebSocketConnection]:
+        result = await db.execute(select(WebSocketConnection).filter(WebSocketConnection.id == id))
+        return result.scalars().first()
+
+    async def get_multi(self, db: AsyncSession, skip: int = 0, limit: int = 100, **filters) -> List[WebSocketConnection]:
+        query = select(WebSocketConnection)
+        for key, value in filters.items():
+            query = query.filter(getattr(WebSocketConnection, key) == value)
+        result = await db.execute(query.offset(skip).limit(limit))
+        return result.scalars().all()
+
+    async def count(self, db: AsyncSession, **filters) -> int:
+        query = select(WebSocketConnection)
+        for key, value in filters.items():
+            query = query.filter(getattr(WebSocketConnection, key) == value)
+        result = await db.execute(query)
+        return len(result.scalars().all())
+
+    async def create(self, db: AsyncSession, obj_in: WebSocketConnectionCreate) -> WebSocketConnection:
+        db_obj = WebSocketConnection(**obj_in.dict())
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+
+    async def update(self, db: AsyncSession, db_obj: WebSocketConnection, obj_in: WebSocketConnectionUpdate) -> WebSocketConnection:
+        update_data = obj_in.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_obj, field, value)
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+
+    async def remove(self, db: AsyncSession, id: Any) -> Optional[WebSocketConnection]:
+        obj = await self.get(db, id)
+        if not obj:
+            return None
+        await db.delete(obj)
+        await db.commit()
+        return obj
+
+
+# ✅ Instantiate and export
+crud_websocket_connection = CRUDWebSocketConnection()

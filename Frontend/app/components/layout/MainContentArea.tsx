@@ -10,6 +10,7 @@ interface MainContentAreaProps {
   collaboratorsComponent: React.ReactNode;
   projectId?: string;
   user?: User;
+  userRole?: string; // Add userRole prop
 }
 
 export function MainContentArea({ 
@@ -18,11 +19,16 @@ export function MainContentArea({
   showCollaborators, 
   collaboratorsComponent,
   projectId,
-  user
+  user,
+  userRole = "editor" // Default to editor if not provided
 }: MainContentAreaProps) {
   return (
     <div className="col-span-1 row-span-1 flex flex-col min-h-0 overflow-hidden relative">
-      <FileSystemEditor />
+      <FileSystemEditor 
+        projectId={projectId} 
+        user={user} 
+        userRole={userRole} 
+      />
       
       {/* Realtime Cursors - Only show if we have both projectId and user */}
       {projectId && user && (

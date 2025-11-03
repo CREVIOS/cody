@@ -331,3 +331,62 @@ class WebSocketConnection(Base):
         CheckConstraint("connection_type IN ('editor', 'terminal', 'preview')", name="check_connection_type"),
         Index("idx_user", "user_id"),
     )
+# ---- File Lock Models (single source of truth) ----
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+from datetime import datetime
+from uuid import uuid4
+from sqlalchemy import DateTime, String, ForeignKey, func
+
+class FileLock(Base):
+    __tablename__ = "file_locks"
+
+    # FK to files.file_id so ORM can join to File
+    file_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("files.file_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # who holds the lock (nullable when unlocked)
+    holder_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=True,
+        index=True,
+    )
+    # lease expiry
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # bookkeeping
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # relationships (optional but convenient)
+    file = relationship("File", backref="lock", uselist=False)
+    holder = relationship("User", foreign_keys=[holder_user_id])
+
+
+class FileLockRequest(Base):
+    __tablename__ = "file_lock_requests"
+
+    request_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    file_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("files.file_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # requester (match service code expects `user_id`, not requester_user_id)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
+    # optional metadata used by service
+    role: Mapped[str | None] = mapped_column(String, nullable=True)   # "owner" | "editor" | "viewer"
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    file = relationship("File")
