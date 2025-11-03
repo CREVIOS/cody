@@ -14,6 +14,8 @@ from routers import (
     directories, file_types, files, file_versions, notifications, locks
 )
 from routers import websocket_connections  # 👈 our new route
+# Import routers
+from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
@@ -122,6 +124,7 @@ app.include_router(file_versions.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(locks.router, prefix="/api/v1")
 app.include_router(websocket_connections.router, prefix="/api/v1")   # 👈 crucial
+app.include_router(permissions.router, prefix="/api/v1")
 
 # ---------- Root ----------
 @app.get("/")

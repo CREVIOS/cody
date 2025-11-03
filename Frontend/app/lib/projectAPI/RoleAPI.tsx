@@ -7,7 +7,11 @@ import { Role, PaginatedResponse } from "./TypeDefinitions";
  */
 export const getRoles = async (): Promise<Role[]> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/roles`);
+      const response = await fetch(`${API_BASE_URL}/api/v1/roles`, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
@@ -17,6 +21,14 @@ export const getRoles = async (): Promise<Role[]> => {
       const data: PaginatedResponse<Role> = await response.json();
       return data.items || [];
     } catch (error) {
+      // Handle network errors with a more helpful message
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        const networkError = new Error(
+          `Unable to connect to backend server at ${API_BASE_URL}. Please ensure the backend is running on port 8000.`
+        );
+        console.error('Network error fetching roles:', networkError);
+        throw networkError;
+      }
       console.error('Error fetching roles:', error);
       throw error;
     }
@@ -43,8 +55,9 @@ export const getRoles = async (): Promise<Role[]> => {
   
   /**
    * Get role permissions by role ID
+   * Returns either a permissions map (preferred) or legacy array of keys.
    */
-  export const getRolePermissions = async (roleId: string): Promise<string[]> => {
+  export const getRolePermissions = async (roleId: string): Promise<Record<string, boolean> | string[]> => {
     try {
       const response = await fetch(
         `${API_BASE_URL}/api/v1/roles/${roleId}/permissions`
@@ -56,7 +69,8 @@ export const getRoles = async (): Promise<Role[]> => {
       }
       
       const roleData = await response.json();
-      // Extract permissions array from the role data
+      // Backend returns a role object with permissions: Record<string, boolean>
+      // Fallback to [] for legacy cases
       return roleData.permissions || [];
     } catch (error) {
       console.error('Error fetching role permissions:', error);

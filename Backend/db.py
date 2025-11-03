@@ -94,5 +94,5 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 def set_json_codec(dbapi_connection, connection_record):
     if hasattr(dbapi_connection, "set_type_codec"):
         dbapi_connection.set_type_codec(
-            "json", codec=json.loads, encoder=json.dumps, schema="pg_catalog"
+            "json", decoder=json.loads, encoder=json.dumps, schema="pg_catalog"
         )

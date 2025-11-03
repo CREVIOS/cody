@@ -1,7 +1,6 @@
 "use client";
 import { useTheme } from "@/context/ThemeContext";
 import { Theme } from '@/context/ThemeContext';
-import Terminal from "@/components/Terminal";
 import { useState } from "react";
 import {  Play, TerminalSquare, Users  } from 'lucide-react';
 
@@ -10,6 +9,7 @@ export interface TopbarProps {
   projectId?: string;
   theme: Theme;
   onCollaboratorsClick: () => void;
+  onTerminalClick: () => void;
 }
 
 export default function Topbar({
@@ -17,10 +17,11 @@ export default function Topbar({
   projectId,
   theme,
   onCollaboratorsClick,
+  onTerminalClick,
 }: TopbarProps) {
   const { toggleTheme } = useTheme();
   const isDark = theme === "dark";
-  const [showTerminal, setShowTerminal] = useState(false);
+  const [showTerminal] = useState(false);
 
   const iconColor = isDark ? "text-white" : "text-black";
 
@@ -68,7 +69,7 @@ export default function Topbar({
           
           {/* Terminal Button */}
           <button
-            onClick={() => setShowTerminal(!showTerminal)}
+            onClick={onTerminalClick}
             className={`p-2 rounded-md transition-colors ${ isDark ? "hover:bg-[#3F3F6A]" : "hover:bg-gray-200"} ${iconColor}`}
             title="Terminal"
           >
@@ -86,15 +87,7 @@ export default function Topbar({
         </div>
       </div>
 
-      {/* Terminal Panel */}
-      {showTerminal && (
-        <div className="fixed bottom-0 left-[240px] right-0 h-1/3 bg-black shadow-lg z-50">
-          <Terminal 
-            projectId={projectId || 'default-project'} 
-            onClose={() => setShowTerminal(false)} 
-          />
-        </div>
-      )}
+      {/* Terminal panel is managed by Layout/MainContentArea to avoid overlap and enable resizing */}
     </>
   );
 }

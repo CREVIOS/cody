@@ -399,3 +399,10 @@ class PaginatedResponse(BaseModel, Generic[T]):
     page: int
     size: int
     pages: int
+    
+class UserProjectPermissions(BaseSchema):
+    project_id: UUID
+    user_id: UUID
+    role_id: UUID
+    role_name: str
+    permissions: Dict[str, bool]

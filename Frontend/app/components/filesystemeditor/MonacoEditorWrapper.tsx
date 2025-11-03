@@ -1,4 +1,9 @@
 'use client';
+import { Editor } from "@monaco-editor/react";
+import { useEffect, useRef } from "react";
+import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
+import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
+import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
 
 import { Editor, type OnMount } from '@monaco-editor/react';
 import { useEffect, useRef } from 'react';
@@ -15,6 +20,20 @@ type Props = {
   roomName: string;  // websocket channel (can be shared across files)
   docKey?: string;   // per-file key; defaults to roomName
 };
+
+  // Collaboration options (optional)
+  collaboration?: {
+    enabled: boolean;
+    docId: string;
+    user: {
+      id: string;
+      name: string;
+      color?: string;
+    };
+    wsUrl?: string;
+    offlineSupport?: boolean;
+  };
+}
 
 export function MonacoEditorWrapper({
   language,
@@ -43,6 +62,76 @@ export function MonacoEditorWrapper({
     ed.updateOptions({
       readOnly: !isEditor,
       readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
+  collaboration
+}: MonacoEditorWrapperProps) {
+  const editorRef = useRef<any>(null);
+
+  // Setup collaboration if enabled
+  const [collabState, collabActions] = useCollaborativeEditor(
+    collaboration?.enabled
+      ? {
+          editor: editorRef.current,
+          docId: collaboration.docId,
+          user: collaboration.user,
+          wsUrl: collaboration.wsUrl,
+          offlineSupport: collaboration.offlineSupport,
+          logging: true,
+        }
+      : {
+          editor: null,
+          docId: '',
+          user: { id: '', name: '' },
+        }
+  );
+
+  // Inject remote cursor styles on mount
+  useEffect(() => {
+    if (collaboration?.enabled) {
+      injectRemoteCursorStyles();
+    }
+  }, [collaboration?.enabled]);
+
+  const handleEditorDidMount = (editor: any, monaco: any) => {
+    editorRef.current = editor;
+    
+    // Add custom keybindings for enhanced functionality
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
+      editor.trigger('keyboard', 'actions.find');
+    });
+    
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {
+      editor.trigger('keyboard', 'editor.action.startFindReplaceAction');
+    });
+    
+    // Multi-cursor shortcuts
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD, () => {
+      editor.trigger('keyboard', 'editor.action.addSelectionToNextFindMatch');
+    });
+    
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL, () => {
+      editor.trigger('keyboard', 'editor.action.selectHighlights');
+    });
+    
+    // Code folding shortcuts
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketLeft, () => {
+      editor.trigger('keyboard', 'editor.fold');
+    });
+    
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketRight, () => {
+      editor.trigger('keyboard', 'editor.unfold');
+    });
+    
+    // Fold all / Unfold all
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
+      editor.addCommand(monaco.KeyCode.Digit0, () => {
+        editor.trigger('keyboard', 'editor.foldAll');
+      });
+    });
+    
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
+      editor.addCommand(monaco.KeyCode.KeyJ, () => {
+        editor.trigger('keyboard', 'editor.unfoldAll');
+      });
     });
     const node = ed.getDomNode();
     if (node) node.style.outline = !isEditor ? '1px dashed #ef4444' : 'none';
@@ -63,6 +152,28 @@ export function MonacoEditorWrapper({
         </span>
         <span className="opacity-70">{lockEvent}</span>
       </div>
+    <div className="flex-1 relative">
+      {/* Collaboration UI */}
+      {collaboration?.enabled && (
+        <>
+          {/* User avatars in top-right corner */}
+          <div className="absolute top-2 right-4 z-10">
+            <CollaborativeUserAvatars
+              awareness={collabState.users.size > 0 ? { getStates: () => collabState.users } as any : null}
+              connectionStatus={collabState.status}
+              currentUserId={collaboration.user.id}
+            />
+          </div>
+
+          {/* Remote cursors */}
+          {editorRef.current && (
+            <RemoteCursors
+              editor={editorRef.current}
+              awareness={collabActions.getAwarenessStates ? { getStates: collabActions.getAwarenessStates, on: () => {}, off: () => {} } as any : null}
+            />
+          )}
+        </>
+      )}
 
       <Editor
         height="100%"
@@ -73,6 +184,9 @@ export function MonacoEditorWrapper({
           if (isEditor) onChange(v);
         }}
         onMount={handleMount}
+        value={collaboration?.enabled ? undefined : content}
+        onChange={collaboration?.enabled ? undefined : onChange}
+        onMount={handleEditorDidMount}
         options={{
           readOnly: !isEditor,
           fontSize: 14,

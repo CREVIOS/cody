@@ -40,6 +40,15 @@ async def read_roles(
         pages=(total + limit - 1) // limit
     )
 
+# Alias without trailing slash to avoid 307 redirects for clients
+@router.get("", response_model=schemas.PaginatedResponse[schemas.Role])
+async def read_roles_no_trailing_slash(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db)
+):
+    return await read_roles(skip=skip, limit=limit, db=db)
+
 @router.get("/{role_id}", response_model=schemas.Role)
 async def read_role(
     role_id: UUID,

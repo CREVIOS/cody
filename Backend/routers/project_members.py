@@ -6,13 +6,15 @@ from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
+from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/project-members", tags=["project-members"])
 
 @router.post("/", response_model=schemas.ProjectMember, status_code=status.HTTP_201_CREATED)
 async def create_project_member(
     member_in: schemas.ProjectMemberCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
     # Verify project exists
     project = await crud.crud_project.get(db, id=member_in.project_id)
@@ -38,6 +40,19 @@ async def create_project_member(
             detail="Role not found"
         )
     
+    # Check permission: actor must be allowed to manage members in this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=member_in.project_id,
+        user_id=actor_id,
+        permission="canManageMembers",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canManageMembers permission",
+        )
+
     # Check if user is already a member of the project
     existing_member = await crud.crud_project_member.get_by_project_and_user(
         db, project_id=member_in.project_id, user_id=member_in.user_id
@@ -92,7 +107,8 @@ async def read_project_member(
 async def update_project_member(
     member_id: UUID,
     member_update: schemas.ProjectMemberUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
     member = await crud.crud_project_member.get(db, id=member_id)
     if not member:
@@ -101,6 +117,19 @@ async def update_project_member(
             detail="Project member not found"
         )
     
+    # Permission: actor must be able to manage members of this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=member.project_id,
+        user_id=actor_id,
+        permission="canManageMembers",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canManageMembers permission",
+        )
+
     # If role is being updated, verify the new role exists
     if member_update.role_id:
         role = await crud.crud_role.get(db, id=member_update.role_id)
@@ -115,14 +144,31 @@ async def update_project_member(
 @router.delete("/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project_member(
     member_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
-    member = await crud.crud_project_member.remove(db, id=member_id)
+    # Fetch first to get project context for permission evaluation
+    member = await crud.crud_project_member.get(db, id=member_id)
     if not member:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project member not found"
         )
+    # Permission: actor must be able to manage members of this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=member.project_id,
+        user_id=actor_id,
+        permission="canManageMembers",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canManageMembers permission",
+        )
+
+    # Now perform deletion
+    await crud.crud_project_member.remove(db, id=member_id)
 
 # NOTE: Return plain JSON dicts to avoid response_model validation issues when adding a virtual owner entry.
 @router.get("/by-project/{project_id}")

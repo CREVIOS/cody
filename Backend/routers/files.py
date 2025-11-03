@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
+from services.permission_enforcer import evaluate_user_permission
 
 from pydantic import BaseModel  # <-- add this
 
@@ -61,14 +62,17 @@ async def create_file(
                 detail="Last modifier not found"
             )
     
-    # Check if user is a member of the project
-    member = await crud.crud_project_member.get_by_project_and_user(
-        db, project_id=file_in.project_id, user_id=file_in.created_by
+    # Permission: creator must be able to edit in this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=file_in.project_id,
+        user_id=file_in.created_by,
+        permission="canEdit",
     )
-    if not member:
+    if not permission_eval.granted:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not a member of this project"
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     
     return await crud.crud_file.create(db, obj_in=file_in)
@@ -118,13 +122,26 @@ async def read_file(
 async def update_file(
     file_id: UUID,
     file_update: schemas.FileUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
     file = await crud.crud_file.get(db, id=file_id)
     if not file:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
+        )
+    # Permission: actor must be able to edit in this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=file.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     
     # If project_id is being updated, verify the new project exists
@@ -168,9 +185,10 @@ async def update_file(
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(
     file_id: UUID,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
 ):
-    file = await crud.crud_file.remove(db, id=file_id)
+    file = await crud.crud_file.get(db, id=file_id)
     if not file:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -194,3 +212,16 @@ async def get_file_realtime_key(
     doc_key = f"doc:{file.project_id}:{file.id}"
 
     return RealtimeKey(room_name=room_name, doc_key=doc_key)
+    # Permission: actor must be able to edit in this project to delete
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=file.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
+        )
+    await crud.crud_file.remove(db, id=file_id)

@@ -33,6 +33,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
   const lastSavedContent = useRef<string>('');
+  const watcherWsRef = useRef<WebSocket | null>(null);
 
   // Update project name when prop changes
   useEffect(() => {
@@ -90,6 +91,101 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     setError(`Failed to ${action}: ${errorMessage}`);
   };
+
+  // Handle external file change notifications and refresh open files as needed
+  const handleExternalChanges = useCallback(async (paths: string[]) => {
+    if (!projectId || paths.length === 0) return;
+
+    const uniquePaths = Array.from(new Set(paths));
+
+    // For each changed path that is currently open, refetch content
+    await Promise.all(
+      uniquePaths
+        .filter((p) => openFiles.has(p))
+        .map(async (p) => {
+          try {
+            const resp = await fetch(`${baseUrl}/api/projects/${projectId}/files/read?path=${encodeURIComponent(p)}`);
+            const data = await resp.json();
+            if (data.success && typeof data.content === 'string') {
+              setOpenFiles((prev) => {
+                const updated = new Map(prev);
+                const existing = updated.get(p);
+                if (existing) {
+                  const updatedItem = { ...existing.item, size: new Blob([data.content]).size };
+                  updated.set(p, { item: updatedItem, content: data.content, isDirty: false });
+                }
+                return updated;
+              });
+
+              // If the refreshed file is currently selected, update the editor content as well
+              if (selectedFile && selectedFile.path === p) {
+                setCurrentFileContent(data.content);
+                lastSavedContent.current = data.content;
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to refresh changed file', p, e);
+          }
+        })
+    );
+  }, [projectId, baseUrl, openFiles, selectedFile]);
+
+  // Project-level watcher WebSocket: listen for file change broadcasts
+  useEffect(() => {
+    if (!projectId) return;
+
+    try {
+      const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+      const url = new URL(wsBase);
+      url.searchParams.set('type', 'watcher');
+      url.searchParams.set('projectId', projectId);
+
+      const ws = new WebSocket(url.toString());
+      watcherWsRef.current = ws;
+
+      ws.onopen = () => {
+        // Connected to watcher channel
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg && typeof msg.type === 'string') {
+            if (msg.type === 'files:changed' && msg.changes) {
+              const changed: string[] = [];
+              if (Array.isArray(msg.changes.modified)) changed.push(...msg.changes.modified.map((c: any) => c.path));
+              if (Array.isArray(msg.changes.added)) changed.push(...msg.changes.added.map((c: any) => c.path));
+              if (Array.isArray(msg.changes.deleted)) changed.push(...msg.changes.deleted.map((c: any) => c.path));
+              handleExternalChanges(changed);
+            } else if (msg.type === 'file:updated' && typeof msg.path === 'string') {
+              handleExternalChanges([msg.path]);
+            }
+          }
+        } catch {
+          // Ignore non-JSON messages
+        }
+      };
+
+      ws.onclose = () => {
+        if (watcherWsRef.current === ws) {
+          watcherWsRef.current = null;
+        }
+      };
+
+      ws.onerror = () => {
+        // Best-effort; errors will just disable live updates until reload
+      };
+
+      return () => {
+        try { ws.close(); } catch {}
+        if (watcherWsRef.current === ws) {
+          watcherWsRef.current = null;
+        }
+      };
+    } catch (e) {
+      console.warn('Watcher WebSocket setup failed:', e);
+    }
+  }, [projectId, handleExternalChanges]);
 
   const saveProjectState = useCallback(() => {
     if (projectId) {
@@ -381,6 +477,14 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         });
         
         lastSavedContent.current = content;
+
+        // Notify peers via watcher channel for instant updates
+        const ws = watcherWsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'file:changed', path, content }));
+          } catch {}
+        }
       } else {
         throw new Error(data.error || 'Failed to save file');
       }
