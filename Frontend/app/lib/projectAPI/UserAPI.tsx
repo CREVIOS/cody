@@ -242,7 +242,7 @@ export const listUsers = async (): Promise<User[]> => {
 
   export const createUser = async (userData: UserCreateData): Promise<User> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/users/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -250,6 +250,14 @@ export const listUsers = async (): Promise<User[]> => {
         body: JSON.stringify(userData),
       });
       if (!response.ok) {
+        // Debug details to help diagnose 405 issues
+        console.error('createUser failed:', {
+          requestedUrl: `${API_BASE_URL}/api/v1/users/`,
+          resolvedUrl: response.url,
+          status: response.status,
+          statusText: response.statusText,
+          method: 'POST'
+        });
         const errorMessage = await getErrorMessage(response);
         throw new Error(errorMessage);
       }

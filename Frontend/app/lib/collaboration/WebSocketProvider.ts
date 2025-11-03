@@ -3,6 +3,12 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import { encoding, decoding } from 'lib0';
 
+/** Local message type for awareness envelope (sync uses 0-2 in y-protocols/sync) */
+const messageAwareness = 3;
+
+/** Type for awareness 'change' event payload */
+type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
+
 /**
  * WebSocket Provider for Yjs
  *
@@ -78,7 +84,7 @@ export class WebSocketProvider extends EventTarget {
 
   // Awareness cleanup
   private awarenessUpdateHandler: (
-    changes: awarenessProtocol.AwarenessChange,
+    changes: AwarenessChange,
     origin: any
   ) => void;
   private windowBeforeUnloadHandler: () => void;
@@ -119,10 +125,7 @@ export class WebSocketProvider extends EventTarget {
         return;
       }
 
-      const changedClients = Object.values(changes).reduce(
-        (res, cur) => res.concat(cur),
-        [] as number[]
-      );
+      const changedClients = [...changes.added, ...changes.updated, ...changes.removed];
 
       const update = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients);
       this.sendMessage(this.createAwarenessMessage(update));
@@ -260,7 +263,7 @@ export class WebSocketProvider extends EventTarget {
             this.handleUpdate(decoder);
             break;
 
-          case awarenessProtocol.messageAwareness:
+          case messageAwareness:
             this.handleAwarenessUpdate(decoder);
             break;
 
@@ -283,13 +286,11 @@ export class WebSocketProvider extends EventTarget {
    * Handle sync step 1 from server
    */
   private handleSyncStep1(decoder: decoding.Decoder) {
-    const stateVector = syncProtocol.readSyncStep1(decoder, this.doc);
-
-    // Send sync step 2 with our updates
+    // Build response for SyncStep2
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
-    syncProtocol.writeSyncStep2(encoder, this.doc, stateVector);
-
+    // readSyncStep1 writes the reply content into the provided encoder
+    syncProtocol.readSyncStep1(decoder, encoder, this.doc);
     this.sendMessage(encoding.toUint8Array(encoder));
   }
 
@@ -353,7 +354,7 @@ export class WebSocketProvider extends EventTarget {
    */
   private createAwarenessMessage(update: Uint8Array): Uint8Array {
     const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, awarenessProtocol.messageAwareness);
+    encoding.writeVarUint(encoder, messageAwareness);
     encoding.writeVarUint8Array(encoder, update);
     return encoding.toUint8Array(encoder);
   }

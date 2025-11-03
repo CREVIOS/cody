@@ -2,6 +2,8 @@ const Y = require('yjs');
 const { encoding, decoding } = require('lib0');
 const syncProtocol = require('y-protocols/sync');
 const awarenessProtocol = require('y-protocols/awareness');
+// Local message type for awareness envelope (sync uses 0-2 in y-protocols/sync)
+const messageAwareness = 3;
 const fs = require('fs').promises;
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -174,7 +176,7 @@ class CollaborationRoom extends EventEmitter {
           this.handleUpdate(clientId, decoder);
           break;
 
-        case awarenessProtocol.messageAwareness:
+        case messageAwareness:
           this.handleAwareness(clientId, decoder);
           break;
 
@@ -193,12 +195,10 @@ class CollaborationRoom extends EventEmitter {
     const conn = this.connections.get(clientId);
     if (!conn) return;
 
-    const stateVector = syncProtocol.readSyncStep1(decoder, this.doc);
-
-    // Send sync step 2 with missing updates
+    // Send sync step 2 as response to client's step 1
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
-    syncProtocol.writeSyncStep2(encoder, this.doc, stateVector);
+    syncProtocol.readSyncStep1(decoder, encoder, this.doc);
 
     this.sendMessage(conn.ws, encoding.toUint8Array(encoder));
   }
@@ -254,7 +254,7 @@ class CollaborationRoom extends EventEmitter {
     const states = this.awareness.getStates();
     if (states.size > 0) {
       const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, awarenessProtocol.messageAwareness);
+      encoding.writeVarUint(encoder, messageAwareness);
       encoding.writeVarUint8Array(
         encoder,
         awarenessProtocol.encodeAwarenessUpdate(this.awareness, Array.from(states.keys()))
@@ -269,7 +269,7 @@ class CollaborationRoom extends EventEmitter {
    */
   broadcastAwareness(changedClients) {
     const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, awarenessProtocol.messageAwareness);
+    encoding.writeVarUint(encoder, messageAwareness);
     encoding.writeVarUint8Array(
       encoder,
       awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
