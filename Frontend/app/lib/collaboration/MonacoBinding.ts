@@ -40,7 +40,7 @@ export class MonacoBinding {
   private _cursorListener: Monaco.IDisposable | null = null;
   private _selectionListener: Monaco.IDisposable | null = null;
 
-  private _mux = false; // Prevent feedback loops
+  private _muxCounter = 0; // Counter-based feedback loop prevention (more robust than boolean)
   private _savedViewState: Monaco.editor.ICodeEditorViewState | null = null;
 
   constructor(options: MonacoBindingOptions) {
@@ -75,9 +75,12 @@ export class MonacoBinding {
     const monacoContent = this.model.getValue();
 
     if (yContent && yContent !== monacoContent) {
-      this._mux = true;
-      this.model.setValue(yContent);
-      this._mux = false;
+      this._muxCounter++;
+      try {
+        this.model.setValue(yContent);
+      } finally {
+        this._muxCounter--;
+      }
     }
   }
 
@@ -86,7 +89,8 @@ export class MonacoBinding {
    */
   private _setupMonacoToYjs() {
     this._modelContentChangedListener = this.model.onDidChangeContent((event) => {
-      if (this._mux) return; // Skip if change came from Yjs
+      // Skip if change came from Yjs (counter > 0 means we're applying remote changes)
+      if (this._muxCounter > 0) return;
 
       this.yText.doc?.transact(() => {
         event.changes
@@ -116,19 +120,24 @@ export class MonacoBinding {
       // Skip if change originated from this binding
       if (transaction.origin === this) return;
 
-      this._mux = true;
+      // Increment counter to prevent feedback loop
+      this._muxCounter++;
 
       // Save cursor/selection position
       const selections = this.editor.getSelections();
       const viewState = this.editor.saveViewState();
 
       try {
+        // Track cumulative offset as we process deltas
+        let currentOffset = 0;
+
         event.delta.forEach((delta: any) => {
           if (delta.retain !== undefined) {
-            // Skip
+            // Skip forward in the document
+            currentOffset += delta.retain;
           } else if (delta.insert !== undefined) {
             const insertText = delta.insert as string;
-            const position = this.model.getPositionAt(event.delta.indexOf(delta));
+            const position = this.model.getPositionAt(currentOffset);
 
             this.model.applyEdits([
               {
@@ -141,12 +150,13 @@ export class MonacoBinding {
                 text: insertText,
               },
             ]);
+
+            // Update offset to account for the insertion
+            currentOffset += insertText.length;
           } else if (delta.delete !== undefined) {
             const deleteLength = delta.delete as number;
-            const start = this.model.getPositionAt(event.delta.indexOf(delta));
-            const end = this.model.getPositionAt(
-              event.delta.indexOf(delta) + deleteLength
-            );
+            const start = this.model.getPositionAt(currentOffset);
+            const end = this.model.getPositionAt(currentOffset + deleteLength);
 
             this.model.applyEdits([
               {
@@ -159,6 +169,8 @@ export class MonacoBinding {
                 text: '',
               },
             ]);
+
+            // Don't update offset for deletes - the content is removed
           }
         });
 
@@ -170,7 +182,8 @@ export class MonacoBinding {
           this.editor.setSelections(selections);
         }
       } finally {
-        this._mux = false;
+        // Decrement counter to allow local edits again
+        this._muxCounter--;
       }
     };
 
@@ -183,7 +196,8 @@ export class MonacoBinding {
   private _setupAwareness() {
     // Track local cursor/selection
     this._cursorListener = this.editor.onDidChangeCursorPosition((event) => {
-      if (this._mux) return;
+      // Skip if we're applying remote changes
+      if (this._muxCounter > 0) return;
 
       const position = event.position;
       const offset = this.model.getOffsetAt(position);
@@ -197,7 +211,8 @@ export class MonacoBinding {
     });
 
     this._selectionListener = this.editor.onDidChangeCursorSelection((event) => {
-      if (this._mux) return;
+      // Skip if we're applying remote changes
+      if (this._muxCounter > 0) return;
 
       const selection = event.selection;
       const startOffset = this.model.getOffsetAt({

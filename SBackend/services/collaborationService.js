@@ -8,6 +8,18 @@ const fs = require('fs').promises;
 const path = require('path');
 const { EventEmitter } = require('events');
 const { createLogger } = require('./logger');
+const axios = require('axios');
+
+// Backend API configuration
+const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://localhost:8000/api/v1';
+const LOCK_CHECK_ENABLED = process.env.LOCK_CHECK_ENABLED !== 'false'; // Default: enabled
+
+// Rate limiting configuration
+const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
+const RATE_LIMIT_MAX_MESSAGES = 50; // Max 50 messages per second per client
+
+// Update batching configuration
+const UPDATE_BATCH_INTERVAL_MS = 50; // Batch updates every 50ms
 
 /**
  * CRDT Collaboration Service
@@ -27,7 +39,7 @@ class CollaborationRoom extends EventEmitter {
     this.persistencePath = persistencePath;
     this.doc = new Y.Doc();
     this.awareness = new awarenessProtocol.Awareness(this.doc);
-    this.connections = new Map(); // clientId -> { ws, user }
+    this.connections = new Map(); // clientId -> { ws, user, rateLimitTracker }
     this.updateLog = []; // Array of Uint8Array updates
     this.lastSnapshot = Date.now();
 
@@ -36,11 +48,17 @@ class CollaborationRoom extends EventEmitter {
       snapshotInterval: options.snapshotInterval || 5 * 60 * 1000, // 5 minutes
       maxUpdatesBeforeSnapshot: options.maxUpdatesBeforeSnapshot || 100,
       gcEnabled: options.gcEnabled !== false,
+      rateLimitEnabled: options.rateLimitEnabled !== false,
+      batchUpdatesEnabled: options.batchUpdatesEnabled !== false,
       ...options
     };
 
     // Logger
     this.logger = createLogger({ service: 'CollaborationRoom', docId });
+
+    // Update batching
+    this.pendingUpdates = []; // Array of { update, excludeClientIds }
+    this.batchTimer = null;
 
     // Setup listeners
     this.setupDocumentListeners();
@@ -56,7 +74,9 @@ class CollaborationRoom extends EventEmitter {
       totalConnections: 0,
       bytesIn: 0,
       bytesOut: 0,
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      rateLimitViolations: 0,
+      batchedUpdates: 0
     };
 
     this.logger.event('room_created', { config: this.config });
@@ -93,7 +113,17 @@ class CollaborationRoom extends EventEmitter {
    * Add a client connection to this room
    */
   addConnection(clientId, ws, userInfo) {
-    this.connections.set(clientId, { ws, user: userInfo });
+    // Initialize rate limit tracker for this client
+    const rateLimitTracker = {
+      messageCount: 0,
+      windowStart: Date.now()
+    };
+
+    this.connections.set(clientId, {
+      ws,
+      user: userInfo,
+      rateLimitTracker
+    });
     this.metrics.totalConnections++;
 
     this.logger.event('client_joined', {
@@ -153,10 +183,62 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Handle incoming WebSocket message
+   * Check rate limit for a client
    */
-  handleMessage(clientId, data) {
+  checkRateLimit(clientId) {
+    if (!this.config.rateLimitEnabled) {
+      return true; // Rate limiting disabled
+    }
+
+    const conn = this.connections.get(clientId);
+    if (!conn) return false;
+
+    const tracker = conn.rateLimitTracker;
+    const now = Date.now();
+
+    // Reset window if expired
+    if (now - tracker.windowStart > RATE_LIMIT_WINDOW_MS) {
+      tracker.messageCount = 0;
+      tracker.windowStart = now;
+    }
+
+    // Increment and check
+    tracker.messageCount++;
+
+    if (tracker.messageCount > RATE_LIMIT_MAX_MESSAGES) {
+      this.metrics.rateLimitViolations++;
+      this.logger.warn('Rate limit exceeded', {
+        clientId,
+        messageCount: tracker.messageCount,
+        window: RATE_LIMIT_WINDOW_MS
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Handle incoming WebSocket message with rate limiting
+   */
+  async handleMessage(clientId, data) {
     try {
+      // Check rate limit
+      if (!this.checkRateLimit(clientId)) {
+        // Send rate limit error to client
+        const conn = this.connections.get(clientId);
+        if (conn && conn.ws.readyState === conn.ws.OPEN) {
+          const errorMessage = JSON.stringify({
+            type: 'error',
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: `Too many messages. Max ${RATE_LIMIT_MAX_MESSAGES} per ${RATE_LIMIT_WINDOW_MS}ms.`,
+            timestamp: Date.now()
+          });
+          conn.ws.send(errorMessage);
+        }
+        return; // Drop the message
+      }
+
       const message = new Uint8Array(data);
       this.metrics.bytesIn += message.byteLength;
 
@@ -173,7 +255,7 @@ class CollaborationRoom extends EventEmitter {
           break;
 
         case syncProtocol.messageYjsUpdate:
-          this.handleUpdate(clientId, decoder);
+          await this.handleUpdate(clientId, decoder);  // Now async
           break;
 
         case messageAwareness:
@@ -211,18 +293,149 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Handle document update
+   * Check if a user has permission to edit (via file lock)
    */
-  handleUpdate(clientId, decoder) {
+  async checkEditPermission(userId, fileId) {
+    if (!LOCK_CHECK_ENABLED) {
+      return true; // Lock checking disabled
+    }
+
+    try {
+      // Query the Backend lock service to verify user has the lock
+      const response = await axios.get(`${BACKEND_API_URL}/locks/${fileId}/state`, {
+        timeout: 2000, // 2 second timeout
+        validateStatus: (status) => status < 500 // Don't throw on 4xx errors
+      });
+
+      if (response.status === 200 && response.data) {
+        const lockState = response.data;
+
+        // Check if locked and if this user is the holder
+        if (lockState.state === 'LOCKED') {
+          const isHolder = lockState.holder_user_id === userId;
+          if (!isHolder) {
+            this.logger.warn('Edit rejected: user does not hold lock', {
+              userId,
+              fileId,
+              actualHolder: lockState.holder_user_id
+            });
+          }
+          return isHolder;
+        }
+
+        // If unlocked, allow (for graceful degradation)
+        return true;
+      }
+
+      // If lock service is unavailable, allow edit (fail-open for availability)
+      this.logger.warn('Lock check failed, allowing edit (fail-open)', { userId, fileId, status: response.status });
+      return true;
+    } catch (error) {
+      // Network error or timeout - fail open to maintain availability
+      this.logger.error('Lock verification error, allowing edit (fail-open)', error);
+      return true;
+    }
+  }
+
+  /**
+   * Handle document update with lock verification
+   */
+  async handleUpdate(clientId, decoder) {
+    const conn = this.connections.get(clientId);
+    if (!conn) {
+      this.logger.warn('Update from unknown client', { clientId });
+      return;
+    }
+
+    // Extract file ID from docId (assuming format: projectId/fileId or just fileId)
+    const fileId = this.docId.includes('/') ? this.docId.split('/').pop() : this.docId;
+    const userId = conn.user.id;
+
+    // Verify user has permission to edit
+    const hasPermission = await this.checkEditPermission(userId, fileId);
+
+    if (!hasPermission) {
+      this.logger.warn('Update rejected: no edit permission', { clientId, userId, fileId });
+
+      // Send error message back to client
+      const errorMessage = JSON.stringify({
+        type: 'error',
+        code: 'EDIT_PERMISSION_DENIED',
+        message: 'You do not have permission to edit this file. Another user holds the lock.',
+        timestamp: Date.now()
+      });
+
+      if (conn.ws.readyState === conn.ws.OPEN) {
+        conn.ws.send(errorMessage);
+      }
+
+      return; // Reject the update
+    }
+
+    // Permission granted - apply update
     const update = syncProtocol.readUpdate(decoder, this.doc, 'client');
 
-    // Broadcast to other clients
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-    encoding.writeVarUint8Array(encoder, update);
-    const message = encoding.toUint8Array(encoder);
+    // Broadcast with batching if enabled
+    if (this.config.batchUpdatesEnabled) {
+      this.queueUpdateForBroadcast(update, [clientId]);
+    } else {
+      // Immediate broadcast
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+      encoding.writeVarUint8Array(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+      this.broadcast(message, [clientId]);
+    }
+  }
 
-    this.broadcast(message, [clientId]);
+  /**
+   * Queue update for batched broadcast
+   */
+  queueUpdateForBroadcast(update, excludeClientIds) {
+    this.pendingUpdates.push({ update, excludeClientIds });
+    this.metrics.batchedUpdates++;
+
+    // Start batch timer if not already running
+    if (!this.batchTimer) {
+      this.batchTimer = setTimeout(() => {
+        this.flushUpdateBatch();
+      }, UPDATE_BATCH_INTERVAL_MS);
+    }
+  }
+
+  /**
+   * Flush batched updates
+   */
+  flushUpdateBatch() {
+    if (this.pendingUpdates.length === 0) {
+      this.batchTimer = null;
+      return;
+    }
+
+    // Merge all updates if possible (Yjs updates can be merged)
+    const updates = this.pendingUpdates.map(p => p.update);
+    const allExcludedClients = new Set(
+      this.pendingUpdates.flatMap(p => p.excludeClientIds)
+    );
+
+    // For simplicity, send each update separately
+    // (A more advanced implementation would merge compatible updates)
+    for (const { update, excludeClientIds } of this.pendingUpdates) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+      encoding.writeVarUint8Array(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+      this.broadcast(message, excludeClientIds);
+    }
+
+    this.logger.debug('Flushed update batch', {
+      count: this.pendingUpdates.length,
+      excludedClients: Array.from(allExcludedClients)
+    });
+
+    // Clear pending updates
+    this.pendingUpdates = [];
+    this.batchTimer = null;
   }
 
   /**
@@ -498,6 +711,12 @@ class CollaborationRoom extends EventEmitter {
    * Cleanup and close room
    */
   async close() {
+    // Flush any pending updates
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.flushUpdateBatch();
+    }
+
     // Disconnect all clients
     for (const [clientId, { ws }] of this.connections) {
       ws.close();

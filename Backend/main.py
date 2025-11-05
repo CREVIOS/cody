@@ -5,12 +5,15 @@ from contextlib import asynccontextmanager
 import time
 import logging
 import traceback
-from db import engine, Base
+from db import engine, Base, get_db
 from sqlalchemy import text
 
 # Import routers
 from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions, locks
 from routers import websocket_connections
+
+# Import lock cleanup service
+from lock_service import start_lock_cleanup_task, stop_lock_cleanup_task
 
 
 # Configure logging
@@ -69,9 +72,27 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {str(e)}")
         logger.error(traceback.format_exc())
         raise
+
+    # Start background lock cleanup task
+    try:
+        await start_lock_cleanup_task(get_db)
+        logger.info("✅ Lock cleanup task started")
+    except Exception as e:
+        logger.error(f"Error starting lock cleanup task: {str(e)}")
+        logger.error(traceback.format_exc())
+
     yield
+
     # Shutdown
     logger.info("Shutting down...")
+
+    # Stop background lock cleanup task
+    try:
+        await stop_lock_cleanup_task()
+        logger.info("✅ Lock cleanup task stopped")
+    except Exception as e:
+        logger.error(f"Error stopping lock cleanup task: {str(e)}")
+
     await engine.dispose()
 
 # Create FastAPI app

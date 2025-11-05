@@ -16,6 +16,7 @@
   "dependencies": {
     "@xterm/addon-attach": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
+    "axios": "^1.6.0",
     "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dockernode": "^0.1.0",
