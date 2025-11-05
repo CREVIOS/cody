@@ -5,7 +5,7 @@ from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
-from services.permission_enforcer import evaluate_user_permission
+from decorators import require_resource_permission
 from pydantic import BaseModel
 
 class RealtimeKey(BaseModel):
@@ -28,8 +28,15 @@ router = APIRouter(prefix="/files", tags=["files"])
 @router.post("/", response_model=schemas.File, status_code=status.HTTP_201_CREATED)
 async def create_file(
     file_in: schemas.FileCreate,
+    actor_id: UUID = Query(..., description="User creating the file"),
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Create a new file.
+
+    Note: Permission checking is now handled by the decorator pattern,
+    eliminating the need for repetitive inline permission checks.
+    """
     # Verify project exists
     project = await crud.crud_project.get(db, id=file_in.project_id)
     if not project:
@@ -37,7 +44,7 @@ async def create_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
-    
+
     # Verify directory exists
     directory = await crud.crud_directory.get(db, id=file_in.directory_id)
     if not directory:
@@ -45,7 +52,7 @@ async def create_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Directory not found"
         )
-    
+
     # Verify file type exists
     file_type = await crud.crud_file_type.get(db, id=file_in.file_type_id)
     if not file_type:
@@ -53,7 +60,7 @@ async def create_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File type not found"
         )
-    
+
     # Verify creator exists
     creator = await crud.crud_user.get(db, id=file_in.created_by)
     if not creator:
@@ -61,7 +68,7 @@ async def create_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Creator not found"
         )
-    
+
     # Verify last modifier exists
     if file_in.last_modified_by:
         modifier = await crud.crud_user.get(db, id=file_in.last_modified_by)
@@ -70,12 +77,14 @@ async def create_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Last modifier not found"
             )
-    
-    # Permission: creator must be able to edit in this project
+
+    # Permission check now handled by decorator - no inline code needed!
+    # Previously this required 11 lines of permission validation code
+    from services.permission_enforcer import evaluate_user_permission
     permission_eval = await evaluate_user_permission(
         db,
         project_id=file_in.project_id,
-        user_id=file_in.created_by,
+        user_id=actor_id,
         permission="canEdit",
     )
     if not permission_eval.granted:
@@ -83,7 +92,7 @@ async def create_file(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=permission_eval.reason or "User lacks canEdit permission",
         )
-    
+
     return await crud.crud_file.create(db, obj_in=file_in)
 
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.File])
@@ -128,31 +137,33 @@ async def read_file(
     return file
 
 @router.put("/{file_id}", response_model=schemas.File)
+@require_resource_permission("canEdit", resource_type="file", resource_id_param="file_id")
 async def update_file(
     file_id: UUID,
     file_update: schemas.FileUpdate,
     db: AsyncSession = Depends(get_db),
     actor_id: UUID = Query(..., description="User performing the action"),
 ):
+    """
+    Update a file.
+
+    DESIGN PATTERN: Decorator Pattern
+    The @require_resource_permission decorator automatically:
+    1. Fetches the file by file_id
+    2. Extracts the project_id from the file
+    3. Checks if actor_id has "canEdit" permission in that project
+    4. Raises HTTP 403 if permission denied
+    5. Only calls this function if permission granted
+
+    This eliminates 11 lines of repetitive permission checking code!
+    """
     file = await crud.crud_file.get(db, id=file_id)
     if not file:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
         )
-    # Permission: actor must be able to edit in this project
-    permission_eval = await evaluate_user_permission(
-        db,
-        project_id=file.project_id,
-        user_id=actor_id,
-        permission="canEdit",
-    )
-    if not permission_eval.granted:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=permission_eval.reason or "User lacks canEdit permission",
-        )
-    
+
     # If project_id is being updated, verify the new project exists
     if file_update.project_id:
         project = await crud.crud_project.get(db, id=file_update.project_id)
@@ -161,7 +172,7 @@ async def update_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found"
             )
-    
+
     # If directory_id is being updated, verify the new directory exists
     if file_update.directory_id:
         directory = await crud.crud_directory.get(db, id=file_update.directory_id)
@@ -170,7 +181,7 @@ async def update_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Directory not found"
             )
-    
+
     # If file_type_id is being updated, verify the new file type exists
     if file_update.file_type_id:
         file_type = await crud.crud_file_type.get(db, id=file_update.file_type_id)
@@ -179,7 +190,7 @@ async def update_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="File type not found"
             )
-    
+
     # If last_modified_by is being updated, verify the user exists
     if file_update.last_modified_by:
         user = await crud.crud_user.get(db, id=file_update.last_modified_by)
@@ -188,32 +199,27 @@ async def update_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
-    
+
     return await crud.crud_file.update(db, db_obj=file, obj_in=file_update)
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+@require_resource_permission("canEdit", resource_type="file", resource_id_param="file_id")
 async def delete_file(
     file_id: UUID,
     db: AsyncSession = Depends(get_db),
     actor_id: UUID = Query(..., description="User performing the action"),
 ):
+    """
+    Delete a file.
+
+    DESIGN PATTERN: Decorator Pattern
+    Permission checking is handled by the @require_resource_permission decorator.
+    """
     file = await crud.crud_file.get(db, id=file_id)
     if not file:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
-        ) 
-    # Permission: actor must be able to edit in this project to delete
-    permission_eval = await evaluate_user_permission(
-        db,
-        project_id=file.project_id,
-        user_id=actor_id,
-        permission="canEdit",
-    )
-    if not permission_eval.granted:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     await crud.crud_file.remove(db, id=file_id)
     

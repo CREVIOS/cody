@@ -8,9 +8,14 @@ import traceback
 from db import engine, Base
 from sqlalchemy import text
 
-# Import routers
-from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions, locks
-from routers import websocket_connections
+# DESIGN PATTERN: Factory Pattern
+# The RouterFactory automates router discovery and registration
+from factories import create_router_factory
+
+# OLD APPROACH (Before Factory Pattern):
+# Had to manually import and register each router - 13 import lines + 13 registration lines!
+# from routers import users, projects, roles, project_members, project_invitations, directories, file_types, files, file_versions, notifications, permissions, locks
+# from routers import websocket_connections
 
 
 # Configure logging
@@ -123,20 +128,28 @@ async def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
 
-# Include routers
-app.include_router(users.router, prefix="/api/v1")
-app.include_router(projects.router, prefix="/api/v1")
-app.include_router(roles.router, prefix="/api/v1")
-app.include_router(project_members.router, prefix="/api/v1")
-app.include_router(project_invitations.router, prefix="/api/v1")
-app.include_router(directories.router, prefix="/api/v1")
-app.include_router(file_types.router, prefix="/api/v1")
-app.include_router(files.router, prefix="/api/v1")
-app.include_router(file_versions.router, prefix="/api/v1")
-app.include_router(notifications.router, prefix="/api/v1")
-app.include_router(permissions.router, prefix="/api/v1")
-app.include_router(locks.router, prefix="/api/v1")
-app.include_router(websocket_connections.router, prefix="/api/v1")   # 👈 crucial
+# DESIGN PATTERN: Factory Pattern Implementation
+# The factory automatically discovers and registers all routers
+router_factory = create_router_factory(routers_package="routers", api_prefix="/api/v1")
+router_factory.register_all_routers(app)
+
+# OLD APPROACH (Before Factory Pattern):
+# Had to manually register each router - repetitive and error-prone!
+# app.include_router(users.router, prefix="/api/v1")
+# app.include_router(projects.router, prefix="/api/v1")
+# app.include_router(roles.router, prefix="/api/v1")
+# app.include_router(project_members.router, prefix="/api/v1")
+# app.include_router(project_invitations.router, prefix="/api/v1")
+# app.include_router(directories.router, prefix="/api/v1")
+# app.include_router(file_types.router, prefix="/api/v1")
+# app.include_router(files.router, prefix="/api/v1")
+# app.include_router(file_versions.router, prefix="/api/v1")
+# app.include_router(notifications.router, prefix="/api/v1")
+# app.include_router(permissions.router, prefix="/api/v1")
+# app.include_router(locks.router, prefix="/api/v1")
+# app.include_router(websocket_connections.router, prefix="/api/v1")
+
+logger.info(f"Registered {len(router_factory.get_registered_routers())} routers using Factory Pattern")
 
 
 # Root endpoint
