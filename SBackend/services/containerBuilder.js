@@ -1,16 +1,91 @@
-// containerBuilder.js - Builder Pattern for Docker Container Configuration
-class ContainerBuilder {
+// containerBuilder.js - Authentic Builder Pattern for Docker Container Configuration
+// Following the authentic Builder pattern with Product, Abstract Builder, Concrete Builders, and Director
+
+/**
+ * Product: The complex object being constructed
+ */
+class ContainerConfig {
   constructor() {
-    this.config = {
-      HostConfig: {},
-      ExposedPorts: {},
-      Labels: {},
-      Env: []
+    this.Image = null;
+    this.name = null;
+    this.Hostname = null;
+    this.AttachStdin = true;
+    this.AttachStdout = true;
+    this.AttachStderr = true;
+    this.Tty = true;
+    this.OpenStdin = true;
+    this.StdinOnce = false;
+    this.Env = [];
+    this.WorkingDir = null;
+    this.User = null;
+    this.HostConfig = {
+      ReadonlyRootfs: false,
+      CapDrop: [],
+      CapAdd: [],
+      SecurityOpt: [],
+      NoNewPrivileges: true,
+      Memory: null,
+      MemorySwap: null,
+      CpuShares: null,
+      PidsLimit: null,
+      NetworkMode: 'bridge',
+      DnsSearch: [],
+      Dns: [],
+      Binds: [],
+      PortBindings: {},
+      Tmpfs: {},
+      Ulimits: [],
+      AutoRemove: false
     };
+    this.ExposedPorts = {};
+    this.Labels = {};
   }
 
   /**
-   * Set the Docker image for the container
+   * Validate the configuration
+   */
+  validate() {
+    if (!this.Image) {
+      throw new Error('Container image is required');
+    }
+    if (!this.name) {
+      throw new Error('Container name is required');
+    }
+    return true;
+  }
+
+  /**
+   * Get the final configuration object
+   */
+  getConfig() {
+    this.validate();
+    // Create a deep copy to prevent external modifications
+    return JSON.parse(JSON.stringify(this));
+  }
+}
+
+/**
+ * Abstract Builder Interface
+ * Defines the construction steps for building a container configuration
+ */
+class ContainerBuilderBase {
+  constructor() {
+    if (this.constructor === ContainerBuilderBase) {
+      throw new Error('ContainerBuilderBase is abstract and cannot be instantiated');
+    }
+    this.config = new ContainerConfig();
+  }
+
+  /**
+   * Reset the builder to start fresh
+   */
+  reset() {
+    this.config = new ContainerConfig();
+    return this;
+  }
+
+  /**
+   * Set the Docker image
    */
   setImage(image) {
     this.config.Image = image;
@@ -223,12 +298,62 @@ class ContainerBuilder {
   }
 
   /**
-   * Create a default sandbox configuration
-   * This method encapsulates the current container configuration logic
+   * Build and return the final configuration
+   * This is the abstract method that concrete builders must implement
    */
-  createSandboxConfiguration(projectId, containerName, workspacePath, config) {
-    return this
-      .setImage(config.IMAGE_NAME)
+  build() {
+    return this.config.getConfig();
+  }
+}
+
+/**
+ * Concrete Builder: Sandbox Container Builder
+ * For development sandbox environments with moderate security
+ */
+class SandboxContainerBuilder extends ContainerBuilderBase {
+  constructor() {
+    super();
+  }
+
+  /**
+   * Build a sandbox container configuration
+   */
+  build() {
+    // Add container type label
+    this.config.Labels['container.type'] = 'sandbox';
+    return super.build();
+  }
+}
+
+
+/**
+ * Director: Orchestrates the construction process
+ * Knows the sequence of steps to build different container types
+ */
+class ContainerDirector {
+  constructor(builder) {
+    this.builder = builder;
+  }
+
+  /**
+   * Set the builder to use
+   */
+  setBuilder(builder) {
+    if (!(builder instanceof ContainerBuilderBase)) {
+      throw new Error('Builder must be an instance of ContainerBuilderBase');
+    }
+    this.builder = builder;
+    return this;
+  }
+
+  /**
+   * Build a sandbox container
+   */
+  buildSandboxContainer(projectId, containerName, workspacePath, imageName, config) {
+    this.builder.reset();
+    
+    this.builder
+      .setImage(imageName)
       .setName(containerName)
       .setHostname('sandbox')
       .setTtySettings(true, true, true, true, true, false)
@@ -270,27 +395,67 @@ class ContainerBuilder {
         'service': 'sandbox',
         'created.by': 'container-service'
       });
+
+    return this.builder.build();
+  }
+}
+
+/**
+ * Backward compatibility: Convenience wrapper that uses SandboxContainerBuilder
+ * This maintains compatibility with existing code
+ */
+class ContainerBuilder extends SandboxContainerBuilder {
+  constructor() {
+    super();
   }
 
   /**
-   * Build and return the final configuration
+   * Create a default sandbox configuration (for backward compatibility)
    */
-  build() {
-    // Create a deep copy to prevent external modifications
-    return JSON.parse(JSON.stringify(this.config));
-  }
-
-  /**
-   * Reset the builder to start fresh
-   */
-  reset() {
-    this.config = {
-      HostConfig: {},
-      ExposedPorts: {},
-      Labels: {},
-      Env: []
-    };
-    return this;
+  createSandboxConfiguration(projectId, containerName, workspacePath, config) {
+    return this
+      .setImage(config.IMAGE_NAME)
+      .setName(containerName)
+      .setHostname('sandbox')
+      .setTtySettings(true, true, true, true, true, false)
+      .setEnvironmentVariables([
+        'TERM=xterm-256color',
+        'NODE_ENV=development',
+        `PROJECT_ID=${projectId}`,
+        'SHELL=/bin/bash',
+        'HOME=/home/developer',
+        'USER=developer',
+        'LANG=C.UTF-8',
+        'LC_ALL=C.UTF-8'
+      ])
+      .setWorkingDirectory('/workspace')
+      .setUser('root')
+      .setSecuritySettings(
+        false,
+        ['ALL'],
+        ['CHOWN', 'SETUID', 'SETGID', 'DAC_OVERRIDE'],
+        ['no-new-privileges'],
+        true
+      )
+      .setMemoryLimits(config.containerMemory, config.containerMemory)
+      .setCpuLimits(Math.floor(config.containerCpu * 1024))
+      .setPidsLimit(512)
+      .setNetworkSettings('bridge', [], ['8.8.8.8', '8.8.4.4'])
+      .addVolumeBind(workspacePath, '/workspace', 'rw')
+      .addPortBindings([22, 3000, 3001, 4000, 5000, 8000, 8080, 8888, 9000])
+      .addTmpfsMount('/tmp', 'rw,size=100m')
+      .addTmpfsMount('/var/tmp', 'rw,size=100m')
+      .setUlimits([
+        { Name: 'nofile', Soft: 1024, Hard: 2048 },
+        { Name: 'nproc', Soft: 256, Hard: 512 },
+        { Name: 'fsize', Soft: 100000000, Hard: 100000000 }
+      ])
+      .setAutoRemove(false)
+      .setLabels({
+        'project.id': projectId,
+        'service': 'sandbox',
+        'created.by': 'container-service'
+      });
   }
 
   /**
@@ -303,4 +468,19 @@ class ContainerBuilder {
   }
 }
 
-module.exports = ContainerBuilder;
+module.exports = {
+  // Product
+  ContainerConfig,
+  
+  // Abstract Builder
+  ContainerBuilderBase,
+  
+  // Concrete Builder (only one used in codebase)
+  SandboxContainerBuilder,
+  
+  // Director
+  ContainerDirector,
+  
+  // Backward compatibility
+  ContainerBuilder
+};

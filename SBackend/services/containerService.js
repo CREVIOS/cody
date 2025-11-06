@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs-extra');
 const EventEmitter = require('events');
-const ContainerBuilder = require('./containerBuilder');
+const { SandboxContainerBuilder, ContainerDirector } = require('./containerBuilder');
 const { ContainerWrapper, StoppedState, RunningState, RemovedState, ErrorState } = require('./containerStates');
 
 class ContainerService extends EventEmitter {
@@ -269,14 +269,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
       // Sync project files first
       await this.syncProjectFiles(projectId, workspacePath);
 
-      // Create container configuration using Builder Pattern
-      const containerConfig = new ContainerBuilder()
-        .createSandboxConfiguration(projectId, containerName, workspacePath, {
-          IMAGE_NAME: this.IMAGE_NAME,
+      // Create container configuration using Builder Pattern with Director
+      const builder = new SandboxContainerBuilder();
+      const director = new ContainerDirector(builder);
+      const containerConfig = director.buildSandboxContainer(
+        projectId,
+        containerName,
+        workspacePath,
+        this.IMAGE_NAME,
+        {
           containerMemory: this.config.containerMemory,
           containerCpu: this.config.containerCpu
-        })
-        .build();
+        }
+      );
 
       // Create container with the built configuration
       const container = await this.docker.createContainer(containerConfig);

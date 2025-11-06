@@ -1,11 +1,17 @@
 "use client";
 
 import EnhancedFileTree from './filetree/EnhancedFileTree';
+import { User } from '@/lib/projectAPI/TypeDefinitions';
 
-export default function Sidebar() {
+interface SidebarProps {
+  user?: User;
+  userRoleId?: string | null;
+}
+
+export default function Sidebar({ user, userRoleId }: SidebarProps) {
   return (
     <div className="h-full">
-      <EnhancedFileTree />
+      <EnhancedFileTree user={user} userRoleId={userRoleId} />
     </div>
   );
 }

@@ -10,7 +10,7 @@ interface ContextMenuProps {
     isDark: boolean;
   }
   
-export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMenuProps) {
+export function ContextMenu({ x, y, item, onClose, onAction, isDark, canEdit }: ContextMenuProps & { canEdit: boolean }) {
     const menuRef = useRef<HTMLDivElement>(null);
   
     useEffect(() => {
@@ -35,7 +35,7 @@ export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMe
       };
     }, [onClose]);
   
-    const menuItems = [
+    const allItems = [
       { label: 'Rename', action: 'rename', icon: '✏️' },
       { label: 'Delete', action: 'delete', icon: '🗑️', danger: true },
       { type: 'separator' },
@@ -53,6 +53,14 @@ export function ContextMenu({ x, y, item, onClose, onAction, isDark }: ContextMe
       { label: 'Copy Path', action: 'copyPath', icon: '📋' },
       { label: 'Copy Relative Path', action: 'copyRelativePath', icon: '📋' },
     ];
+
+    const menuItems = canEdit
+      ? allItems
+      : allItems.filter((i: any) =>
+          typeof i === 'object' && 'action' in i
+            ? !(i.action === 'rename' || i.action === 'delete' || i.action === 'newFile' || i.action === 'newFolder')
+            : i.type === 'separator' ? false : true
+        );
   
     return (
       <div

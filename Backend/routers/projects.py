@@ -5,7 +5,6 @@ from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
-from decorators import require_permission
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -75,7 +74,6 @@ async def update_project(
     return await crud.crud_project.update(db, db_obj=project, obj_in=project_update)
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-@require_permission("canDeleteProject", project_id_param="project_id")
 async def delete_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -92,6 +90,19 @@ async def delete_project(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
+        )
+    # Strategy-based permission check (replaces decorator)
+    from services.permission_enforcer import evaluate_user_permission
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=project_id,
+        user_id=actor_id,
+        permission="canDeleteProject",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canDeleteProject permission",
         )
     await crud.crud_project.remove(db, id=project_id)
 
