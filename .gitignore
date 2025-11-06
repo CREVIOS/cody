@@ -8,6 +8,7 @@ Frontend/node_modules/
 Frontend/out/
 Backend/dist/
 Backend/build/
+Backend/venv/
 Backend/coverage/
 Backend/htmlcov/
 Backend/__pycache__
@@ -16,6 +17,7 @@ Backend/services/__pycache__
 Backend/tests/__pycache__
 SBackend/node_modules/
 SBackend/.DS_Store
+
 
 
 # Cursor indexing ignore

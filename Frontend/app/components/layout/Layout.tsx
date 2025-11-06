@@ -249,7 +249,7 @@ export default function Layout({
 
           {/* Regular sidebar content */}
           <div className="flex-1 overflow-y-auto min-h-0">
-            <Sidebar />
+            <Sidebar user={user} userRoleId={userRoleId} />
           </div>
 
           {/* Resize handle - VSCode style */}

@@ -5,7 +5,6 @@ from uuid import UUID
 import schema as schemas
 import crud
 from db import get_db
-from decorators import require_resource_permission
 from pydantic import BaseModel
 
 class RealtimeKey(BaseModel):
@@ -137,7 +136,6 @@ async def read_file(
     return file
 
 @router.put("/{file_id}", response_model=schemas.File)
-@require_resource_permission("canEdit", resource_type="file", resource_id_param="file_id")
 async def update_file(
     file_id: UUID,
     file_update: schemas.FileUpdate,
@@ -162,6 +160,20 @@ async def update_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
+        )
+
+    # Strategy-based permission check (replaces decorator)
+    from services.permission_enforcer import evaluate_user_permission
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=file.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
 
     # If project_id is being updated, verify the new project exists
@@ -203,7 +215,6 @@ async def update_file(
     return await crud.crud_file.update(db, db_obj=file, obj_in=file_update)
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-@require_resource_permission("canEdit", resource_type="file", resource_id_param="file_id")
 async def delete_file(
     file_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -220,6 +231,19 @@ async def delete_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found"
+        )
+    # Strategy-based permission check (replaces decorator)
+    from services.permission_enforcer import evaluate_user_permission
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=file.project_id,
+        user_id=actor_id,
+        permission="canEdit",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canEdit permission",
         )
     await crud.crud_file.remove(db, id=file_id)
     

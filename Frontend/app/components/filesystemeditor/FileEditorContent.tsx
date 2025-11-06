@@ -4,6 +4,7 @@ import { getLanguageFromExtension } from './LanguageDetection';
 import { FileInfoBar } from './FileInfoBar';
 import { MonacoEditorWrapper } from './MonacoEditorWrapper';
 import { User } from "@/lib/projectAPI/TypeDefinitions";
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -38,6 +39,14 @@ export function FileEditorContent({
 }: FileEditorContentProps) {
   const [language, setLanguage] = useState("javascript");
 
+  // Permissions: prefer project-specific evaluation; fallback to role-based
+  const { hasPermission } = usePermissions({
+    roleId: null,
+    projectId: projectId,
+    userId: user?.user_id,
+  });
+  const canEdit = hasPermission('canEdit');
+
   // Determine language based on file extension
   useEffect(() => {
     if (selectedFile) {
@@ -47,27 +56,29 @@ export function FileEditorContent({
   }, [selectedFile]);
 
   const handleEditorChange = (value: string | undefined) => {
+    if (!canEdit) return;
     updateCurrentContent(value || "");
   };
 
   const handleSave = useCallback(() => {
+    if (!canEdit) return;
     if (selectedFile && currentFileContent !== undefined) {
       saveFile(selectedFile.path, currentFileContent);
     }
-  }, [selectedFile, currentFileContent, saveFile]);
+  }, [selectedFile, currentFileContent, saveFile, canEdit]);
 
   // Handle Ctrl+S / Cmd+S for save
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        handleSave();
+        if (canEdit) handleSave();
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [handleSave]);
+  }, [handleSave, canEdit]);
 
   const isModified = () => {
     const openFile = openFiles.get(selectedFile.path);
@@ -80,7 +91,7 @@ export function FileEditorContent({
       <FileInfoBar
         selectedFile={selectedFile}
         language={language}
-        isModified={isModified()}
+        isModified={canEdit && isModified()}
         onSave={handleSave}
         isDark={isDark}
       />
@@ -94,6 +105,7 @@ export function FileEditorContent({
         username={user?.username || 'User'}
         userId={user?.user_id || ''}
         docKey={selectedFile.path}
+        forceReadOnly={!canEdit}
       />
     </div>
   );

@@ -21,6 +21,7 @@ interface MonacoEditorWrapperProps {
   username: string;
   roomName: string;  // websocket channel (can be shared across files)
   docKey?: string; 
+  forceReadOnly?: boolean;
 
   // Collaboration options (optional)
   collaboration?: {
@@ -46,6 +47,7 @@ export function MonacoEditorWrapper({
   username,
   roomName,
   docKey,
+  forceReadOnly = false,
 }: MonacoEditorWrapperProps) {
   const editorRef = useRef<any | null>(null);
 
@@ -58,17 +60,19 @@ export function MonacoEditorWrapper({
     docKey: docKey ?? roomName,
   });
 
-  // Apply read-only mode based on current leader/editor
+  // Apply read-only mode based on permission and current leader/editor
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed) return;
     ed.updateOptions({
-      readOnly: !isEditor,
-      readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
+      readOnly: forceReadOnly || !isEditor,
+      readOnlyMessage: forceReadOnly
+        ? { value: '🔒 You do not have edit permission for this project' }
+        : (!isEditor ? { value: '🔒 Another user is editing this file' } : undefined),
     });
     const node = ed.getDomNode();
-    if (node) node.style.outline = !isEditor ? '1px dashed #ef4444' : 'none';
-  }, [isEditor]);
+    if (node) node.style.outline = (forceReadOnly || !isEditor) ? '1px dashed #ef4444' : 'none';
+  }, [isEditor, forceReadOnly]);
 
   // Setup collaboration if enabled
   const [collabState, collabActions] = useCollaborativeEditor(
@@ -172,7 +176,7 @@ export function MonacoEditorWrapper({
           : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838]'
       }`}>
         <span>Room: {roomName}</span>
-        <span>{isEditor ? '✅ You can edit' : '🔒 Read-only'}</span>
+        <span>{(forceReadOnly || !isEditor) ? '🔒 Read-only' : '✅ You can edit'}</span>
         {!isEditor && activeEditor ? <span className="opacity-70">editor: {activeEditor}</span> : null}
         <span className="opacity-70">
           Inactivity: {Math.floor(inactivitySeconds / 60)}m {inactivitySeconds % 60}s
@@ -190,8 +194,10 @@ export function MonacoEditorWrapper({
           onMount={handleEditorDidMount}
           loading={<div className="flex items-center justify-center h-full text-[#cccccc]">Loading editor...</div>}
         options={{
-          readOnly: !isEditor,
-          readOnlyMessage: !isEditor ? { value: '🔒 Another user is editing this file' } : undefined,
+          readOnly: forceReadOnly || !isEditor,
+          readOnlyMessage: forceReadOnly
+            ? { value: '🔒 You do not have edit permission for this project' }
+            : (!isEditor ? { value: '🔒 Another user is editing this file' } : undefined),
           fontSize: 14,
           lineHeight: 21,
           

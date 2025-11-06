@@ -8,12 +8,16 @@ import { SearchResults } from './SearchResults';
 import { FileTreeItem } from './FileTreeItem';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
+import { usePermissions } from '@/hooks/usePermissions';
+import { User } from '@/lib/projectAPI/TypeDefinitions';
 
 interface FileTreeProps {
   className?: string;
+  user?: User;
+  userRoleId?: string | null;
 }
 
-export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
+export default function EnhancedFileTree({ className = '', user, userRoleId }: FileTreeProps) {
   const { theme } = useTheme();
   const { 
     fileTree, 
@@ -28,7 +32,8 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
     selectedFile,
     selectFile,
     openFile,
-    projectName
+    projectName,
+    projectId
   } = useFileSystem();
 
   const [contextMenu, setContextMenu] = useState<{
@@ -42,6 +47,14 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const isDark = theme === 'dark';
+
+  // Permissions: prefer project-specific evaluation; fallback to role-based
+  const { hasPermission } = usePermissions({
+    roleId: userRoleId ?? null,
+    projectId: projectId,
+    userId: user?.user_id,
+  });
+  const canEdit = hasPermission('canEdit');
 
   useEffect(() => {
     loadFileTree();
@@ -84,6 +97,9 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
   };
 
   const handleContextAction = async (action: string, item: FileSystemItem) => {
+    if (!canEdit && (action === 'rename' || action === 'delete' || action === 'newFile' || action === 'newFolder')) {
+      return;
+    }
     switch (action) {
       case 'rename':
         break;
@@ -128,6 +144,7 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
   };
 
   const handleCreateFile = async () => {
+    if (!canEdit) return;
     const fileName = prompt('Enter file name:');
     if (fileName) {
       let basePath = '';
@@ -147,6 +164,7 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
   };
 
   const handleCreateFolder = async () => {
+    if (!canEdit) return;
     const folderName = prompt('Enter folder name:');
     if (folderName) {
       let basePath = '';
@@ -264,6 +282,7 @@ export default function EnhancedFileTree({ className = '' }: FileTreeProps) {
           onAction={handleContextAction}
           onClose={() => setContextMenu(null)}
           isDark={isDark}
+          canEdit={canEdit}
         />
       )}
     </div>
