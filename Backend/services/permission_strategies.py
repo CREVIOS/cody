@@ -50,7 +50,7 @@ class PermissionStrategy(ABC):
         Returns:
             bool: True if permission is granted, False otherwise
         """
-        pass
+        pass  
     
     @abstractmethod
     def get_all_permissions(self, context: PermissionContext) -> Set[str]:
@@ -63,12 +63,12 @@ class PermissionStrategy(ABC):
         Returns:
             Set[str]: Set of all available permissions
         """
-        pass
+        pass  
     
     @abstractmethod
     def get_role_name(self) -> str:
         """Get the name of this role."""
-        pass
+        pass 
 
 
 class OwnerPermissionStrategy(PermissionStrategy):
@@ -89,6 +89,8 @@ class OwnerPermissionStrategy(PermissionStrategy):
         "canRequestLock",
         "canDeleteProject",
         "canManageMembers",
+        "canManageRoles",
+        "canViewAnalytics",
     }
     
     def has_permission(self, permission: str, context: PermissionContext) -> bool:
@@ -103,34 +105,35 @@ class OwnerPermissionStrategy(PermissionStrategy):
         return "owner"
 
 
-class MaintainerPermissionStrategy(PermissionStrategy):
+class AdminPermissionStrategy(PermissionStrategy):
     """
-    Permission strategy for the Maintainer role.
+    Permission strategy for the Admin role.
     
-    Maintainers have broad permissions for day-to-day operations but
-    cannot delete the project or manage members.
+    Admins have broad permissions including member management but
+    cannot delete the project or manage roles.
     """
     
-    MAINTAINER_PERMISSIONS = {
+    ADMIN_PERMISSIONS = {
         "canEdit",
         "canLock",
         "canView",
         "canInvite",
         "canApproveLock",
         "canRequestLock",
-        # Explicitly exclude canDeleteProject and canManageMembers per spec
+        "canManageMembers",
+        # Explicitly exclude canDeleteProject and canManageRoles
     }
     
     def has_permission(self, permission: str, context: PermissionContext) -> bool:
-        """Check if maintainer has the specific permission."""
-        return permission in self.MAINTAINER_PERMISSIONS
+        """Check if admin has the specific permission."""
+        return permission in self.ADMIN_PERMISSIONS
     
     def get_all_permissions(self, context: PermissionContext) -> Set[str]:
-        """Return all maintainer permissions."""
-        return self.MAINTAINER_PERMISSIONS.copy()
+        """Return all admin permissions."""
+        return self.ADMIN_PERMISSIONS.copy()
     
     def get_role_name(self) -> str:
-        return "maintainer"
+        return "admin"
 
 
 class EditorPermissionStrategy(PermissionStrategy):
@@ -169,7 +172,7 @@ class ViewerPermissionStrategy(PermissionStrategy):
     
     VIEWER_PERMISSIONS = {
         "canView",
-        # Viewers cannot request locks per provided permissions
+        "canRequestLock",
     }
     
     def has_permission(self, permission: str, context: PermissionContext) -> bool:
@@ -226,9 +229,7 @@ class PermissionStrategyFactory:
     # Registry of built-in role strategies
     BUILT_IN_STRATEGIES = {
         "owner": OwnerPermissionStrategy,
-        "maintainer": MaintainerPermissionStrategy,
-        # Backward-compat alias in case db still stores 'admin'
-        "admin": MaintainerPermissionStrategy,
+        "admin": AdminPermissionStrategy,
         "editor": EditorPermissionStrategy,
         "viewer": ViewerPermissionStrategy,
     }

@@ -260,8 +260,7 @@ class FileVersion(FileVersionBase):
     created_at: datetime
     created_by: UUID
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Notification Schemas
 class NotificationBase(BaseSchema):
@@ -289,8 +288,7 @@ class Notification(NotificationBase):
     notification_id: UUID
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Project Invitation Schemas
 class ProjectInvitationBase(BaseSchema):
@@ -388,8 +386,7 @@ class WebSocketConnection(WebSocketConnectionBase):
     updated_at: Optional[datetime] = None
     last_error: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Optional paginated response schema if you use it

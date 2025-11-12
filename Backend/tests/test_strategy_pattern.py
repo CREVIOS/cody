@@ -141,6 +141,29 @@ class TestPermissionStrategies:
         assert all_permissions == expected_granted
         
         assert strategy.get_role_name() == "custom_role"
+    
+    def test_data_driven_strategy_with_none_permissions(self):
+        """Test data-driven strategy handles None permissions gracefully."""
+        strategy = DataDrivenPermissionStrategy("custom_role", None)
+        # Should default to empty dict
+        assert not strategy.has_permission("canEdit", self.context)
+        assert len(strategy.get_all_permissions(self.context)) == 0
+    
+    def test_permission_context_with_additional_data(self):
+        """Test PermissionContext with additional_data field."""
+        context = PermissionContext(
+            project_id="test-project",
+            user_id="test-user",
+            additional_data={"key": "value", "number": 42}
+        )
+        # Verify context is created correctly
+        assert context.project_id == "test-project"
+        assert context.user_id == "test-user"
+        assert context.additional_data == {"key": "value", "number": 42}
+        
+        # Test that strategies work with context that has additional_data
+        strategy = OwnerPermissionStrategy()
+        assert strategy.has_permission("canEdit", context)
 
 
 class TestPermissionStrategyFactory:
@@ -173,6 +196,15 @@ class TestPermissionStrategyFactory:
         assert strategy.get_role_name() == "unknown_role"
         assert strategy.has_permission("canEdit", PermissionContext("proj", "user"))
         assert not strategy.has_permission("canView", PermissionContext("proj", "user"))
+    
+    def test_factory_creates_data_driven_strategy_with_none_permissions(self):
+        """Test factory handles None permissions by using empty dict."""
+        strategy = PermissionStrategyFactory.create_strategy("custom_role", None)
+        assert isinstance(strategy, DataDrivenPermissionStrategy)
+        context = PermissionContext("proj", "user")
+        # Should handle None gracefully and return empty permissions
+        assert not strategy.has_permission("canEdit", context)
+        assert len(strategy.get_all_permissions(context)) == 0
 
 
 class TestPermissionEvaluator:
@@ -233,6 +265,36 @@ class TestPermissionEvaluator:
         
         # Should only contain the requested permissions
         assert len(permissions_map) == 3
+    
+    def test_evaluator_get_all_permissions(self):
+        """Test that evaluator.get_all_permissions delegates to strategy."""
+        # Test with owner strategy
+        evaluator = PermissionEvaluator(OwnerPermissionStrategy())
+        all_permissions = evaluator.get_all_permissions(self.context)
+        
+        assert isinstance(all_permissions, set)
+        assert len(all_permissions) > 0
+        assert "canEdit" in all_permissions
+        assert "canDeleteProject" in all_permissions
+        assert "canManageMembers" in all_permissions
+        
+        # Test with editor strategy
+        evaluator.set_strategy(EditorPermissionStrategy())
+        all_permissions = evaluator.get_all_permissions(self.context)
+        
+        assert "canEdit" in all_permissions
+        assert "canView" in all_permissions
+        assert "canDeleteProject" not in all_permissions
+        assert "canManageMembers" not in all_permissions
+        
+        # Test with admin strategy
+        evaluator.set_strategy(AdminPermissionStrategy())
+        all_permissions = evaluator.get_all_permissions(self.context)
+        
+        assert "canEdit" in all_permissions
+        assert "canInvite" in all_permissions
+        assert "canManageMembers" in all_permissions
+        assert "canDeleteProject" not in all_permissions
 
 
 class TestConvenienceFunctions:
@@ -353,6 +415,15 @@ class TestStrategyPatternBenefits:
             # Each strategy can make permission decisions independently
             for permission in permissions:
                 assert strategy.has_permission(permission, context)
+    
+    def test_abstract_strategy_cannot_be_instantiated(self):
+        """Test that abstract PermissionStrategy cannot be instantiated directly."""
+        from abc import ABC
+        from services.permission_strategies import PermissionStrategy
+        
+        # Attempting to instantiate abstract class should raise TypeError
+        with pytest.raises(TypeError):
+            PermissionStrategy()
 
 
 if __name__ == "__main__":

@@ -106,17 +106,35 @@ class TestRouterFactory:
     def test_create_router_returns_none_when_module_has_no_router(self):
         """
         Test that the factory handles modules without router attribute.
+        This covers the error path when module doesn't have router (lines 126-127).
+        """
+        # Arrange
+        factory = RouterFactory()
+        # Create a mock module without router attribute
+        mock_module = type('MockModule', (), {})()  # Empty class instance
+
+        # Act
+        with patch("importlib.import_module", return_value=mock_module):
+            result = factory.create_router("invalid")
+
+        # Assert
+        assert result is None
+    
+    def test_create_router_returns_none_when_router_is_not_apirouter(self):
+        """
+        Test that the factory handles modules where router attribute is not an APIRouter.
+        This covers the error path when router exists but is wrong type (lines 122-123).
         """
         # Arrange
         factory = RouterFactory()
         mock_module = MagicMock()
-        del mock_module.router  # Module doesn't have router attribute
+        # Set router to something that's not an APIRouter (e.g., a string or dict)
+        mock_module.router = {"not": "a router"}  # Dict instead of APIRouter
 
         # Act
         with patch("importlib.import_module", return_value=mock_module):
-            with patch.object(mock_module, "__getattribute__", side_effect=AttributeError):
-                with patch("hasattr", return_value=False):
-                    result = factory.create_router("invalid")
+            # hasattr will return True, but isinstance will return False
+            result = factory.create_router("invalid_module")
 
         # Assert
         assert result is None
@@ -131,6 +149,21 @@ class TestRouterFactory:
         # Act
         with patch("importlib.import_module", side_effect=ImportError("Module not found")):
             result = factory.create_router("nonexistent")
+
+        # Assert
+        assert result is None
+    
+    def test_create_router_handles_general_exceptions(self):
+        """
+        Test that the factory handles general exceptions gracefully.
+        This covers the catch-all exception handler.
+        """
+        # Arrange
+        factory = RouterFactory()
+
+        # Act - Test with various exception types
+        with patch("importlib.import_module", side_effect=ValueError("Unexpected error")):
+            result = factory.create_router("error_module")
 
         # Assert
         assert result is None
@@ -199,6 +232,29 @@ class TestRouterFactory:
         # Assert
         assert len(factory.registered_routers) == 2
         assert app.include_router.call_count == 2
+    
+    def test_register_all_routers_with_auto_discover_false(self):
+        """
+        Test that register_all_routers uses configured routers when auto_discover is False.
+        This covers the else branch when auto_discover=False.
+        """
+        # Arrange
+        factory = RouterFactory()
+        app = MagicMock(spec=FastAPI)
+        mock_router = APIRouter()
+        
+        # Configure some routers manually
+        factory.configure_router("users", prefix="/api/v1/users", tags=["Users"])
+        factory.configure_router("projects", prefix="/api/v1/projects", tags=["Projects"])
+        
+        # Mock creation
+        with patch.object(factory, 'create_router', return_value=mock_router):
+            # Act - auto_discover=False should use configured routers
+            factory.register_all_routers(app, auto_discover=False)
+
+        # Assert - Should register configured routers
+        assert app.include_router.call_count == 2
+        assert len(factory.registered_routers) == 2
 
     def test_configure_router_stores_custom_configuration(self):
         """

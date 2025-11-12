@@ -316,6 +316,32 @@ describe("EventBus - Observer Pattern", () => {
       expect(history.length).toBeLessThanOrEqual(5);
     });
 
+    it("should automatically limit history to maxHistorySize (100)", async () => {
+      // Arrange - Publish more than 100 events
+      const events: FileEvent[] = [];
+      for (let i = 0; i < 105; i++) {
+        events.push({
+          type: EventType.FILE_UPDATED,
+          fileId: `file-${i}`,
+          fileName: `test-${i}.ts`,
+          projectId: "proj1",
+          timestamp: Date.now() + i,
+        });
+      }
+
+      // Act - Publish all events
+      for (const event of events) {
+        await eventBus.publish(event);
+      }
+
+      // Assert - History should be limited to 100 events
+      const history = eventBus.getHistory();
+      expect(history.length).toBe(100);
+      // First 5 events should be removed (oldest ones)
+      expect(history[0].fileId).toBe("file-5");
+      expect(history[history.length - 1].fileId).toBe("file-104");
+    });
+
     it("should clear history when requested", async () => {
       // Arrange
       await eventBus.publish({
@@ -336,7 +362,9 @@ describe("EventBus - Observer Pattern", () => {
 
   describe("Error Handling", () => {
     it("should handle errors in event handlers gracefully", async () => {
-      // Arrange
+      // Arrange - Mock console.error to suppress expected error log
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      
       const errorHandler = jest.fn(() => {
         throw new Error("Handler error");
       });
@@ -358,6 +386,14 @@ describe("EventBus - Observer Pattern", () => {
 
       // Assert - Normal handler should still be called
       expect(normalHandler).toHaveBeenCalled();
+      // Verify that error was logged
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Error in event handler for file:updated:"),
+        expect.any(Error)
+      );
+      
+      // Cleanup
+      consoleErrorSpy.mockRestore();
     });
   });
 
@@ -519,6 +555,37 @@ describe("EventBus - Observer Pattern", () => {
       expect(userList).toHaveBeenCalled();
       expect(welcomeMessage).toHaveBeenCalled();
       expect(analytics).toHaveBeenCalled();
+    });
+  });
+
+  describe("useEventSubscription", () => {
+    it("should be exported as a function", () => {
+      // Arrange
+      const { useEventSubscription } = require("../EventBus");
+
+      // Assert
+      expect(typeof useEventSubscription).toBe("function");
+    });
+
+    it("should have the correct function signature", () => {
+      // Arrange
+      const { useEventSubscription } = require("../EventBus");
+
+      // Assert - Function exists and can be called (even if it fails due to React context)
+      expect(useEventSubscription.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should check for window before using React", () => {
+      // Arrange - Test that the function structure is correct
+      // The actual hook behavior is tested in useEventBus.test.tsx
+      const { useEventSubscription } = require("../EventBus");
+      
+      // Assert - Function exists
+      expect(useEventSubscription).toBeDefined();
+      expect(typeof useEventSubscription).toBe("function");
+      
+      // Note: Full hook testing is done in useEventBus.test.tsx
+      // This test verifies the export and basic structure
     });
   });
 });
