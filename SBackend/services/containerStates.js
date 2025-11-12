@@ -357,8 +357,10 @@ class ErrorState extends ContainerState {
       const info = await this.inspect();
       if (info.State.Status === 'running') {
         this.containerWrapper.setState(new RunningState(this.containerWrapper));
-      } else if (info.State.Status === 'exited') {
-        this.containerWrapper.setState(new StoppedState(this.containerWrapper));
+      } else if (info.State.Status === 'exited' || info.State.Status === 'stopped') {
+        // Both 'exited' and 'stopped' mean the container is not running
+        // Transition to stopped state and try to start
+        await this.containerWrapper.setState(new StoppedState(this.containerWrapper));
         // Now try to start
         await this.containerWrapper.start();
       } else {

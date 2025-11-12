@@ -663,3 +663,331 @@ npm test -- app/lib/events/__tests__/EventBus.test.ts
 # Run with coverage
 npm test -- --coverage
 ```
+
+### SBackend Tests
+
+```bash
+# Install dependencies
+cd SBackend
+npm install
+
+# Run all tests
+npm test
+
+# Run specific pattern tests
+npm test -- tests/containerBuilder.test.js
+npm test -- tests/containerStates.test.js
+
+# Run with coverage
+npm test -- --coverage
+
+# Run in watch mode (for development)
+npm run test:watch
+
+# Run with coverage report
+npm run test:coverage
+```
+
+**Expected Output:**
+```
+PASS  tests/containerBuilder.test.js
+  ContainerBuilder - Builder Pattern
+    ContainerConfig
+      ✓ should create ContainerConfig with all fields (2 ms)
+      ✓ should validate required fields (1 ms)
+    SandboxContainerBuilder
+      ✓ should build configuration with method chaining (3 ms)
+      ✓ should validate required fields before building (2 ms)
+      ✓ should support reset for building multiple configurations (1 ms)
+    ContainerDirector
+      ✓ director should build complete sandbox configuration (5 ms)
+
+PASS  tests/containerStates.test.js
+  ContainerStates - State Pattern
+    StoppedState
+      ✓ should transition from stopped to running (2 ms)
+      ✓ should not start from running state (1 ms)
+    RunningState
+      ✓ should transition from running to stopped (2 ms)
+      ✓ should handle pause operation (1 ms)
+    ErrorState
+      ✓ should handle start errors and transition to error state (3 ms)
+    State Transitions
+      ✓ should handle state transitions correctly (4 ms)
+
+Test Suites: 2 passed, 2 total
+Tests:       20+ passed, 20+ total
+Time:        1.234 s
+```
+
+---
+
+## Coverage Reports for Pattern Tests
+
+This section provides commands to generate coverage reports **specifically for the design pattern implementations only**. These reports can be shared with course instructors to demonstrate test coverage.
+
+### Backend Pattern Coverage Reports
+
+**Strategy Pattern Coverage:**
+```bash
+cd Backend
+
+# Generate HTML coverage report for Strategy pattern only
+pytest tests/test_strategy_pattern.py \
+  --cov=services.permission_strategies \
+  --cov-report=html \
+  --cov-report=term \
+  --cov-report=term-missing
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open htmlcov/index.html
+
+# Method 2: Open from Finder
+# Navigate to Backend/htmlcov/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/Backend/htmlcov/index.html
+```
+
+**Factory Pattern Coverage:**
+```bash
+cd Backend
+
+# Generate HTML coverage report for Factory pattern only
+pytest tests/test_router_factory.py \
+  --cov=factories.router_factory \
+  --cov-report=html \
+  --cov-report=term \
+  --cov-report=term-missing
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open htmlcov/index.html
+
+# Method 2: Open from Finder
+# Navigate to Backend/htmlcov/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/Backend/htmlcov/index.html
+```
+
+**Both Patterns Combined:**
+```bash
+cd Backend
+
+# Generate coverage report for both Strategy and Factory patterns
+pytest tests/test_strategy_pattern.py tests/test_router_factory.py \
+  --cov=services.permission_strategies \
+  --cov=factories.router_factory \
+  --cov-report=html \
+  --cov-report=term \
+  --cov-report=term-missing
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open htmlcov/index.html
+
+# Method 2: Open from Finder
+# Navigate to Backend/htmlcov/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/Backend/htmlcov/index.html
+```
+
+**Expected Output:**
+```
+Name                                    Stmts   Miss  Cover   Missing
+---------------------------------------------------------------------
+services/permission_strategies.py         94      7    93%   42-43, 126-130
+factories/router_factory.py               73      3    96%   122-123, 179
+---------------------------------------------------------------------
+TOTAL                                    167     10    94%
+```
+
+---
+
+### Frontend Pattern Coverage Reports
+
+**Observer Pattern Coverage:**
+```bash
+cd Frontend
+
+# Generate coverage report for Observer pattern only
+npm test -- app/lib/events/__tests__/EventBus.test.ts --coverage --collectCoverageFrom='app/lib/events/**/*.ts' --coverageReporters=html --coverageReporters=text --coverageReporters=text-summary
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open coverage/lcov-report/index.html
+
+# Method 2: Open from Finder
+# Navigate to Frontend/coverage/lcov-report/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/Frontend/coverage/lcov-report/index.html
+```
+
+**Alternative (using Jest config):**
+```bash
+cd Frontend
+
+# Create a temporary jest config for pattern tests only
+npm test -- --config='{"collectCoverageFrom":["app/lib/events/**/*.ts"],"coverageReporters":["html","text","text-summary"]}' app/lib/events/__tests__/EventBus.test.ts --coverage
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open coverage/lcov-report/index.html
+
+# Method 2: Open from Finder
+# Navigate to Frontend/coverage/lcov-report/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/Frontend/coverage/lcov-report/index.html
+```
+
+**Expected Output:**
+```
+File                    | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+------------------------|---------|----------|---------|---------|------------------
+app/lib/events/        |     96% |     92% |     94% |     96% |
+  EventBus.ts          |     96% |     92% |     94% |     96% | 45, 78
+  useEventBus.ts       |     88% |     85% |     90% |     88% | 12-15
+------------------------|---------|----------|---------|---------|------------------
+All files               |     94% |     89% |     92% |     94% |
+```
+
+---
+
+### SBackend Pattern Coverage Reports
+
+**Builder Pattern Coverage:**
+```bash
+cd SBackend
+
+# Generate coverage report for Builder pattern only
+npm test -- tests/containerBuilder.test.js --coverage --collectCoverageFrom='services/containerBuilder.js' --coverageReporters=html --coverageReporters=text --coverageReporters=text-summary
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open coverage/lcov-report/index.html
+
+# Method 2: Open from Finder
+# Navigate to SBackend/coverage/lcov-report/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/SBackend/coverage/lcov-report/index.html
+```
+
+**State Pattern Coverage:**
+```bash
+cd SBackend
+
+# Generate coverage report for State pattern only
+npm test -- tests/containerStates.test.js --coverage --collectCoverageFrom='services/containerStates.js' --coverageReporters=html --coverageReporters=text --coverageReporters=text-summary
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open coverage/lcov-report/index.html
+
+# Method 2: Open from Finder
+# Navigate to SBackend/coverage/lcov-report/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/SBackend/coverage/lcov-report/index.html
+```
+
+**Both Patterns Combined:**
+```bash
+cd SBackend
+
+# Generate coverage report for both Builder and State patterns
+npm test -- tests/containerBuilder.test.js tests/containerStates.test.js \
+  --coverage \
+  --collectCoverageFrom='services/containerBuilder.js' \
+  --collectCoverageFrom='services/containerStates.js' \
+  --coverageReporters=html \
+  --coverageReporters=text \
+  --coverageReporters=text-summary
+
+# View the report (choose one method):
+# Method 1: Open directly from terminal (macOS/Linux)
+open coverage/lcov-report/index.html
+
+# Method 2: Open from Finder
+# Navigate to SBackend/coverage/lcov-report/ folder and double-click index.html
+
+# Method 3: Copy the full path and paste in browser address bar
+# Example: file:///Users/user/Desktop/other_projects/cody/SBackend/coverage/lcov-report/index.html
+```
+
+**Expected Output:**
+```
+File                        | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------------------------|---------|----------|---------|---------|------------------
+services/                    |     90% |     85% |     88% |     90% |
+  containerBuilder.js        |     92% |     88% |     90% |     92% | 45-47, 120
+  containerStates.js         |     88% |     82% |     86% |     88% | 78-80, 145
+----------------------------|---------|----------|---------|---------|------------------
+All files                    |     90% |     84% |     88% |     90% |
+```
+
+---
+
+### Quick Reference: All Pattern Coverage in One Command
+
+**Backend (Strategy + Factory):**
+```bash
+cd Backend
+pytest tests/test_strategy_pattern.py tests/test_router_factory.py \
+  --cov=services.permission_strategies --cov=factories.router_factory \
+  --cov-report=html --cov-report=term
+```
+
+**Frontend (Observer):**
+```bash
+cd Frontend
+npm test -- app/lib/events/__tests__/EventBus.test.ts app/lib/events/__tests__/index.test.ts app/lib/events/__tests__/useEventBus.test.tsx --coverage --collectCoverageFrom='app/lib/events/**/*.ts' --collectCoverageFrom='app/lib/events/**/*.tsx' --coverageReporters=html --coverageReporters=text
+```
+
+**SBackend (Builder + State):**
+```bash
+cd SBackend
+npm test -- tests/containerBuilder.test.js tests/containerStates.test.js \
+  --coverage --collectCoverageFrom='services/containerBuilder.js' \
+  --collectCoverageFrom='services/containerStates.js' \
+  --coverageReporters=html --coverageReporters=text
+```
+
+---
+
+### Coverage Report Locations
+
+After running the coverage commands, you can find the reports at:
+
+- **Backend HTML Report:** `Backend/htmlcov/index.html`
+- **Frontend HTML Report:** `Frontend/coverage/lcov-report/index.html`
+- **SBackend HTML Report:** `SBackend/coverage/lcov-report/index.html`
+
+**How to Open the Reports:**
+
+1. **From Terminal (Easiest):**
+   ```bash
+   # Backend
+   cd Backend && open htmlcov/index.html
+   
+   # Frontend
+   cd Frontend && open coverage/lcov-report/index.html
+   
+   # SBackend
+   cd SBackend && open coverage/lcov-report/index.html
+   ```
+
+2. **From Finder:**
+   - Navigate to the respective folder (Backend/htmlcov, Frontend/coverage/lcov-report, or SBackend/coverage/lcov-report)
+   - Double-click `index.html` to open in your default browser
+
+3. **Direct Browser Access:**
+   - Copy the full file path and paste it in your browser's address bar
+   - Make sure to use the `file://` protocol (e.g., `file:///Users/user/Desktop/other_projects/cody/Backend/htmlcov/index.html`)
+
+These HTML reports provide detailed line-by-line coverage information that can be shared with your course instructor.

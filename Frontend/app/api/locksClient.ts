@@ -1,5 +1,5 @@
 // src/api/locksClient.ts
-export type Role = "owner" | "editor" | "viewer" | "admin" | "maintainer";
+export type Role = "owner" | "editor" | "viewer" | "admin";
 
 export type LockState =
   | { state: "UNLOCKED" }

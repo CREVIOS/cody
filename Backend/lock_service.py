@@ -141,7 +141,7 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
     Atomically request a file lock with proper race condition prevention.
 
     Rules:
-    - Owner/admin/maintainer → ALWAYS grant (preempts current holder)
+    - Owner/admin → ALWAYS grant (preempts current holder)
     - Everyone else: If only 1 person connected, they can edit. If 2+, first person locks, others blocked.
 
     Uses SELECT FOR UPDATE to prevent race conditions.
@@ -151,7 +151,7 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
 
     now = _now()
     role_norm = (role or "").strip().lower()
-    OWNER_ROLES = {"owner", "admin", "administrator", "maintainer"}
+    OWNER_ROLES = {"owner", "admin", "administrator"}
     is_owner = role_norm in OWNER_ROLES
 
     log.info("📥 request_lock file=%s user=%s role=%s is_owner=%s", file_id, user_id, role_norm, is_owner)
