@@ -13,14 +13,7 @@ async def create_terminal_environment(
     env_in: schemas.TerminalEnvironmentCreate,
     db: AsyncSession = Depends(get_db)
 ):
-    # Check if environment name already exists
-    existing_env = await crud.crud_terminal_environment.get_by_name(db, environment_name=env_in.environment_name)
-    if existing_env:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Environment name already exists"
-        )
-    
+    # TerminalEnvironment doesn't have environment_name, so no name check needed
     return await crud.crud_terminal_environment.create(db, obj_in=env_in)
 
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.TerminalEnvironment])
@@ -74,15 +67,7 @@ async def update_terminal_environment(
             detail="Terminal environment not found"
         )
     
-    # If environment name is being updated, check for duplicates
-    if env_update.environment_name and env_update.environment_name != environment.environment_name:
-        existing_env = await crud.crud_terminal_environment.get_by_name(db, environment_name=env_update.environment_name)
-        if existing_env:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Environment name already exists"
-            )
-    
+    # TerminalEnvironment doesn't have environment_name, so no name duplicate check needed
     return await crud.crud_terminal_environment.update(db, db_obj=environment, obj_in=env_update)
 
 @router.delete("/{environment_id}", status_code=status.HTTP_204_NO_CONTENT)

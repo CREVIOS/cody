@@ -392,7 +392,6 @@ export function useEventSubscription<T extends EventPayload = EventPayload>(
   React.useEffect(() => {
     const unsubscribe = eventBus.subscribe(eventType, handler);
     return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventType, ...dependencies]);
 }
 

@@ -117,6 +117,21 @@ async def update_project_member(
             detail="Project member not found"
         )
     
+    # Get project to check ownership
+    project = await crud.crud_project.get(db, id=member.project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # CRITICAL: Prevent changing owner's role - ownership is managed separately via canTransferOwnership
+    if project.owner_id == member.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot change owner's role. Ownership transfer must be handled separately via canTransferOwnership permission."
+        )
+    
     # Permission: actor must be able to manage members of this project
     permission_eval = await evaluate_user_permission(
         db,
@@ -130,7 +145,7 @@ async def update_project_member(
             detail=permission_eval.reason or "User lacks canManageMembers permission",
         )
 
-    # If role is being updated, verify the new role exists
+    # If role is being updated, verify the new role exists and prevent assigning Owner role
     if member_update.role_id:
         role = await crud.crud_role.get(db, id=member_update.role_id)
         if not role:
@@ -138,8 +153,92 @@ async def update_project_member(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Role not found"
             )
+        
+        # CRITICAL: Prevent assigning Owner role - ownership is managed separately via canTransferOwnership
+        if role.role_name.lower() == "owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign Owner role through member management. Ownership transfer must be handled separately via canTransferOwnership permission."
+            )
     
     return await crud.crud_project_member.update(db, db_obj=member, obj_in=member_update)
+
+@router.patch("/by-project/{project_id}/user/{user_id}/role", response_model=schemas.ProjectMember)
+async def update_member_role(
+    project_id: UUID,
+    user_id: UUID,
+    role_update: schemas.ProjectMemberUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor_id: UUID = Query(..., description="User performing the action"),
+):
+    """
+    Update a member's role in a project.
+    This endpoint updates the role_id in the Project_Members table for a specific user in a project.
+    """
+    # Verify project exists
+    project = await crud.crud_project.get(db, id=project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Verify user exists
+    user = await crud.crud_user.get(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Find the member
+    member = await crud.crud_project_member.get_by_project_and_user(
+        db, project_id=project_id, user_id=user_id
+    )
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project member not found"
+        )
+    
+    # CRITICAL: Prevent changing owner's role - ownership is managed separately via canTransferOwnership
+    if project.owner_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot change owner's role. Ownership transfer must be handled separately via canTransferOwnership permission."
+        )
+    
+    # Permission: actor must be able to manage members of this project
+    permission_eval = await evaluate_user_permission(
+        db,
+        project_id=project_id,
+        user_id=actor_id,
+        permission="canManageMembers",
+    )
+    if not permission_eval.granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=permission_eval.reason or "User lacks canManageMembers permission",
+        )
+    
+    # If role is being updated, verify the new role exists and prevent assigning Owner role
+    if role_update.role_id:
+        role = await crud.crud_role.get(db, id=role_update.role_id)
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Role not found"
+            )
+        
+        # CRITICAL: Prevent assigning Owner role - ownership is managed separately via canTransferOwnership
+        if role.role_name.lower() == "owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign Owner role through member management. Ownership transfer must be handled separately via canTransferOwnership permission."
+            )
+    
+    # Update the member's role
+    return await crud.crud_project_member.update(db, db_obj=member, obj_in=role_update)
 
 @router.delete("/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project_member(
@@ -207,11 +306,15 @@ async def get_project_members_with_details(
         return str(v) if v is not None else None
 
     out = []
+    owner_id_str = to_str(project.owner_id)
     for m in rows:
+        member_user_id = to_str(getattr(m, "user_id", None))
+        # CRITICAL: Check if this member is the project owner
+        is_owner = member_user_id == owner_id_str
         out.append({
             "project_member_id": to_str(getattr(m, "project_member_id", None)),
             "project_id": to_str(getattr(m, "project_id", None)),
-            "user_id": to_str(getattr(m, "user_id", None)),
+            "user_id": member_user_id,
             "role_id": to_str(getattr(m, "role_id", None)),
             "invited_by": to_str(getattr(m, "invited_by", None)),
             "joined_at": (getattr(m, "created_at", None).isoformat()
@@ -235,11 +338,13 @@ async def get_project_members_with_details(
                 "name": getattr(m.inviter, "name", None),
                 "email": getattr(m.inviter, "email", None),
             } if getattr(m, "inviter", None) else None),
-            "is_owner": False,
+            "is_owner": is_owner,  # Set based on project.owner_id comparison
         })
 
     # Ensure owner is first; add virtual entry if missing
-    owner_in_list = any(item["user_id"] == to_str(project.owner_id) for item in out)
+    owner_id_str_check = to_str(project.owner_id)
+    owner_in_list = any(item["user_id"] == owner_id_str_check for item in out)
+    
     if not owner_in_list:
         # Find "Owner" role (case-insensitive); optional
         owner_role_result = await db.execute(
@@ -250,7 +355,7 @@ async def get_project_members_with_details(
         out_owner = {
             "project_member_id": None,  # no fabricated UUID to avoid type issues
             "project_id": to_str(project_id),
-            "user_id": to_str(project.owner_id),
+            "user_id": owner_id_str_check,
             "role_id": to_str(getattr(owner_role, "role_id", None)),
             "invited_by": None,
             "joined_at": (project.created_at.isoformat()
@@ -276,5 +381,12 @@ async def get_project_members_with_details(
             "is_owner": True,
         }
         out = [out_owner] + out
+    else:
+        # Owner is in the list - ensure they are first
+        owner_index = next((i for i, item in enumerate(out) if item["user_id"] == owner_id_str_check), -1)
+        if owner_index > 0:
+            # Move owner to first position
+            owner_item = out.pop(owner_index)
+            out.insert(0, owner_item)
 
     return out

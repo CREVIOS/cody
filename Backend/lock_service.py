@@ -9,6 +9,7 @@ from sqlalchemy import select, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import WebSocketConnection
+from db import AsyncSessionLocal
 
 LOCK_TIMEOUT = timedelta(minutes=2)
 CLEANUP_INTERVAL = timedelta(seconds=30)  # Run cleanup every 30 seconds
@@ -270,13 +271,10 @@ async def heartbeat(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) ->
 _cleanup_task = None
 _cleanup_running = False
 
-async def start_lock_cleanup_task(db_session_factory):
+async def start_lock_cleanup_task():
     """
     Start background task for continuous lock expiration monitoring.
     This ensures locks are cleaned up even if no requests arrive.
-
-    Args:
-        db_session_factory: Async function that returns a database session context manager
     """
     global _cleanup_running, _cleanup_task
 
@@ -290,7 +288,7 @@ async def start_lock_cleanup_task(db_session_factory):
     async def cleanup_loop():
         while _cleanup_running:
             try:
-                async with db_session_factory() as db:
+                async with AsyncSessionLocal() as db:
                     count = await _cleanup_expired(db)
                     if count > 0:
                         log.info("🧹 Cleaned up %d expired lock(s)", count)

@@ -348,10 +348,12 @@ class WebSocketConnection(Base):
 class FileLock(Base):
     __tablename__ = "file_locks"
 
-    # FK to files.file_id so ORM can join to File
+    # file_id is now a UUID that can represent either:
+    # 1. A database file_id (if files were in DB)
+    # 2. A deterministic UUID v5 generated from project_id + file_path (for container-based files)
+    # Foreign key removed since files are stored in Docker containers/MinIO, not in the database
     file_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("files.file_id", ondelete="CASCADE"),
         primary_key=True,
     )
     # who holds the lock (nullable when unlocked)
@@ -369,7 +371,7 @@ class FileLock(Base):
     )
 
     # relationships (optional but convenient)
-    file = relationship("File", backref="lock", uselist=False)
+    # Note: file relationship removed since files are stored in Docker containers/MinIO, not in the database
     holder = relationship("User", foreign_keys=[holder_user_id])
 
 
@@ -377,9 +379,10 @@ class FileLockRequest(Base):
     __tablename__ = "file_lock_requests"
 
     request_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    # file_id can be either a database file_id or a deterministic UUID v5 from project_id + file_path
+    # Foreign key removed since files are stored in Docker containers/MinIO, not in the database
     file_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("files.file_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -396,4 +399,4 @@ class FileLockRequest(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    file = relationship("File")
+    # Note: file relationship removed since files are stored in Docker containers/MinIO, not in the database

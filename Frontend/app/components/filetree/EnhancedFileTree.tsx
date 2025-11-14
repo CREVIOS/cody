@@ -55,6 +55,7 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
     userId: user?.user_id,
   });
   const canEdit = hasPermission('canEdit');
+  const canView = hasPermission('canView');
 
   useEffect(() => {
     loadFileTree();
@@ -95,6 +96,13 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
       item
     });
   };
+
+  const handleFileOpen = useCallback((item: FileSystemItem) => {
+    if (!canView && item.type === 'file') {
+      return;
+    }
+    openFile(item);
+  }, [canView, openFile]);
 
   const handleContextAction = async (action: string, item: FileSystemItem) => {
     if (!canEdit && (action === 'rename' || action === 'delete' || action === 'newFile' || action === 'newFolder')) {
@@ -244,6 +252,8 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
                 isSearching={isSearching}
                 onContextMenu={handleContextMenu}
                 onRename={handleRename}
+                onFileClick={handleFileOpen}
+                canView={canView}
                 isDark={isDark}
               />
             </div>
@@ -259,6 +269,8 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
                   level={0}
                   onContextMenu={handleContextMenu}
                   onRename={handleRename}
+                  onFileClick={handleFileOpen}
+                  canView={canView}
                 />
               ))}
             </div>

@@ -17,6 +17,9 @@ type Params = {
   autoRequest?: boolean;
   heartbeatMs?: number;
   pollMs?: number;
+  canRequestLock?: boolean;
+  canLock?: boolean;
+  projectId?: string | null;
 };
 
 export function useFileLock({
@@ -26,6 +29,9 @@ export function useFileLock({
   autoRequest = true,
   heartbeatMs = 45_000,
   pollMs = 5_000,
+  canRequestLock = true,
+  canLock = true,
+  projectId,
 }: Params) {
   const [state, setState] = useState<LockState | null>(null);
 
@@ -76,15 +82,15 @@ export function useFileLock({
 
   const refresh = useCallback(async () => {
     if (!fileId) return;
-    console.log("🔵 REFRESH called", { fileId });
+    console.log("🔵 REFRESH called", { fileId, projectId });
     try {
-      const s = await apiGetLock(fileId);
+      const s = await apiGetLock(fileId, projectId);
       console.log("🔵 REFRESH response", s);
       setState(s);
     } catch (e) {
       console.error("❌ refresh error", e);
     }
-  }, [fileId]);
+  }, [fileId, projectId]);
 
   const request = useCallback(async () => {
     if (!fileId || !userId || role === "viewer") {
@@ -96,15 +102,21 @@ export function useFileLock({
       return state ?? { state: "UNLOCKED" as const };
     }
 
+    // ✅ Check permission using backend Strategy pattern
+    if (!canRequestLock) {
+      console.log("🔵 REQUEST skipped (no canRequestLock permission)");
+      return state ?? { state: "UNLOCKED" as const };
+    }
+
     // ✅ Owners don't need to request locks
     if (role === "owner") {
       console.log("🟢 REQUEST skipped (owner bypass)");
       return state ?? { state: "UNLOCKED" as const };
     }
 
-    console.log("🔵 REQUEST called", { fileId, userId, role });
+    console.log("🔵 REQUEST called", { fileId, userId, role, projectId });
     try {
-      const s = await apiRequestLock(fileId, userId, role);
+      const s = await apiRequestLock(fileId, userId, role, projectId);
       console.log("🔵 REQUEST response", s);
       setState(s);
       return s;
@@ -112,10 +124,16 @@ export function useFileLock({
       console.error("❌ request error", e);
       return state ?? { state: "UNLOCKED" as const };
     }
-  }, [fileId, userId, role, state]);
+  }, [fileId, userId, role, state, canRequestLock, projectId]);
 
   const release = useCallback(async () => {
     if (!fileId || !userId) return state ?? { state: "UNLOCKED" as const };
+
+    // ✅ Check permission using backend Strategy pattern
+    if (!canLock) {
+      console.log("🔵 RELEASE skipped (no canLock permission)");
+      return state ?? { state: "UNLOCKED" as const };
+    }
 
     // ✅ Owners never need to release manually
     if (role === "owner") {
@@ -123,9 +141,9 @@ export function useFileLock({
       return state ?? { state: "UNLOCKED" as const };
     }
 
-    console.log("🔵 RELEASE called", { fileId, userId });
+    console.log("🔵 RELEASE called", { fileId, userId, projectId });
     try {
-      const s = await apiReleaseLock(fileId, userId);
+      const s = await apiReleaseLock(fileId, userId, projectId);
       console.log("🔵 RELEASE response", s);
       setState(s);
       return s;
@@ -133,7 +151,7 @@ export function useFileLock({
       console.error("❌ release error", e);
       return state ?? { state: "UNLOCKED" as const };
     }
-  }, [fileId, userId, role, state]);
+  }, [fileId, userId, role, state, canLock, projectId]);
 
   // Initial mount: refresh state
   useEffect(() => {
@@ -142,14 +160,14 @@ export function useFileLock({
     refresh();
   }, [fileId, refresh]);
 
-  // Auto-request when unlocked (skip for owner/viewer)
+  // Auto-request when unlocked (skip for owner/viewer, or if no permission)
   useEffect(() => {
-    if (!autoRequest || !fileId || !userId || role === "viewer" || role === "owner") return;
+    if (!autoRequest || !fileId || !userId || role === "viewer" || role === "owner" || !canRequestLock) return;
     if (state?.state === "UNLOCKED") {
       console.log("🟢 Auto-requesting lock (unlocked state detected)");
       request();
     }
-  }, [state?.state, autoRequest, fileId, userId, role, request]);
+  }, [state?.state, autoRequest, fileId, userId, role, request, canRequestLock]);
 
   // Heartbeat or polling based on canEdit (skip for owner)
   useEffect(() => {
@@ -162,7 +180,7 @@ export function useFileLock({
       console.log("💓 Starting heartbeat timer");
       hbTimer.current = setInterval(async () => {
         try {
-          const s = await apiHeartbeat(fileId, userId);
+          const s = await apiHeartbeat(fileId, userId, projectId);
           setState(s);
         } catch (e) {
           console.error("❌ heartbeat error", e);
@@ -180,7 +198,7 @@ export function useFileLock({
     return () => {
       clearTimers();
     };
-  }, [canEdit, fileId, userId, role, heartbeatMs, pollMs, refresh]);
+  }, [canEdit, fileId, userId, role, heartbeatMs, pollMs, refresh, projectId]);
 
   return {
     state,

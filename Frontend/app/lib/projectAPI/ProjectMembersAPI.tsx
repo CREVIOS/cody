@@ -60,4 +60,61 @@ export const createProjectMember = async (memberData: {
     throw error;
   }
 };
+
+/**
+ * Update a project member (e.g., change role)
+ */
+export const updateProjectMember = async (
+  memberId: string,
+  memberUpdate: {
+    role_id?: string;
+    is_active?: boolean;
+  },
+  actorId: string
+): Promise<ProjectMember> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/${memberId}?actor_id=${encodeURIComponent(actorId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(memberUpdate),
+    });
+
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error updating project member:', error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a project member
+ */
+export const deleteProjectMember = async (
+  memberId: string,
+  actorId: string
+): Promise<void> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/${memberId}?actor_id=${encodeURIComponent(actorId)}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+  } catch (error) {
+    console.error('Error deleting project member:', error);
+    throw error;
+  }
+};
   

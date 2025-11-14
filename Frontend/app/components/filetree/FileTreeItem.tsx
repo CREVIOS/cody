@@ -17,9 +17,11 @@ interface FileTreeItemProps {
   level: number;
   onContextMenu: (event: React.MouseEvent, item: FileSystemItem) => void;
   onRename?: (item: FileSystemItem) => void;
+  onFileClick?: (item: FileSystemItem) => void;
+  canView?: boolean;
 }
 
-export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeItemProps) {
+export function FileTreeItem({ item, level, onContextMenu, onRename, onFileClick, canView = true }: FileTreeItemProps) {
   const { theme } = useTheme();
   const { selectedFile, openFile, selectFile } = useFileSystem();
   const [isExpanded, setIsExpanded] = useState(item.isExpanded || false);
@@ -55,10 +57,15 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
       // Reset animation state after animation completes
       setTimeout(() => setIsAnimating(false), 200);
     } else {
-      openFile(item);
+      // Use onFileClick if provided (with permission check), otherwise fallback to openFile
+      if (onFileClick) {
+        onFileClick(item);
+      } else if (canView) {
+        openFile(item);
+      }
       selectFile(item);
     }
-  }, [item, isExpanded, openFile, selectFile]);
+  }, [item, isExpanded, openFile, selectFile, onFileClick, canView]);
 
   const handleExpanderClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -208,6 +215,8 @@ export function FileTreeItem({ item, level, onContextMenu, onRename }: FileTreeI
                 level={level + 1}
                 onContextMenu={onContextMenu}
                 onRename={onRename}
+                onFileClick={onFileClick}
+                canView={canView}
               />
             ))}
           </div>

@@ -347,13 +347,72 @@ class AcceptInvitationRequest(BaseSchema):
 class UserProjectPermissions(BaseSchema):
     project_id: UUID
     user_id: UUID
-    role_id: UUID
+    role_id: Optional[UUID] = None
     role_name: str
     permissions: Dict[str, bool]
     
 
 
 
+
+# Execution Environment Schemas
+class ExecutionEnvironmentBase(BaseSchema):
+    environment_name: str
+    language: str
+    version: Optional[str] = None
+    docker_image: Optional[str] = None
+    base_packages: List[str] = Field(default_factory=list)
+    setup_commands: List[str] = Field(default_factory=list)
+    run_command_template: Optional[str] = None
+    timeout_seconds: int = 30
+    persistent_storage: bool = False
+    is_active: bool = True
+
+class ExecutionEnvironmentCreate(ExecutionEnvironmentBase):
+    pass
+
+class ExecutionEnvironmentUpdate(BaseSchema):
+    environment_name: Optional[str] = None
+    language: Optional[str] = None
+    version: Optional[str] = None
+    docker_image: Optional[str] = None
+    base_packages: Optional[List[str]] = None
+    setup_commands: Optional[List[str]] = None
+    run_command_template: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    persistent_storage: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+class ExecutionEnvironment(ExecutionEnvironmentBase):
+    environment_id: UUID
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+# Terminal Environment Schemas
+class TerminalEnvironmentBase(BaseSchema):
+    project_id: UUID
+    user_id: UUID
+    environment_id: UUID
+    container_id: str
+    websocket_id: str
+    is_active: bool = True
+
+class TerminalEnvironmentCreate(TerminalEnvironmentBase):
+    pass
+
+class TerminalEnvironmentUpdate(BaseSchema):
+    project_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
+    environment_id: Optional[UUID] = None
+    container_id: Optional[str] = None
+    websocket_id: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class TerminalEnvironment(TerminalEnvironmentBase):
+    terminal_id: UUID
+
+    model_config = ConfigDict(from_attributes=True)
 
 # Lock State Schemas
 class LockedState(BaseModel):

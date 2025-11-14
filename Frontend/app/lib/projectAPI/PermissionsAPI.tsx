@@ -4,7 +4,7 @@ import { getErrorMessage } from "./ErrorHandling";
 export interface UserProjectPermissionsResponse {
   project_id: string;
   user_id: string;
-  role_id: string;
+  role_id: string | null;
   role_name: string;
   permissions: Record<string, boolean>;
 }

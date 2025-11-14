@@ -5,6 +5,7 @@ import { FileInfoBar } from './FileInfoBar';
 import { MonacoEditorWrapper } from './MonacoEditorWrapper';
 import { User } from "@/lib/projectAPI/TypeDefinitions";
 import { usePermissions } from '@/hooks/usePermissions';
+import { useFileLock } from '@/hooks/useFileLock';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -46,6 +47,22 @@ export function FileEditorContent({
     userId: user?.user_id,
   });
   const canEdit = hasPermission('canEdit');
+  const canRequestLock = hasPermission('canRequestLock');
+
+  // File lock management
+  const [isRequestingLock, setIsRequestingLock] = useState(false);
+  const {
+    state: lockState,
+    request: requestLock,
+  } = useFileLock({
+    fileId: selectedFile?.path,
+    userId: user?.user_id,
+    role: (userRole?.toLowerCase() || 'editor') as 'owner' | 'admin' | 'editor' | 'viewer',
+    autoRequest: false, // Disable auto-request - user will manually request via button
+    canRequestLock: canRequestLock,
+    canLock: canEdit,
+    projectId: projectId,
+  });
 
   // Determine language based on file extension
   useEffect(() => {
@@ -86,6 +103,46 @@ export function FileEditorContent({
     return currentFileContent !== openFile.content;
   };
 
+  const handleRequestLock = useCallback(async () => {
+    if (!canRequestLock || !lockState || isRequestingLock) return;
+    // Only allow requesting if file is locked by someone else
+    if (lockState.state !== 'LOCKED') return;
+    setIsRequestingLock(true);
+    try {
+      await requestLock();
+    } catch (err) {
+      console.error('Failed to request lock:', err);
+    } finally {
+      setIsRequestingLock(false);
+    }
+  }, [canRequestLock, lockState, requestLock, isRequestingLock]);
+
+  // Convert lock state to FileInfoBar format with proper narrowing
+  let lockStateForBar:
+    | {
+        state: 'UNLOCKED' | 'LOCKED' | 'QUEUED';
+        holder_user_id?: string;
+        holder_name?: string;
+        queue_position?: number;
+        expires_at?: string;
+      }
+    | undefined;
+
+  if (lockState) {
+    if (lockState.state === 'LOCKED') {
+      lockStateForBar = {
+        state: 'LOCKED',
+        holder_user_id: lockState.holder_user_id,
+        // holder_name not provided by backend yet; UI will fall back gracefully
+        queue_position: lockState.queue_size,
+        expires_at: lockState.expires_at,
+      };
+    } else {
+      // UNLOCKED or any other future state
+      lockStateForBar = { state: 'UNLOCKED' };
+    }
+  }
+
   return (
     <div className="h-full flex flex-col min-w-0 overflow-hidden">
       <FileInfoBar
@@ -94,6 +151,11 @@ export function FileEditorContent({
         isModified={canEdit && isModified()}
         onSave={handleSave}
         isDark={isDark}
+        lockState={lockStateForBar}
+        canRequestLock={canRequestLock && !canEdit && lockState?.state === 'LOCKED'}
+        canEdit={canEdit}
+        onRequestLock={handleRequestLock}
+        isRequestingLock={isRequestingLock}
       />
 
       <MonacoEditorWrapper

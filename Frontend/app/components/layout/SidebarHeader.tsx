@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { UserPlus } from "lucide-react";
+import { UserPlus, Users, Lock } from "lucide-react";
 
 interface SidebarHeaderProps {
   isEditingName: boolean;
@@ -11,6 +11,10 @@ interface SidebarHeaderProps {
   onHome: () => void;
   canInviteUsers: boolean;
   onInviteClick: () => void;
+  canManageMembers: boolean;
+  onManageMembersClick: () => void;
+  canApproveLock: boolean;
+  onApproveLockClick: () => void;
   borderClass: string;
   inputClass: string;
   iconHoverClass: string;
@@ -26,6 +30,10 @@ export function SidebarHeader({
   onHome,
   canInviteUsers,
   onInviteClick,
+  canManageMembers,
+  onManageMembersClick,
+  canApproveLock,
+  onApproveLockClick,
   borderClass,
   inputClass,
   iconHoverClass,
@@ -59,21 +67,56 @@ export function SidebarHeader({
 
         <div className="flex-1"></div> {/* Spacer */}
 
-        {/* Invite Users Icon - Only show if user has permission */}
-        {canInviteUsers && (
-          <button
-            onClick={onInviteClick}
-            className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
-            title="Invite Users"
-          >
-            <UserPlus className="w-4 h-4" />
+        {/* Action buttons group */}
+        <div className="flex items-center gap-1">
+          {/* Lock Approval Icon - Only show if user has permission */}
+          {canApproveLock && (
+            <button
+              onClick={onApproveLockClick}
+              className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
+              title="Approve Locks"
+            >
+              <Lock className="w-4 h-4" />
 
-            {/* Tooltip */}
-            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-              Invite Users
-            </div>
-          </button>
-        )}
+              {/* Tooltip */}
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                Approve Locks
+              </div>
+            </button>
+          )}
+
+          {/* Manage Members Icon - Only show if user has permission */}
+          {canManageMembers && (
+            <button
+              onClick={onManageMembersClick}
+              className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
+              title="Manage Members"
+            >
+              <Users className="w-4 h-4" />
+
+              {/* Tooltip */}
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                Manage Members
+              </div>
+            </button>
+          )}
+
+          {/* Invite Users Icon - Only show if user has permission */}
+          {canInviteUsers && (
+            <button
+              onClick={onInviteClick}
+              className={`w-8 h-8 rounded-md flex items-center justify-center ${iconHoverClass} transition-all duration-150 group relative active:scale-95`}
+              title="Invite Users"
+            >
+              <UserPlus className="w-4 h-4" />
+
+              {/* Tooltip */}
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/80 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                Invite Users
+              </div>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Project name section */}

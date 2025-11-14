@@ -31,7 +31,10 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   // Store the current project name in state to ensure it's available in context
   const [currentProjectName, setCurrentProjectName] = useState<string>(projectName);
   
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  // File system operations are handled by SBackend (Node.js server on port 3001)
+  // Use a dedicated FILE_SYSTEM_URL so we don't accidentally point at the Python API backend
+  // This avoids 404s when NEXT_PUBLIC_API_URL is set to the FastAPI service.
+  const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
   const lastSavedContent = useRef<string>('');
   const watcherWsRef = useRef<WebSocket | null>(null);
 
@@ -220,10 +223,23 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     
     try {
       const response = await fetch(`${baseUrl}/api/projects/${projectId}/files`);
+      
+      // Check if response is OK before parsing JSON
+      if (!response.ok) {
+        let errorMessage = `Server returned ${response.status}: ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // If response is not JSON, use the status text
+        }
+        throw new Error(errorMessage);
+      }
+      
       const data = await response.json();
       
       if (data.success) {
-        setFileTree(data.structure);
+        setFileTree(data.structure || []);
         
         // Restore previously open files and selected file
         const session = ProjectPersistenceService.loadProjectSession(projectId);
@@ -232,21 +248,24 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           for (const filePath of session.openFiles) {
             try {
               const fileResponse = await fetch(`${baseUrl}/api/projects/${projectId}/files/read?path=${encodeURIComponent(filePath)}`);
-              const fileData = await fileResponse.json();
               
-              if (fileData.success) {
-                const fileItem: FileSystemItem = {
-                  name: filePath.split('/').pop() || filePath,
-                  path: filePath,
-                  type: 'file',
-                  size: fileData.content.length
-                };
+              if (fileResponse.ok) {
+                const fileData = await fileResponse.json();
                 
-                setOpenFiles(prev => new Map(prev).set(filePath, {
-                  item: fileItem,
-                  content: fileData.content,
-                  isDirty: false
-                }));
+                if (fileData.success) {
+                  const fileItem: FileSystemItem = {
+                    name: filePath.split('/').pop() || filePath,
+                    path: filePath,
+                    type: 'file',
+                    size: fileData.content.length
+                  };
+                  
+                  setOpenFiles(prev => new Map(prev).set(filePath, {
+                    item: fileItem,
+                    content: fileData.content,
+                    isDirty: false
+                  }));
+                }
               }
             } catch (error) {
               console.warn(`Failed to restore file: ${filePath}`, error);
@@ -254,7 +273,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           }
           
           // Restore selected file
-          if (session.selectedFile) {
+          if (session.selectedFile && data.structure) {
             const findFileInTree = (items: FileSystemItem[], path: string): FileSystemItem | null => {
               for (const item of items) {
                 if (item.path === path) return item;
@@ -276,7 +295,12 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         throw new Error(data.error || 'Failed to load file tree');
       }
     } catch (error) {
-      handleError(error, 'load file tree');
+      // Handle network errors and other fetch errors
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        handleError(new Error(`Unable to connect to server at ${baseUrl}. Please ensure the backend server is running.`), 'load file tree');
+      } else {
+        handleError(error, 'load file tree');
+      }
     } finally {
       setIsLoading(false);
     }

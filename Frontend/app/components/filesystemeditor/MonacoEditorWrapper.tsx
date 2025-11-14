@@ -387,7 +387,7 @@ export function MonacoEditorWrapper({
           mouseWheelZoom: true,
           mouseWheelScrollSensitivity: 1,
           fastScrollSensitivity: 5,
-          enableMultiCursorModifier: 'ctrlCmd',
+          multiCursorModifier: 'ctrlCmd',
           
           // Render optimization for smoothness
           renderValidationDecorations: 'on',

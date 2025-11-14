@@ -70,6 +70,7 @@ export interface User {
     user: User;
     role: Role;
     inviter?: User | null;
+    is_owner?: boolean; // Indicates if this member is the project owner
   }
   
   // Request types

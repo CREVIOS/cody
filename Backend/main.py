@@ -68,7 +68,42 @@ async def lifespan(app: FastAPI):
                 END$$;
             """))
             
-            
+            # Remove foreign key constraints from file_locks and file_lock_requests.file_id if they exist
+            # (Files are stored in Docker containers/MinIO, not in the database)
+            await conn.execute(text("""
+                DO $$
+                DECLARE
+                    fk_name TEXT;
+                BEGIN
+                    -- Drop foreign key from file_locks.file_id
+                    SELECT tc.constraint_name INTO fk_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu 
+                      ON tc.constraint_name = kcu.constraint_name
+                      AND tc.table_schema = kcu.table_schema
+                    WHERE tc.table_name = 'file_locks'
+                      AND tc.constraint_type = 'FOREIGN KEY'
+                      AND kcu.column_name = 'file_id';
+                    
+                    IF fk_name IS NOT NULL THEN
+                        EXECUTE format('ALTER TABLE file_locks DROP CONSTRAINT IF EXISTS %I', fk_name);
+                    END IF;
+                    
+                    -- Drop foreign key from file_lock_requests.file_id
+                    SELECT tc.constraint_name INTO fk_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu 
+                      ON tc.constraint_name = kcu.constraint_name
+                      AND tc.table_schema = kcu.table_schema
+                    WHERE tc.table_name = 'file_lock_requests'
+                      AND tc.constraint_type = 'FOREIGN KEY'
+                      AND kcu.column_name = 'file_id';
+                    
+                    IF fk_name IS NOT NULL THEN
+                        EXECUTE format('ALTER TABLE file_lock_requests DROP CONSTRAINT IF EXISTS %I', fk_name);
+                    END IF;
+                END$$;
+            """))
             
             # Commit the transaction
             await conn.commit()
@@ -80,7 +115,7 @@ async def lifespan(app: FastAPI):
 
     # Start background lock cleanup task
     try:
-        await start_lock_cleanup_task(get_db)
+        await start_lock_cleanup_task()
         logger.info("✅ Lock cleanup task started")
     except Exception as e:
         logger.error(f"Error starting lock cleanup task: {str(e)}")

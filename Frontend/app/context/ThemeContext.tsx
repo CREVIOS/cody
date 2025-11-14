@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
 export type Theme = "light" | "dark";
 
@@ -12,7 +12,28 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("dark"); // Default theme is dark
+  // Initialize with a consistent default for SSR
+  const [theme, setTheme] = useState<Theme>("dark");
+  const [mounted, setMounted] = useState(false);
+
+  // Only access localStorage after component mounts (client-side only)
+  useEffect(() => {
+    setMounted(true);
+    const storedTheme = localStorage.getItem("theme") as Theme | null;
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme);
+    }
+  }, []);
+
+  // Persist theme to localStorage when it changes
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem("theme", theme);
+      // Apply theme class to document for styling
+      document.documentElement.classList.remove("light", "dark");
+      document.documentElement.classList.add(theme);
+    }
+  }, [theme, mounted]);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
