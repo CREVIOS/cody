@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import type * as Monaco from 'monaco-editor';
 import type { Awareness } from 'y-protocols/awareness';
 
 /**
@@ -32,7 +31,9 @@ interface RemoteCursor {
 }
 
 interface RemoteCursorsProps {
-  editor: Monaco.editor.IStandaloneCodeEditor | null;
+  // Use a loose type here to avoid importing Monaco on the server,
+  // which would break with "window is not defined".
+  editor: any | null;
   awareness: Awareness | null;
   staleTimeout?: number; // ms before a cursor is considered stale
 }
@@ -44,7 +45,7 @@ export function RemoteCursors({
 }: RemoteCursorsProps) {
   const [cursors, setCursors] = useState<Map<number, RemoteCursor>>(new Map());
   const decorationsRef = useRef<Map<number, string[]>>(new Map());
-  const widgetsRef = useRef<Map<number, Monaco.editor.IContentWidget>>(new Map());
+  const widgetsRef = useRef<Map<number, any>>(new Map());
 
   /**
    * Update cursors from awareness
@@ -119,10 +120,10 @@ export function RemoteCursors({
 
     // Create new decorations and widgets
     const newDecorations = new Map<number, string[]>();
-    const newWidgets = new Map<number, Monaco.editor.IContentWidget>();
+    const newWidgets = new Map<number, any>();
 
     activeCursors.forEach((cursor, clientId) => {
-      const decorations: Monaco.editor.IModelDeltaDecoration[] = [];
+      const decorations: any[] = [];
 
       // Selection decoration
       if (cursor.selection) {
@@ -137,7 +138,6 @@ export function RemoteCursors({
             className: 'remote-selection',
             stickiness: 1,
             inlineClassName: 'remote-selection-inline',
-            style: `background-color: ${cursor.userColor}33;`, // 20% opacity
           },
         });
       }
@@ -155,12 +155,11 @@ export function RemoteCursors({
             className: 'remote-cursor',
             stickiness: 1,
             beforeContentClassName: 'remote-cursor-before',
-            style: `border-left: 2px solid ${cursor.userColor};`,
           },
         });
 
         // Cursor name widget
-        const widget: Monaco.editor.IContentWidget = {
+        const widget: any = {
           getId: () => `remote-cursor-${clientId}`,
           getDomNode: () => {
             const node = document.createElement('div');
@@ -182,16 +181,15 @@ export function RemoteCursors({
             node.textContent = cursor.userName;
             return node;
           },
-          getPosition: () => ({
-            position: {
-              lineNumber: cursor.cursor!.line,
-              column: cursor.cursor!.column,
-            },
-            preference: [
-              Monaco.editor.ContentWidgetPositionPreference.ABOVE,
-              Monaco.editor.ContentWidgetPositionPreference.BELOW,
-            ],
-          }),
+            getPosition: () => ({
+              position: {
+                lineNumber: cursor.cursor!.line,
+                column: cursor.cursor!.column,
+              },
+              // 1 = ABOVE, 2 = BELOW in Monaco's ContentWidgetPositionPreference enum.
+              // We use numeric values to avoid importing Monaco on the server.
+              preference: [1, 2],
+            }),
         };
 
         newWidgets.set(clientId, widget);

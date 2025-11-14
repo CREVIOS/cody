@@ -1,5 +1,6 @@
 import { FileSystemItem } from '@/types/fileSystem';
 import { useFileSystem } from '@/context/FileSystemContext';
+import { Lock, Unlock, Clock } from 'lucide-react';
 
 interface FileInfoBarProps {
   selectedFile: FileSystemItem;
@@ -7,6 +8,18 @@ interface FileInfoBarProps {
   isModified: boolean;
   onSave: () => void;
   isDark: boolean;
+  // Lock-related props
+  lockState?: {
+    state: 'UNLOCKED' | 'LOCKED' | 'QUEUED';
+    holder_user_id?: string;
+    holder_name?: string;
+    queue_position?: number;
+    expires_at?: string;
+  };
+  canRequestLock?: boolean;
+  canEdit?: boolean;
+  onRequestLock?: () => void;
+  isRequestingLock?: boolean;
 }
 
 export function FileInfoBar({ 
@@ -14,7 +27,12 @@ export function FileInfoBar({
   language, 
   isModified, 
   onSave, 
-  isDark 
+  isDark,
+  lockState,
+  canRequestLock = false,
+  canEdit = false,
+  onRequestLock,
+  isRequestingLock = false,
 }: FileInfoBarProps) {
   const { selectFile, openFile } = useFileSystem();
 
@@ -106,6 +124,77 @@ export function FileInfoBar({
         </div>
         
         <div className="flex items-center space-x-2 ml-4 shrink-0">
+          {/* Lock Status Indicator */}
+          {lockState && (
+            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-xs ${
+              lockState.state === 'LOCKED'
+                ? (isDark
+                    ? 'bg-red-900/20 text-red-400 border border-red-800/50'
+                    : 'bg-red-50 text-red-700 border border-red-200'
+                  )
+                : lockState.state === 'QUEUED'
+                ? (isDark
+                    ? 'bg-yellow-900/20 text-yellow-400 border border-yellow-800/50'
+                    : 'bg-yellow-50 text-yellow-700 border border-yellow-200'
+                  )
+                : (isDark
+                    ? 'bg-green-900/20 text-green-400 border border-green-800/50'
+                    : 'bg-green-50 text-green-700 border border-green-200'
+                  )
+            }`}>
+              {lockState.state === 'LOCKED' ? (
+                <>
+                  <Lock className="w-3 h-3" />
+                  <span>Locked by {lockState.holder_name || 'Another user'}</span>
+                </>
+              ) : lockState.state === 'QUEUED' ? (
+                <>
+                  <Clock className="w-3 h-3" />
+                  <span>
+                    Queued {lockState.queue_position ? `(#${lockState.queue_position})` : ''}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3 h-3" />
+                  <span>Unlocked</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Request Lock Button */}
+          {canRequestLock && lockState?.state === 'LOCKED' && !canEdit && onRequestLock && (
+            <button
+              onClick={onRequestLock}
+              disabled={isRequestingLock}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded transition-colors duration-150 font-medium ${
+                isRequestingLock
+                  ? (isDark
+                      ? 'bg-[#3e3e42] text-[#969696] cursor-not-allowed opacity-60'
+                      : 'bg-[#e5e5e5] text-[#969696] cursor-not-allowed opacity-60'
+                    )
+                  : (isDark
+                      ? 'bg-indigo-900/30 hover:bg-indigo-900/50 text-indigo-300 border border-indigo-700/50'
+                      : 'bg-indigo-100 hover:bg-indigo-200 text-indigo-700 border border-indigo-300'
+                    )
+              }`}
+              title="Request lock to edit this file"
+            >
+              {isRequestingLock ? (
+                <>
+                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-current"></div>
+                  <span>Requesting...</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-3 h-3" />
+                  <span>Request Lock</span>
+                </>
+              )}
+            </button>
+          )}
+
           {/* Language indicator */}
           <span className={`text-xs px-2 py-0.5 rounded ${
             isDark 

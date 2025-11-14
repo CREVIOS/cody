@@ -89,6 +89,7 @@ class OwnerPermissionStrategy(PermissionStrategy):
         "canRequestLock",
         "canDeleteProject",
         "canManageMembers",
+        "canTransferOwnership",  # Only owners can transfer ownership
         "canManageRoles",
         "canViewAnalytics",
     }
@@ -299,7 +300,7 @@ class PermissionEvaluator:
             # Use the canonical permission set for this project
             permissions_to_check = {
                 "canEdit", "canLock", "canView", "canInvite", "canApproveLock",
-                "canRequestLock", "canDeleteProject", "canManageMembers",
+                "canRequestLock", "canDeleteProject", "canManageMembers", "canTransferOwnership",
             }
         
         return {

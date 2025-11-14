@@ -7,6 +7,8 @@ interface SearchResultsProps {
     isSearching: boolean;
     onContextMenu: (event: React.MouseEvent, item: FileSystemItem) => void;
     onRename: (item: FileSystemItem) => void;
+    onFileClick?: (item: FileSystemItem) => void;
+    canView?: boolean;
     isDark: boolean;
   }
   
@@ -15,7 +17,9 @@ export function SearchResults({
     searchResults, 
     isSearching, 
     onContextMenu, 
-    onRename, 
+    onRename,
+    onFileClick,
+    canView = true,
     isDark 
   }: SearchResultsProps) {
     return (
@@ -35,6 +39,8 @@ export function SearchResults({
               level={0}
               onContextMenu={onContextMenu}
               onRename={onRename}
+              onFileClick={onFileClick}
+              canView={canView}
             />
           ))
         ) : !isSearching ? (

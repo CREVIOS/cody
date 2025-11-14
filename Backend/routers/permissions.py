@@ -27,6 +27,7 @@ KNOWN_PERMISSIONS = [
     "canRequestLock",
     "canDeleteProject",
     "canManageMembers",
+    "canTransferOwnership",
 ]
 
 

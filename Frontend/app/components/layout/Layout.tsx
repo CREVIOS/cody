@@ -3,6 +3,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { FileSystemProvider } from "@/context/FileSystemContext";
 import Sidebar from "@/components/Sidebar";
 import InviteModal from "@/components/invitation/InviteModal";
+import MembersManagementModal from "@/components/members/MembersManagementModal";
+import LockApprovalModal from "@/components/locks/LockApprovalModal";
 import { User, ProjectMemberWithDetails, ProjectInvitation } from "@/lib/projectAPI/TypeDefinitions";
 import { getProjectMembers } from "@/lib/projectAPI/ProjectMembersAPI";
 import { getProjectInvitations } from "@/lib/projectAPI/InvitationAPI";
@@ -37,6 +39,8 @@ export default function Layout({
   const [language, setLanguage] = useState("javascript");
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showMembersManagementModal, setShowMembersManagementModal] = useState(false);
+  const [showLockApprovalModal, setShowLockApprovalModal] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [currentProjectName, setCurrentProjectName] = useState(projectName);
   const [projectMembers, setProjectMembers] = useState<ProjectMemberWithDetails[]>([]);
@@ -50,8 +54,13 @@ export default function Layout({
   const projectNameInputRef = useRef<HTMLInputElement>(null);
   const sidebarResizeRef = useRef<HTMLDivElement>(null);
 
-  const { hasPermission } = usePermissions({
-    roleId: userRoleId,
+  // Always use project-specific permissions (projectId + userId)
+  // This ensures owners are handled correctly via backend Strategy pattern
+  // The backend checks project.owner_id == user_id first, then uses OwnerPermissionStrategy
+  // roleId is only used as fallback if project-specific API fails
+  // Permissions are now cached - won't re-fetch unnecessarily
+  const { hasPermission, loading: permissionsLoading } = usePermissions({
+    roleId: userRoleId, // May be null for owners, but that's OK - project-specific fetch handles it
     projectId: projectId,
     userId: user?.user_id,
   });
@@ -71,19 +80,27 @@ export default function Layout({
             setProjectMembers(members);
             
             if (user) {
+              // Find current user in members list (owner is always included with is_owner: true)
               const currentUserMember = members.find(member => member.user_id === user.user_id);
               if (currentUserMember) {
-                setUserRoleId(currentUserMember.role_id);
+                // Set roleId if available (owners might have role_id from Owner role, or it might be null)
+                // But permissions will be fetched via project-specific API which handles owners correctly
+                setUserRoleId(currentUserMember.role_id || null);
               } else {
+                // User not found in members - might be owner not in list (shouldn't happen, but handle gracefully)
                 setUserRoleId(null);
               }
             }
           } else {
             console.log('No members returned or API error occurred');
+            // Even if no members, set roleId to null - permissions API will handle owner check
+            setUserRoleId(null);
           }
         } catch (err) {
           console.error('Failed to load project members:', err);
           setMembersError('Failed to load collaborators');
+          // On error, set roleId to null - permissions API will handle owner check
+          setUserRoleId(null);
         } finally {
           setMembersLoading(false);
         }
@@ -240,8 +257,14 @@ export default function Layout({
             onNameSubmit={handleNameSubmit}
             onKeyDown={handleKeyDown}
             onHome={onHome}
+            // Show buttons based on permissions - don't hide during loading if we have cached permissions
+            // Only hide if we're loading AND don't have projectId/userId (initial load)
             canInviteUsers={hasPermission('canInvite') && !!user && !!projectId}
             onInviteClick={() => setShowInviteModal(true)}
+            canManageMembers={hasPermission('canManageMembers') && !!user && !!projectId}
+            onManageMembersClick={() => setShowMembersManagementModal(true)}
+            canApproveLock={hasPermission('canApproveLock') && !!user && !!projectId}
+            onApproveLockClick={() => setShowLockApprovalModal(true)}
             borderClass={borderClass}
             inputClass={inputClass}
             iconHoverClass={iconHoverClass}
@@ -297,23 +320,45 @@ export default function Layout({
         />
 
           {/* Invite Modal (permission-gated) */}
-        {showInviteModal && user && projectId && (
-          <PermissionGate
-            roleId={userRoleId}
+        {/* Show modal immediately if button is visible (permission already checked) */}
+        {showInviteModal && user && projectId && hasPermission('canInvite') && (
+          <InviteModal
+            onClose={() => setShowInviteModal(false)}
             projectId={projectId}
+            projectName={currentProjectName}
+            onInviteSent={refreshProjectData}
+            theme={theme}
+            user={user}
+            pendingInvitations={pendingInvitations}
+          />
+        )}
+
+        {/* Members Management Modal (permission-gated) */}
+        {/* Show modal immediately if button is visible (permission already checked) */}
+        {showMembersManagementModal && user && projectId && hasPermission('canManageMembers') && (
+          <MembersManagementModal
+            isOpen={showMembersManagementModal}
+            onClose={() => setShowMembersManagementModal(false)}
+            projectId={projectId}
+            projectName={currentProjectName}
             userId={user.user_id}
-            permission="canInvite"
-          >
-            <InviteModal
-              onClose={() => setShowInviteModal(false)}
-              projectId={projectId}
-              projectName={currentProjectName}
-              onInviteSent={refreshProjectData}
-              theme={theme}
-              user={user}
-              pendingInvitations={pendingInvitations}
-            />
-          </PermissionGate>
+            theme={theme}
+            onMemberUpdated={refreshProjectData}
+          />
+        )}
+
+        {/* Lock Approval Modal (permission-gated) */}
+        {/* Show modal immediately if button is visible (permission already checked) */}
+        {showLockApprovalModal && user && projectId && hasPermission('canApproveLock') && (
+          <LockApprovalModal
+            isOpen={showLockApprovalModal}
+            onClose={() => setShowLockApprovalModal(false)}
+            projectId={projectId}
+            projectName={currentProjectName}
+            userId={user.user_id}
+            theme={theme}
+            onLockReleased={refreshProjectData}
+          />
         )}
       </div>
     </FileSystemProvider>

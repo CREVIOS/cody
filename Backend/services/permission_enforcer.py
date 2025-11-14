@@ -158,7 +158,7 @@ async def get_user_permissions_map(
         # User is not a member, return all False
         default_permissions = [
             "canEdit", "canLock", "canView", "canInvite", "canApproveLock",
-            "canRequestLock", "canDeleteProject", "canManageMembers"
+            "canRequestLock", "canDeleteProject", "canManageMembers", "canTransferOwnership"
         ]
         check_permissions = permissions_to_check or default_permissions
         return {perm: False for perm in check_permissions}
@@ -169,7 +169,7 @@ async def get_user_permissions_map(
         # Role not found, return all False
         default_permissions = [
             "canEdit", "canLock", "canView", "canInvite", "canApproveLock",
-            "canRequestLock", "canDeleteProject", "canManageMembers"
+            "canRequestLock", "canDeleteProject", "canManageMembers", "canTransferOwnership"
         ]
         check_permissions = permissions_to_check or default_permissions
         return {perm: False for perm in check_permissions}

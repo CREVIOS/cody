@@ -58,11 +58,19 @@ else:
 # Create async engine configured for PgBouncer (avoid app-level pooling)
 # - Disable asyncpg statement cache to avoid prepared statements under PgBouncer transaction/statement modes
 # - Provide unique prepared statement names as an additional safeguard when prepared statements are used internally
-connect_args = {}
+# - Relax server-side statement timeout to avoid spurious "canceling statement due to statement timeout"
+connect_args: dict = {}
 if "postgresql+asyncpg" in DATABASE_URL:
     connect_args = {
         "statement_cache_size": 0,
         "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+        # Ensure reasonable server-side timeout; some managed Postgres providers
+        # (and PgBouncer configurations) default to very low statement_timeout
+        # which can break metadata / JSON codec introspection queries.
+        "server_settings": {
+            # 60 seconds; adjust as needed for your environment
+            "statement_timeout": "60000",
+        },
     }
 
 engine = create_async_engine(

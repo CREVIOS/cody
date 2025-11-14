@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 import schema as schemas
 import crud
-from db import get_db
+from db import get_db, AsyncSessionLocal
 
 router = APIRouter(prefix="/websocket-connections", tags=["websocket-connections"])
 
@@ -137,58 +137,64 @@ async def websocket_endpoint(
     websocket: WebSocket,
     room_name: str,
     user_id: UUID,
-    db: AsyncSession = Depends(get_db)
 ):
-    # Verify user exists
-    user = await crud.crud_user.get(db, id=user_id)
-    if not user:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-    
+    """
+    WebSocket endpoint that avoids holding a DB connection open
+    for the entire lifetime of the socket.
+    DB sessions are short-lived and scoped to individual operations.
+    """
+    # Verify user exists using a short-lived session
+    async with AsyncSessionLocal() as db:
+        user = await crud.crud_user.get(db, id=user_id)
+        if not user:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     # Accept the connection
     await websocket.accept()
-    
-    
+
     connection = None
-    
+
     try:
-        # Create connection record
-        connection = await crud.crud_websocket_connection.create(
-            db,
-            obj_in=schemas.WebSocketConnectionCreate(
-                user_id=user_id,
-                room_name=room_name,
-                connection_type="websocket",
-                is_active=True
+        # Create connection record in a short-lived session
+        async with AsyncSessionLocal() as db:
+            connection = await crud.crud_websocket_connection.create(
+                db,
+                obj_in=schemas.WebSocketConnectionCreate(
+                    user_id=user_id,
+                    room_name=room_name,
+                    connection_type="websocket",
+                    is_active=True,
+                ),
             )
-        )
-        
+
         while True:
             # Receive and process messages
             data = await websocket.receive_text()
-            # Process the message here
-            # You can add your message handling logic
-            
+            # Process the message here (no DB by default)
+
             # Send response
             await websocket.send_text(f"Message received: {data}")
-            
+
     except WebSocketDisconnect:
-        # Update connection status when disconnected
+        # Update connection status when disconnected, using a short-lived session
         if connection:
-            await crud.crud_websocket_connection.update(
-                db,
-                db_obj=connection,
-                obj_in=schemas.WebSocketConnectionUpdate(is_active=False)
-            )
+            async with AsyncSessionLocal() as db:
+                await crud.crud_websocket_connection.update(
+                    db,
+                    db_obj=connection,
+                    obj_in=schemas.WebSocketConnectionUpdate(is_active=False),
+                )
     except Exception as e:
         # Handle any other exceptions
         if connection:
-            await crud.crud_websocket_connection.update(
-                db,
-                db_obj=connection,
-                obj_in=schemas.WebSocketConnectionUpdate(
-                    is_active=False,
-                    last_error=str(e)
+            async with AsyncSessionLocal() as db:
+                await crud.crud_websocket_connection.update(
+                    db,
+                    db_obj=connection,
+                    obj_in=schemas.WebSocketConnectionUpdate(
+                        is_active=False,
+                        last_error=str(e),
+                    ),
                 )
-            )
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR) 
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)

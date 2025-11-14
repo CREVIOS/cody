@@ -6,7 +6,8 @@ export type Permission =
   | 'canApproveLock'
   | 'canRequestLock'
   | 'canDeleteProject'
-  | 'canManageMembers';
+  | 'canManageMembers'
+  | 'canTransferOwnership';
 
 export interface Permissions {
   canView: boolean;
@@ -17,6 +18,7 @@ export interface Permissions {
   canRequestLock: boolean;
   canDeleteProject: boolean;
   canManageMembers: boolean;
+  canTransferOwnership: boolean;
 }
 
 export const CANONICAL_PERMISSIONS: Permission[] = [
@@ -28,6 +30,7 @@ export const CANONICAL_PERMISSIONS: Permission[] = [
   'canRequestLock',
   'canDeleteProject',
   'canManageMembers',
+  'canTransferOwnership',
 ];
 
 export const DEFAULT_PERMISSIONS: Permissions = CANONICAL_PERMISSIONS.reduce(
@@ -47,4 +50,5 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   canRequestLock: 'Request Locks',
   canDeleteProject: 'Delete Project',
   canManageMembers: 'Manage Members',
+  canTransferOwnership: 'Transfer Ownership',
 };

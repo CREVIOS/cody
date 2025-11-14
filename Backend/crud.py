@@ -165,6 +165,18 @@ class CRUDFileType(CRUDBase[models.FileType, schemas.FileTypeCreate, schemas.Fil
 class CRUDFileVersion(CRUDBase[models.FileVersion, schemas.FileVersionCreate, schemas.FileVersionUpdate]):
     pass
 
+class CRUDExecutionEnvironment(CRUDBase[models.ExecutionEnvironment, schemas.ExecutionEnvironmentCreate, schemas.ExecutionEnvironmentUpdate]):
+    async def get_by_name(self, db: AsyncSession, *, environment_name: str) -> Optional[models.ExecutionEnvironment]:
+        result = await db.execute(select(self.model).where(self.model.environment_name == environment_name))
+        return result.scalar_one_or_none()
+
+class CRUDTerminalEnvironment(CRUDBase[models.TerminalEnvironment, schemas.TerminalEnvironmentCreate, schemas.TerminalEnvironmentUpdate]):
+    async def get_by_name(self, db: AsyncSession, *, environment_name: str) -> Optional[models.TerminalEnvironment]:
+        # Note: TerminalEnvironment doesn't have environment_name, but the router expects this method
+        # This might need to be adjusted based on actual requirements
+        # For now, returning None as TerminalEnvironment uses container_id/websocket_id
+        return None
+
 class CRUDProjectMember(CRUDBase[models.ProjectMember, schemas.ProjectMemberCreate, schemas.ProjectMemberUpdate]):
     async def get_by_user(self, db: AsyncSession, *, user_id: UUID) -> List[models.ProjectMember]:
         result = await db.execute(
@@ -306,6 +318,8 @@ crud_file_type = CRUDFileType(models.FileType)
 crud_directory = CRUDBase[models.Directory, schemas.DirectoryCreate, schemas.DirectoryUpdate](models.Directory)
 crud_file = CRUDBase[models.File, schemas.FileCreate, schemas.FileUpdate](models.File)
 crud_file_version = CRUDFileVersion(models.FileVersion)
+crud_execution_environment = CRUDExecutionEnvironment(models.ExecutionEnvironment)
+crud_terminal_environment = CRUDTerminalEnvironment(models.TerminalEnvironment)
 crud_project_invitation = CRUDProjectInvitation(models.ProjectInvitation)
 crud_notification = CRUDBase[models.Notification, schemas.NotificationCreate, schemas.NotificationUpdate](models.Notification)
 

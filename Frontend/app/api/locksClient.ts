@@ -45,12 +45,15 @@ export async function apiHealth(): Promise<{ status: string; timestamp: number }
   return j(r);
 }
 
-export async function apiGetLock(fileId?: string | null) {
+export async function apiGetLock(fileId?: string | null, projectId?: string | null) {
   if (!fileId) {
     console.warn("apiGetLock: missing fileId — returning UNLOCKED");
     return DEFAULT_UNLOCKED;
   }
-  const url = `${BASE}/locks/${fileId}/state`;
+  // Add project_id query parameter if fileId is not a UUID (i.e., it's a file path)
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId);
+  const queryParams = !isUUID && projectId ? `?project_id=${projectId}` : '';
+  const url = `${BASE}/locks/${encodeURIComponent(fileId)}/state${queryParams}`;
   console.log("🔎 GET", url);
   const r = await fx(url);
   const data = await j<{ state: LockState }>(r);
@@ -61,16 +64,20 @@ export async function apiGetLock(fileId?: string | null) {
 export async function apiRequestLock(
   fileId?: string | null,
   userId?: string | null,
-  role: Role = "editor"
+  role: Role = "editor",
+  projectId?: string | null
 ) {
   assertId("fileId", fileId);
   assertId("userId", userId);
 
-  const url = `${BASE}/locks/${fileId}/request`;
+  // Add project_id query parameter if fileId is not a UUID (i.e., it's a file path)
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId);
+  const queryParams = !isUUID && projectId ? `?project_id=${projectId}` : '';
+  const url = `${BASE}/locks/${encodeURIComponent(fileId)}/request${queryParams}`;
   // Normalize role to lowercase for backend consistency
   const normalizedRole = role.toLowerCase();
   
-  console.log("📤 REQUESTING LOCK", { fileId, userId, role: normalizedRole });
+  console.log("📤 REQUESTING LOCK", { fileId, userId, role: normalizedRole, projectId });
   
   const r = await fx(url, {
     method: "POST",
@@ -83,12 +90,19 @@ export async function apiRequestLock(
   return data.state;
 }
 
-export async function apiReleaseLock(fileId?: string | null, userId?: string | null) {
+export async function apiReleaseLock(
+  fileId?: string | null,
+  userId?: string | null,
+  projectId?: string | null
+) {
   assertId("fileId", fileId);
   assertId("userId", userId);
 
-  const url = `${BASE}/locks/${fileId}/release`;
-  console.log("🔓 RELEASING LOCK", { fileId, userId });
+  // Add project_id query parameter if fileId is not a UUID (i.e., it's a file path)
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId);
+  const queryParams = !isUUID && projectId ? `?project_id=${projectId}` : '';
+  const url = `${BASE}/locks/${encodeURIComponent(fileId)}/release${queryParams}`;
+  console.log("🔓 RELEASING LOCK", { fileId, userId, projectId });
   const r = await fx(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -99,12 +113,19 @@ export async function apiReleaseLock(fileId?: string | null, userId?: string | n
   return data.state;
 }
 
-export async function apiHeartbeat(fileId?: string | null, userId?: string | null) {
+export async function apiHeartbeat(
+  fileId?: string | null,
+  userId?: string | null,
+  projectId?: string | null
+) {
   assertId("fileId", fileId);
   assertId("userId", userId);
 
-  const url = `${BASE}/locks/${fileId}/heartbeat`;
-  console.log("💓 HEARTBEAT", { fileId, userId });
+  // Add project_id query parameter if fileId is not a UUID (i.e., it's a file path)
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId);
+  const queryParams = !isUUID && projectId ? `?project_id=${projectId}` : '';
+  const url = `${BASE}/locks/${encodeURIComponent(fileId)}/heartbeat${queryParams}`;
+  console.log("💓 HEARTBEAT", { fileId, userId, projectId });
   const r = await fx(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

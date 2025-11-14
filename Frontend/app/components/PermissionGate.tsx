@@ -23,14 +23,18 @@ export default function PermissionGate({
   fallback = null,
   children,
 }: PermissionGateProps) {
-  const { loading, hasAnyPermission, hasAllPermissions } = usePermissions({ roleId, projectId, userId });
+  const { loading, hasAnyPermission, hasAllPermissions, permissions } = usePermissions({ roleId, projectId, userId });
 
   const allowed = useMemo(() => {
     const permissions = Array.isArray(permission) ? permission : [permission];
     return mode === 'all' ? hasAllPermissions(permissions) : hasAnyPermission(permissions);
   }, [permission, mode, hasAnyPermission, hasAllPermissions]);
 
-  if (loading) return null;
+  // If we have cached permissions (not loading), show immediately
+  // Only wait for loading if we don't have any permissions yet
+  if (loading && Object.values(permissions).every(v => v === false)) {
+    return null;
+  }
   return allowed ? <>{children}</> : <>{fallback}</>;
 }
 
