@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { FileSystemItem, FileSystemContextType, SearchResult } from '@/types/fileSystem';
 import { ProjectPersistenceService, ProjectSession } from '@/lib/projectPersistence';
+import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand } from '@/lib/commands';
 
 const FileSystemContext = createContext<FileSystemContextType | undefined>(undefined);
 
@@ -519,25 +520,45 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
 
   const deleteItem = useCallback(async (path: string) => {
     if (!projectId) return;
-    
+
     try {
-      const response = await fetch(`${baseUrl}/api/projects/${projectId}/items/delete`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path })
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        // Close file if it's open
-        if (openFiles.has(path)) {
-          closeFile(path);
+      // Create file system service adapter for command
+      const fileSystemService = {
+        readFile: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/read?path=${encodeURIComponent(filePath)}`);
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to read file');
+          return data.content;
+        },
+        deleteItem: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to delete item');
+        },
+        createFile: async (projId: string, filePath: string, content: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath, content })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to create file');
         }
-        await loadFileTree();
-      } else {
-        throw new Error(data.error || 'Failed to delete item');
+      };
+
+      // Execute delete using command pattern (enables undo)
+      const command = new DeleteFileCommand('current-user', projectId, path, fileSystemService);
+      await commandManager.execute(command);
+
+      // Close file if it's open
+      if (openFiles.has(path)) {
+        closeFile(path);
       }
+      await loadFileTree();
     } catch (error) {
       handleError(error, 'delete item');
     }
@@ -545,37 +566,42 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
 
   const renameItem = useCallback(async (oldPath: string, newPath: string) => {
     if (!projectId) return;
-    
+
     try {
-      const response = await fetch(`${baseUrl}/api/projects/${projectId}/items/rename`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPath, newPath })
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        // Update open files map if the renamed item was open
-        if (openFiles.has(oldPath)) {
-          const openFile = openFiles.get(oldPath)!;
-          setOpenFiles(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(oldPath);
-            newMap.set(newPath, { ...openFile, item: { ...openFile.item, path: newPath, name: newPath.split('/').pop() || newPath } });
-            return newMap;
+      // Create file system service adapter for command
+      const fileSystemService = {
+        renameItem: async (projId: string, oldP: string, newP: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/rename`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oldPath: oldP, newPath: newP })
           });
-          
-          // Update selected file if it was the renamed one
-          if (selectedFile?.path === oldPath) {
-            setSelectedFile(prev => prev ? { ...prev, path: newPath, name: newPath.split('/').pop() || newPath } : null);
-          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to rename item');
         }
-        
-        await loadFileTree();
-      } else {
-        throw new Error(data.error || 'Failed to rename item');
+      };
+
+      // Execute rename using command pattern (enables undo)
+      const command = new RenameFileCommand('current-user', projectId, oldPath, newPath, fileSystemService);
+      await commandManager.execute(command);
+
+      // Update open files map if the renamed item was open
+      if (openFiles.has(oldPath)) {
+        const openFile = openFiles.get(oldPath)!;
+        setOpenFiles(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(oldPath);
+          newMap.set(newPath, { ...openFile, item: { ...openFile.item, path: newPath, name: newPath.split('/').pop() || newPath } });
+          return newMap;
+        });
+
+        // Update selected file if it was the renamed one
+        if (selectedFile?.path === oldPath) {
+          setSelectedFile(prev => prev ? { ...prev, path: newPath, name: newPath.split('/').pop() || newPath } : null);
+        }
       }
+
+      await loadFileTree();
     } catch (error) {
       handleError(error, 'rename item');
     }
@@ -629,16 +655,85 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     }
   }, [projectId, baseUrl]);
 
-  // Stub implementations for missing methods
+  // Copy and move operations with command pattern
   const copyItem = useCallback(async (sourcePath: string, destinationPath: string) => {
-    // TODO: Implement copy functionality
-    console.log('Copy not implemented yet', { sourcePath, destinationPath });
-  }, []);
+    if (!projectId) return;
+
+    try {
+      // Create file system service adapter for command
+      const fileSystemService = {
+        copyItem: async (projId: string, source: string, destination: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/copy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourcePath: source, destinationPath: destination })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to copy item');
+        },
+        deleteItem: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to delete item');
+        }
+      };
+
+      // Execute copy using command pattern (enables undo)
+      const command = new CopyFileCommand('current-user', projectId, sourcePath, destinationPath, fileSystemService);
+      await commandManager.execute(command);
+
+      await loadFileTree();
+    } catch (error) {
+      handleError(error, 'copy item');
+    }
+  }, [projectId, baseUrl, loadFileTree]);
 
   const moveItem = useCallback(async (sourcePath: string, destinationPath: string) => {
-    // TODO: Implement move functionality
-    console.log('Move not implemented yet', { sourcePath, destinationPath });
-  }, []);
+    if (!projectId) return;
+
+    try {
+      // Create file system service adapter for command
+      const fileSystemService = {
+        moveItem: async (projId: string, source: string, destination: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourcePath: source, destinationPath: destination })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to move item');
+        }
+      };
+
+      // Execute move using command pattern (enables undo)
+      const command = new MoveFileCommand('current-user', projectId, sourcePath, destinationPath, fileSystemService);
+      await commandManager.execute(command);
+
+      // Update open files map if the moved item was open
+      if (openFiles.has(sourcePath)) {
+        const openFile = openFiles.get(sourcePath)!;
+        setOpenFiles(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(sourcePath);
+          newMap.set(destinationPath, { ...openFile, item: { ...openFile.item, path: destinationPath, name: destinationPath.split('/').pop() || destinationPath } });
+          return newMap;
+        });
+
+        // Update selected file if it was the moved one
+        if (selectedFile?.path === sourcePath) {
+          setSelectedFile(prev => prev ? { ...prev, path: destinationPath, name: destinationPath.split('/').pop() || destinationPath } : null);
+        }
+      }
+
+      await loadFileTree();
+    } catch (error) {
+      handleError(error, 'move item');
+    }
+  }, [projectId, baseUrl, openFiles, selectedFile, loadFileTree]);
 
   const closeAllFiles = useCallback(() => {
     setOpenFiles(new Map());
