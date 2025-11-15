@@ -543,15 +543,209 @@ class FileSystemService {
     try {
       const prefix = `${projectId}/`;
       const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, false);
-      
+
       for await (const obj of objectsStream) {
         // If we find any object with this prefix, project exists
         return { success: true, exists: true };
       }
-      
+
       return { success: true, exists: false };
     } catch (error) {
       console.error('Error checking project existence:', error);
+      throw error;
+    }
+  }
+
+  // ==================== VERSION MANAGEMENT ====================
+
+  /**
+   * List all versions of a specific file
+   * Returns array of versions with metadata
+   */
+  async listFileVersions(projectId, filePath) {
+    try {
+      const objectName = `${projectId}/${filePath}`;
+      const versions = [];
+
+      // List all versions of the object
+      const stream = this.minioClient.listObjects(
+        this.bucketName,
+        objectName,
+        false,
+        { IncludeVersion: true }
+      );
+
+      for await (const obj of stream) {
+        // Skip if this is just a prefix/folder
+        if (obj.name !== objectName) {
+          continue;
+        }
+
+        versions.push({
+          versionId: obj.versionId,
+          isLatest: obj.isLatest || false,
+          lastModified: obj.lastModified,
+          size: obj.size,
+          etag: obj.etag,
+          isDeleteMarker: obj.isDeleteMarker || false
+        });
+      }
+
+      // Sort by lastModified descending (newest first)
+      versions.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+
+      return {
+        success: true,
+        file: filePath,
+        versions: versions,
+        totalVersions: versions.length
+      };
+    } catch (error) {
+      console.error('Error listing file versions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get content of a specific version of a file
+   */
+  async getFileVersion(projectId, filePath, versionId) {
+    try {
+      const objectName = `${projectId}/${filePath}`;
+
+      // Get the specific version from MinIO
+      const stream = await this.minioClient.getObject(
+        this.bucketName,
+        objectName,
+        { versionId: versionId }
+      );
+
+      let content = '';
+      for await (const chunk of stream) {
+        content += chunk.toString();
+      }
+
+      // Get metadata for this version
+      const stat = await this.minioClient.statObject(
+        this.bucketName,
+        objectName,
+        { versionId: versionId }
+      );
+
+      return {
+        success: true,
+        content: content,
+        path: filePath,
+        versionId: versionId,
+        metadata: {
+          size: stat.size,
+          lastModified: stat.lastModified,
+          etag: stat.etag
+        }
+      };
+    } catch (error) {
+      console.error(`Error getting file version ${versionId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Restore a file to a specific version
+   * This creates a new version with the content of the old version
+   */
+  async restoreFileVersion(projectId, filePath, versionId) {
+    try {
+      const objectName = `${projectId}/${filePath}`;
+
+      // 1. Get the content of the version to restore
+      const versionData = await this.getFileVersion(projectId, filePath, versionId);
+
+      // 2. Upload it as the current version (creates a new version)
+      const buffer = Buffer.from(versionData.content, 'utf8');
+      await this.minioClient.putObject(
+        this.bucketName,
+        objectName,
+        buffer,
+        buffer.length,
+        {
+          'Content-Type': 'text/plain',
+          'x-amz-meta-restored-from': versionId, // Mark that this was restored
+          'x-amz-meta-restored-at': new Date().toISOString()
+        }
+      );
+
+      return {
+        success: true,
+        message: `File restored to version ${versionId}`,
+        path: filePath,
+        restoredFrom: versionId
+      };
+    } catch (error) {
+      console.error(`Error restoring file to version ${versionId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a specific version of a file
+   * Note: This permanently deletes that version
+   */
+  async deleteFileVersion(projectId, filePath, versionId) {
+    try {
+      const objectName = `${projectId}/${filePath}`;
+
+      await this.minioClient.removeObject(
+        this.bucketName,
+        objectName,
+        { versionId: versionId }
+      );
+
+      return {
+        success: true,
+        message: `Version ${versionId} deleted successfully`,
+        path: filePath,
+        deletedVersion: versionId
+      };
+    } catch (error) {
+      console.error(`Error deleting version ${versionId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get versioning status for the bucket
+   */
+  async getVersioningStatus() {
+    try {
+      const config = await this.minioClient.getBucketVersioning(this.bucketName);
+      return {
+        success: true,
+        bucket: this.bucketName,
+        status: config.Status || 'Not Enabled',
+        mfaDelete: config.MFADelete || 'Disabled'
+      };
+    } catch (error) {
+      console.error('Error getting versioning status:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Enable versioning on the bucket (should be run once during setup)
+   */
+  async enableVersioning() {
+    try {
+      await this.minioClient.setBucketVersioning(this.bucketName, {
+        Status: 'Enabled'
+      });
+
+      return {
+        success: true,
+        message: `Versioning enabled on bucket '${this.bucketName}'`,
+        bucket: this.bucketName
+      };
+    } catch (error) {
+      console.error('Error enabling versioning:', error);
       throw error;
     }
   }
