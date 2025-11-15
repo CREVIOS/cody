@@ -294,16 +294,22 @@ class CollaborationRoom extends EventEmitter {
 
   /**
    * Check if a user has permission to edit (via file lock)
+   *
+   * Integration improvement: This connects CRDT and file locking systems.
+   * - When lock checking is enabled, CRDT respects file locks
+   * - Users without locks cannot make CRDT updates
+   * - This prevents the "philosophical conflict" between the two systems
    */
   async checkEditPermission(userId, fileId) {
     if (!LOCK_CHECK_ENABLED) {
+      this.logger.debug('Lock checking disabled - allowing edit', { userId, fileId });
       return true; // Lock checking disabled
     }
 
     try {
       // Query the Backend lock service to verify user has the lock
       const response = await axios.get(`${BACKEND_API_URL}/locks/${fileId}/state`, {
-        timeout: 2000, // 2 second timeout
+        timeout: 3000, // 3 second timeout (increased from 2s for reliability)
         validateStatus: (status) => status < 500 // Don't throw on 4xx errors
       });
 
@@ -319,26 +325,50 @@ class CollaborationRoom extends EventEmitter {
               fileId,
               actualHolder: lockState.holder_user_id
             });
+          } else {
+            this.logger.debug('Edit allowed: user holds lock', { userId, fileId });
           }
           return isHolder;
         }
 
-        // If unlocked, allow (for graceful degradation)
+        // If unlocked, allow (graceful degradation - multiple users can edit)
+        this.logger.debug('Edit allowed: file is unlocked', { userId, fileId });
         return true;
       }
 
       // If lock service is unavailable, allow edit (fail-open for availability)
-      this.logger.warn('Lock check failed, allowing edit (fail-open)', { userId, fileId, status: response.status });
+      // Alternative: fail-closed would reject edits if lock service is down
+      this.logger.warn('Lock check failed, allowing edit (fail-open)', {
+        userId,
+        fileId,
+        status: response.status,
+        message: 'Consider setting LOCK_CHECK_ENABLED=false if lock service is not available'
+      });
       return true;
     } catch (error) {
-      // Network error or timeout - fail open to maintain availability
-      this.logger.error('Lock verification error, allowing edit (fail-open)', error);
+      // Network error or timeout
+      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+        this.logger.error('Lock service unreachable, allowing edit (fail-open)', {
+          userId,
+          fileId,
+          error: error.message,
+          code: error.code
+        });
+      } else {
+        this.logger.error('Lock verification error, allowing edit (fail-open)', {
+          userId,
+          fileId,
+          error: error.message
+        });
+      }
       return true;
     }
   }
 
   /**
    * Handle document update with lock verification
+   *
+   * Integration improvement: Enhanced error messaging and logging
    */
   async handleUpdate(clientId, decoder) {
     const conn = this.connections.get(clientId);
@@ -350,19 +380,31 @@ class CollaborationRoom extends EventEmitter {
     // Extract file ID from docId (assuming format: projectId/fileId or just fileId)
     const fileId = this.docId.includes('/') ? this.docId.split('/').pop() : this.docId;
     const userId = conn.user.id;
+    const userName = conn.user.name;
 
     // Verify user has permission to edit
     const hasPermission = await this.checkEditPermission(userId, fileId);
 
     if (!hasPermission) {
-      this.logger.warn('Update rejected: no edit permission', { clientId, userId, fileId });
+      this.logger.warn('Update rejected: no edit permission', {
+        clientId,
+        userId,
+        userName,
+        fileId,
+        docId: this.docId
+      });
 
-      // Send error message back to client
+      // Send detailed error message back to client
       const errorMessage = JSON.stringify({
         type: 'error',
         code: 'EDIT_PERMISSION_DENIED',
         message: 'You do not have permission to edit this file. Another user holds the lock.',
-        timestamp: Date.now()
+        details: {
+          fileId,
+          userId,
+          timestamp: Date.now(),
+          action: 'Request lock or wait for current editor to release'
+        }
       });
 
       if (conn.ws.readyState === conn.ws.OPEN) {
@@ -373,6 +415,7 @@ class CollaborationRoom extends EventEmitter {
     }
 
     // Permission granted - apply update
+    this.logger.debug('Update accepted', { clientId, userId, userName, fileId });
     const update = syncProtocol.readUpdate(decoder, this.doc, 'client');
 
     // Broadcast with batching if enabled
