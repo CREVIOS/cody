@@ -1,0 +1,57 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+sequenceDiagram
+    actor User
+    participant UI as VersionHistoryPanel
+    participant CM as CommandManager
+    participant Cmd as RestoreVersionCommand
+    participant FSS as FileSystemService
+    participant MinIO as MinIO
+
+    rect rgb(240, 248, 255)
+        Note over User,MinIO: Undo Restore
+    end
+
+    User->>UI: Press Ctrl+Z (Undo)
+    activate UI
+
+    UI->>CM: undo()
+    activate CM
+
+    CM->>CM: Pop from command stack
+    CM->>Cmd: undo()
+    activate Cmd
+
+    rect rgb(255, 247, 237)
+        Note right of Cmd: Template Method Pattern<br/>BaseCommand.undo() checks preconditions<br/>and calls doUndo() hook
+    end
+
+    Cmd->>Cmd: doUndo()
+    activate Cmd
+
+    rect rgb(240, 253, 244)
+        Note right of Cmd: Memento Pattern<br/>Restore previous content<br/>from saved memento
+    end
+
+    Cmd->>Cmd: Restore this.previousContent
+    deactivate Cmd
+
+    Cmd->>FSS: restoreVersion(previousVersionId)
+    activate FSS
+    FSS->>MinIO: putObject(previousContent)
+    activate MinIO
+    MinIO-->>FSS: Success
+    deactivate MinIO
+    FSS-->>Cmd: Restored
+    deactivate FSS
+
+    Cmd->>Cmd: this.executed = false
+    Cmd-->>CM: Undo complete
+    deactivate Cmd
+
+    CM->>CM: Push to redo stack
+    CM-->>UI: Undo successful
+    deactivate CM
+
+    UI->>UI: Refresh file content
+    UI-->>User: UI updates with content before restore
+    deactivate UI
