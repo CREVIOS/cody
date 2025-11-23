@@ -1,0 +1,29 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+sequenceDiagram
+    actor User
+    participant UI as VersionHistoryPanel
+    participant FSS as FileSystemService
+    participant MinIO as MinIO
+
+    rect rgb(240, 248, 255)
+        Note over User,MinIO: View Version History
+    end
+
+    User->>UI: Click "Version History" button
+    activate UI
+
+    UI->>FSS: getVersions()
+    activate FSS
+
+    FSS->>MinIO: listObjects(IncludeVersion: true)
+    activate MinIO
+    MinIO-->>FSS: Stream of version objects
+    deactivate MinIO
+
+    FSS->>FSS: Transform to FileVersion[] format
+    FSS-->>UI: {success: true, versions: [...]}
+    deactivate FSS
+
+    UI->>UI: Display version timeline with timestamps and metadata
+    UI-->>User: Show versions with timestamps
+    deactivate UI

@@ -6,11 +6,14 @@ import { MonacoEditorWrapper } from './MonacoEditorWrapper';
 import { User } from "@/lib/projectAPI/TypeDefinitions";
 import { usePermissions } from '@/hooks/usePermissions';
 import { useFileLock } from '@/hooks/useFileLock';
+import { useCommandManager } from '@/hooks/useCommandManager';
 
 interface OpenFileContent {
   item: FileSystemItem;
   content: string;
+  savedContent: string;
   isDirty: boolean;
+  isSaving?: boolean;
   projectId?: string;
   user?: User;
 }
@@ -77,30 +80,76 @@ export function FileEditorContent({
     updateCurrentContent(value || "");
   };
 
-  const handleSave = useCallback(() => {
+  // Command manager for undo/redo
+  const { canUndo, canRedo, undo, redo } = useCommandManager();
+
+  const handleSave = useCallback(async () => {
     if (!canEdit) return;
     if (selectedFile && currentFileContent !== undefined) {
-      saveFile(selectedFile.path, currentFileContent);
+      try {
+        await saveFile(selectedFile.path, currentFileContent);
+      } catch (error) {
+        console.error('Save failed:', error);
+        // Error is already handled in saveFile, but we can show additional feedback here if needed
+      }
     }
   }, [selectedFile, currentFileContent, saveFile, canEdit]);
 
-  // Handle Ctrl+S / Cmd+S for save
+  const handleUndo = useCallback(async () => {
+    if (!canEdit || !canUndo) return;
+    try {
+      await undo();
+    } catch (error) {
+      console.error('Undo failed:', error);
+    }
+  }, [canEdit, canUndo, undo]);
+
+  const handleRedo = useCallback(async () => {
+    if (!canEdit || !canRedo) return;
+    try {
+      await redo();
+    } catch (error) {
+      console.error('Redo failed:', error);
+    }
+  }, [canEdit, canRedo, redo]);
+
+  // Handle keyboard shortcuts: Ctrl+S (save), Ctrl+Z (undo), Ctrl+Y/Ctrl+Shift+Z (redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S / Cmd+S for save
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         if (canEdit) handleSave();
+      }
+      // Ctrl+Z / Cmd+Z for undo
+      else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        if (canEdit && canUndo) handleUndo();
+      }
+      // Ctrl+Y or Ctrl+Shift+Z / Cmd+Shift+Z for redo
+      else if (
+        ((e.ctrlKey || e.metaKey) && e.key === "y") ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "z")
+      ) {
+        e.preventDefault();
+        if (canEdit && canRedo) handleRedo();
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [handleSave, canEdit]);
+  }, [handleSave, handleUndo, handleRedo, canEdit, canUndo, canRedo]);
 
   const isModified = () => {
     const openFile = openFiles.get(selectedFile.path);
     if (!openFile) return false;
-    return currentFileContent !== openFile.content;
+    // Check if content differs from saved content
+    return openFile.isDirty || currentFileContent !== (openFile.savedContent || openFile.content);
+  };
+
+  const isSaving = () => {
+    const openFile = openFiles.get(selectedFile.path);
+    return openFile?.isSaving || false;
   };
 
   const handleRequestLock = useCallback(async () => {
@@ -149,6 +198,7 @@ export function FileEditorContent({
         selectedFile={selectedFile}
         language={language}
         isModified={canEdit && isModified()}
+        isSaving={isSaving()}
         onSave={handleSave}
         isDark={isDark}
         lockState={lockStateForBar}

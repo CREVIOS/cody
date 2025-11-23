@@ -165,16 +165,29 @@ export class CommandManager {
    * @private
    */
   private emitStateChange(): void {
+    const canUndo = this.canUndo();
+    const canRedo = this.canRedo();
+    
+    // Debug logging
+    console.log('[CommandManager] State changed:', {
+      undoStackLength: this.undoStack.length,
+      redoStackLength: this.redoStack.length,
+      canUndo,
+      canRedo,
+      undoDescription: this.getUndoDescription(),
+      redoDescription: this.getRedoDescription()
+    });
+
     eventBus.publish({
       type: EventType.PERMISSION_CHANGED, // Reusing existing event type
       timestamp: Date.now(),
       userId: '',
       projectId: '',
       permission: 'command_stack_changed',
-      granted: this.canUndo(),
+      granted: canUndo,
       // Custom payload for command stack
-      canUndo: this.canUndo(),
-      canRedo: this.canRedo(),
+      canUndo: canUndo,
+      canRedo: canRedo,
       undoDescription: this.getUndoDescription(),
       redoDescription: this.getRedoDescription(),
     } as any);

@@ -113,14 +113,20 @@ async def lifespan(app: FastAPI):
         logger.error(traceback.format_exc())
         raise
 
-    # Start background lock cleanup task
+    # Start background lock cleanup task (non-blocking)
     try:
-        await start_lock_cleanup_task()
-        logger.info("✅ Lock cleanup task started")
+        task = await start_lock_cleanup_task()
+        if task:
+            logger.info("✅ Lock cleanup task started")
+        else:
+            logger.warning("⚠️ Lock cleanup task was not started (may already be running)")
     except Exception as e:
         logger.error(f"Error starting lock cleanup task: {str(e)}")
         logger.error(traceback.format_exc())
+        # Don't fail startup if cleanup task fails - it's not critical
+        logger.warning("⚠️ Continuing startup despite lock cleanup task error")
 
+    logger.info("🚀 Application startup complete")
     yield
 
     # Shutdown

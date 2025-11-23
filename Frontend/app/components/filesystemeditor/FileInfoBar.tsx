@@ -1,11 +1,13 @@
 import { FileSystemItem } from '@/types/fileSystem';
 import { useFileSystem } from '@/context/FileSystemContext';
-import { Lock, Unlock, Clock } from 'lucide-react';
+import { Lock, Unlock, Clock, Undo2, Redo2 } from 'lucide-react';
+import { useCommandManager } from '@/hooks/useCommandManager';
 
 interface FileInfoBarProps {
   selectedFile: FileSystemItem;
   language: string;
   isModified: boolean;
+  isSaving?: boolean;
   onSave: () => void;
   isDark: boolean;
   // Lock-related props
@@ -26,6 +28,7 @@ export function FileInfoBar({
   selectedFile, 
   language, 
   isModified, 
+  isSaving = false,
   onSave, 
   isDark,
   lockState,
@@ -35,6 +38,25 @@ export function FileInfoBar({
   isRequestingLock = false,
 }: FileInfoBarProps) {
   const { selectFile, openFile } = useFileSystem();
+  const { canUndo, canRedo, undoDescription, redoDescription, undo, redo } = useCommandManager();
+
+  const handleUndo = async () => {
+    if (!canEdit || !canUndo) return;
+    try {
+      await undo();
+    } catch (error) {
+      console.error('Undo failed:', error);
+    }
+  };
+
+  const handleRedo = async () => {
+    if (!canEdit || !canRedo) return;
+    try {
+      await redo();
+    } catch (error) {
+      console.error('Redo failed:', error);
+    }
+  };
 
   // Create breadcrumb segments from the file path
   const createBreadcrumbs = (path: string) => {
@@ -203,12 +225,64 @@ export function FileInfoBar({
           }`}>
             {language.toUpperCase()}
           </span>
+
+          {/* Undo/Redo buttons - only show if user can edit */}
+          {canEdit && (
+            <>
+              {/* Undo button */}
+              <button
+                onClick={handleUndo}
+                disabled={!canUndo}
+                title={undoDescription || "Nothing to undo (Ctrl+Z)"}
+                className={`p-1.5 rounded transition-colors duration-150 ${
+                  canUndo
+                    ? (isDark
+                        ? 'hover:bg-[#2a2d2e] text-[#cccccc]'
+                        : 'hover:bg-[#e8e8e8] text-[#383838]'
+                      )
+                    : (isDark
+                        ? 'text-[#616161] cursor-not-allowed opacity-50'
+                        : 'text-[#969696] cursor-not-allowed opacity-50'
+                      )
+                }`}
+                aria-label="Undo"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+
+              {/* Redo button */}
+              <button
+                onClick={handleRedo}
+                disabled={!canRedo}
+                title={redoDescription || "Nothing to redo (Ctrl+Y)"}
+                className={`p-1.5 rounded transition-colors duration-150 ${
+                  canRedo
+                    ? (isDark
+                        ? 'hover:bg-[#2a2d2e] text-[#cccccc]'
+                        : 'hover:bg-[#e8e8e8] text-[#383838]'
+                      )
+                    : (isDark
+                        ? 'text-[#616161] cursor-not-allowed opacity-50'
+                        : 'text-[#969696] cursor-not-allowed opacity-50'
+                      )
+                }`}
+                aria-label="Redo"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
           
           {/* Save button */}
           <button
             onClick={onSave}
             className={`px-3 py-1 text-xs rounded transition-colors duration-150 font-medium ${
-              isModified
+              isSaving
+                ? (isDark
+                    ? 'bg-[#0e639c] text-[#ffffff] cursor-wait opacity-75'
+                    : 'bg-[#007acc] text-[#ffffff] cursor-wait opacity-75'
+                  )
+                : isModified
                 ? (isDark
                     ? 'bg-[#0e639c] hover:bg-[#1177bb] text-[#ffffff]'
                     : 'bg-[#007acc] hover:bg-[#005a9e] text-[#ffffff]'
@@ -218,9 +292,19 @@ export function FileInfoBar({
                     : 'bg-[#e5e5e5] text-[#969696] cursor-not-allowed opacity-60'
                   )
             }`}
-            disabled={!isModified}
+            disabled={!isModified || isSaving}
+            title={isSaving ? "Saving..." : isModified ? "Save file (Ctrl+S)" : "File is saved"}
           >
-            {isModified ? 'Save' : 'Saved'}
+            {isSaving ? (
+              <span className="flex items-center gap-1.5">
+                <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-current"></div>
+                <span>Saving...</span>
+              </span>
+            ) : isModified ? (
+              'Save'
+            ) : (
+              'Saved'
+            )}
           </button>
         </div>
       </div>

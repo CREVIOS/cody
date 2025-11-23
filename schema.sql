@@ -1,246 +1,201 @@
--- Enable UUID extension (required for gen_random_uuid())
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
--- Users table
-CREATE TABLE Users (
-    user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    full_name TEXT,
-    avatar_url TEXT,
-    status TEXT DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    last_login_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT check_user_status CHECK (status IN ('active', 'inactive', 'suspended'))
+CREATE TABLE public.directories (
+  directory_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  directory_name text NOT NULL,
+  parent_directory_id uuid,
+  materialized_path text,
+  depth_level integer DEFAULT 0,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  modified_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by uuid NOT NULL,
+  CONSTRAINT directories_pkey PRIMARY KEY (directory_id),
+  CONSTRAINT directories_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id),
+  CONSTRAINT directories_parent_directory_id_fkey FOREIGN KEY (parent_directory_id) REFERENCES public.directories(directory_id),
+  CONSTRAINT directories_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id)
 );
-
--- Create indexes for Users
-CREATE INDEX idx_users_email ON Users (email);
-CREATE INDEX idx_users_status ON Users (status);
-
--- Project organization and management
-CREATE TABLE Projects (
-    project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_name TEXT NOT NULL,
-    description TEXT,
-    visibility TEXT DEFAULT 'private',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    modified_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    owner_id UUID NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    project_settings JSONB DEFAULT '{}',
-    CONSTRAINT check_project_visibility CHECK (visibility IN ('public', 'private', 'team')),
-    FOREIGN KEY (owner_id) REFERENCES Users(user_id) ON DELETE CASCADE
+CREATE TABLE public.execution_environments (
+  environment_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  environment_name text NOT NULL,
+  language text NOT NULL,
+  version text,
+  docker_image text,
+  base_packages jsonb,
+  setup_commands jsonb,
+  run_command_template text,
+  timeout_seconds integer DEFAULT 30,
+  persistent_storage boolean DEFAULT false,
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT execution_environments_pkey PRIMARY KEY (environment_id)
 );
-
--- Create indexes for Projects
-CREATE INDEX idx_projects_owner ON Projects (owner_id);
-CREATE INDEX idx_projects_visibility ON Projects (visibility);
-CREATE INDEX idx_projects_modified ON Projects (modified_at);
-
--- Fixed role system
-CREATE TABLE Roles (
-    role_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    role_name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    permissions JSONB NOT NULL
+CREATE TABLE public.file_lock_requests (
+  request_id uuid NOT NULL,
+  file_id uuid NOT NULL,
+  requester_user_id uuid NOT NULL,
+  requested_at timestamp with time zone DEFAULT now(),
+  granted boolean,
+  CONSTRAINT file_lock_requests_pkey PRIMARY KEY (request_id),
+  CONSTRAINT file_lock_requests_requester_user_id_fkey FOREIGN KEY (requester_user_id) REFERENCES public.users(user_id)
 );
-
--- Project membership with role-based access
-CREATE TABLE Project_Members (
-    project_member_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL,
-    user_id UUID NOT NULL,
-    role_id UUID NOT NULL,
-    invited_by UUID,
-    joined_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    last_activity TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    UNIQUE (project_id, user_id),
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (role_id) REFERENCES Roles(role_id),
-    FOREIGN KEY (invited_by) REFERENCES Users(user_id)
+CREATE TABLE public.file_locks (
+  file_id uuid NOT NULL,
+  holder_user_id uuid,
+  expires_at timestamp with time zone,
+  state character varying,
+  updated_at timestamp with time zone,
+  CONSTRAINT file_locks_pkey PRIMARY KEY (file_id),
+  CONSTRAINT file_locks_holder_user_id_fkey FOREIGN KEY (holder_user_id) REFERENCES public.users(user_id)
 );
-
--- Create indexes for Project_Members
-CREATE INDEX idx_project_members_project ON Project_Members (project_id);
-CREATE INDEX idx_project_members_role ON Project_Members (role_id);
-CREATE INDEX idx_project_members_activity ON Project_Members (last_activity);
-
--- Invitation system for project collaboration
-CREATE TABLE Project_Invitations (
-    invitation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL,
-    email TEXT NOT NULL,
-    user_id UUID,
-    role_id UUID NOT NULL,
-    invited_by UUID NOT NULL,
-    token TEXT NOT NULL UNIQUE,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMPTZ NOT NULL,
-    accepted_at TIMESTAMPTZ,
-    CONSTRAINT check_invitation_status CHECK (status IN ('pending', 'accepted', 'declined', 'expired')),
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
-    FOREIGN KEY (role_id) REFERENCES Roles(role_id),
-    FOREIGN KEY (invited_by) REFERENCES Users(user_id)
+CREATE TABLE public.file_types (
+  file_type_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  type_name text NOT NULL UNIQUE,
+  extension text NOT NULL,
+  mime_type text NOT NULL,
+  icon_class text,
+  syntax_mode text,
+  is_executable boolean DEFAULT false,
+  is_binary boolean DEFAULT false,
+  default_content text,
+  CONSTRAINT file_types_pkey PRIMARY KEY (file_type_id)
 );
-
--- Create indexes for Project_Invitations
-CREATE INDEX idx_project_invitations_project ON Project_Invitations (project_id);
-CREATE INDEX idx_project_invitations_token ON Project_Invitations (token);
-
--- Hierarchical directory structure
-CREATE TABLE Directories (
-    directory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL,
-    directory_name TEXT NOT NULL,
-    parent_directory_id UUID,
-    materialized_path TEXT,
-    depth_level INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    modified_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
-    FOREIGN KEY (parent_directory_id) REFERENCES Directories(directory_id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES Users(user_id)
+CREATE TABLE public.file_versions (
+  version_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  file_id uuid NOT NULL,
+  version_number integer NOT NULL,
+  version_link text,
+  size_in_bytes integer NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by uuid NOT NULL,
+  parent_version_id uuid,
+  CONSTRAINT file_versions_pkey PRIMARY KEY (version_id),
+  CONSTRAINT file_versions_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(file_id),
+  CONSTRAINT file_versions_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id),
+  CONSTRAINT file_versions_parent_version_id_fkey FOREIGN KEY (parent_version_id) REFERENCES public.file_versions(version_id)
 );
-
--- Create indexes for Directories
-CREATE INDEX idx_directories_project ON Directories (project_id);
-CREATE INDEX idx_directories_parent ON Directories (parent_directory_id);
-CREATE INDEX idx_directories_path ON Directories (materialized_path);
-
--- File type definitions
-CREATE TABLE File_Types (
-    file_type_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    type_name TEXT UNIQUE NOT NULL,
-    extension TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    icon_class TEXT,
-    syntax_mode TEXT,
-    is_executable BOOLEAN DEFAULT FALSE,
-    is_binary BOOLEAN DEFAULT FALSE,
-    default_content TEXT
+CREATE TABLE public.files (
+  file_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  file_name text NOT NULL,
+  file_type_id uuid,
+  directory_id uuid NOT NULL,
+  size_in_bytes integer DEFAULT 0,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  modified_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by uuid NOT NULL,
+  last_modified_by uuid NOT NULL,
+  storage_link text,
+  CONSTRAINT files_pkey PRIMARY KEY (file_id),
+  CONSTRAINT files_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id),
+  CONSTRAINT files_directory_id_fkey FOREIGN KEY (directory_id) REFERENCES public.directories(directory_id),
+  CONSTRAINT files_file_type_id_fkey FOREIGN KEY (file_type_id) REFERENCES public.file_types(file_type_id),
+  CONSTRAINT files_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id)
 );
-
--- Create index for File_Types
-CREATE INDEX idx_file_types_extension ON File_Types (extension);
-
--- File management
-CREATE TABLE Files (
-    file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL,
-    file_name TEXT NOT NULL,
-    file_type_id UUID,
-    directory_id UUID NOT NULL,
-    size_in_bytes INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    modified_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID NOT NULL,
-    last_modified_by UUID NOT NULL,
-    storage_link TEXT,
-    UNIQUE (directory_id, file_name),
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
-    FOREIGN KEY (directory_id) REFERENCES Directories(directory_id) ON DELETE CASCADE,
-    FOREIGN KEY (file_type_id) REFERENCES File_Types(file_type_id),
-    FOREIGN KEY (created_by) REFERENCES Users(user_id)
+CREATE TABLE public.notifications (
+  notification_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  project_id uuid,
+  notification_type text NOT NULL CHECK (notification_type = ANY (ARRAY['invitation'::text, 'file_change'::text, 'member_added'::text, 'deployment'::text, 'mention'::text])),
+  title text NOT NULL,
+  is_read boolean DEFAULT false,
+  message text,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  reference_id uuid,
+  payload jsonb DEFAULT '{}'::jsonb,
+  CONSTRAINT notifications_pkey PRIMARY KEY (notification_id),
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT notifications_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id)
 );
-
--- Create indexes for Files
-CREATE INDEX idx_files_project ON Files (project_id);
-CREATE INDEX idx_files_directory ON Files (directory_id);
-
--- Version control system
-CREATE TABLE File_Versions (
-    version_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    file_id UUID NOT NULL,
-    version_number INTEGER NOT NULL,
-    version_link TEXT,
-    size_in_bytes INTEGER NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID NOT NULL,
-    parent_version_id UUID,
-    UNIQUE (file_id, version_number),
-    FOREIGN KEY (file_id) REFERENCES Files(file_id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES Users(user_id),
-    FOREIGN KEY (parent_version_id) REFERENCES File_Versions(version_id)
+CREATE TABLE public.project_invitations (
+  invitation_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  email text NOT NULL,
+  user_id uuid,
+  role_id uuid NOT NULL,
+  invited_by uuid NOT NULL,
+  token text NOT NULL UNIQUE,
+  status text DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'accepted'::text, 'declined'::text, 'expired'::text])),
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  expires_at timestamp with time zone NOT NULL,
+  accepted_at timestamp with time zone,
+  CONSTRAINT project_invitations_pkey PRIMARY KEY (invitation_id),
+  CONSTRAINT project_invitations_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id),
+  CONSTRAINT project_invitations_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(role_id),
+  CONSTRAINT project_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES public.users(user_id)
 );
-
--- Create index for File_Versions
-CREATE INDEX idx_file_versions_file_version ON File_Versions (file_id, version_number);
-
--- Code execution environments
-CREATE TABLE Execution_Environments (
-    environment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    environment_name TEXT NOT NULL,
-    language TEXT NOT NULL,
-    version TEXT,
-    docker_image TEXT,
-    base_packages JSONB,
-    setup_commands JSONB,
-    run_command_template TEXT,
-    timeout_seconds INTEGER DEFAULT 30,
-    persistent_storage BOOLEAN DEFAULT FALSE,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE public.project_members (
+  project_member_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  role_id uuid NOT NULL,
+  invited_by uuid,
+  joined_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  last_activity timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  is_active boolean DEFAULT true,
+  CONSTRAINT project_members_pkey PRIMARY KEY (project_member_id),
+  CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id),
+  CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(role_id),
+  CONSTRAINT project_members_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES public.users(user_id)
 );
-
--- Create index for Execution_Environments
-CREATE INDEX idx_execution_environments_language ON Execution_Environments (language);
-
--- Terminal sessions
-CREATE TABLE Terminal_Environments (
-    terminal_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL,
-    user_id UUID NOT NULL,
-    environment_id UUID NOT NULL,
-    container_id TEXT NOT NULL,
-    websocket_id TEXT NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES Users(user_id),
-    FOREIGN KEY (environment_id) REFERENCES Execution_Environments(environment_id)
+CREATE TABLE public.projects (
+  project_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_name text NOT NULL,
+  description text,
+  visibility text DEFAULT 'private'::text CHECK (visibility = ANY (ARRAY['public'::text, 'private'::text, 'team'::text])),
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  modified_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  owner_id uuid NOT NULL,
+  is_active boolean DEFAULT true,
+  project_settings jsonb DEFAULT '{}'::jsonb,
+  CONSTRAINT projects_pkey PRIMARY KEY (project_id),
+  CONSTRAINT projects_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.users(user_id)
 );
-
--- Create index for Terminal_Environments
-CREATE INDEX idx_terminal_environments_project ON Terminal_Environments (project_id);
-
--- User notifications
-CREATE TABLE Notifications (
-    notification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL,
-    project_id UUID,
-    notification_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    is_read BOOLEAN DEFAULT FALSE,
-    message TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT check_notification_type CHECK (notification_type IN ('invitation', 'file_change', 'member_added', 'deployment', 'mention')),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE
+CREATE TABLE public.roles (
+  role_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  role_name text NOT NULL UNIQUE,
+  description text,
+  permissions jsonb NOT NULL,
+  CONSTRAINT roles_pkey PRIMARY KEY (role_id)
 );
-
--- Create index for Notifications
-CREATE INDEX idx_notifications_user_read ON Notifications (user_id, is_read);
-
--- WebSocket connections
-CREATE TABLE WebSocket_Connections (
-    connection_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL,
-    websocket_id TEXT UNIQUE NOT NULL,
-    project_id UUID,
-    connection_type TEXT DEFAULT 'editor',
-    connected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    last_ping TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    client_info JSONB,
-    CONSTRAINT check_connection_type CHECK (connection_type IN ('editor', 'terminal', 'preview')),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE SET NULL
+CREATE TABLE public.terminal_environments (
+  terminal_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  environment_id uuid NOT NULL,
+  container_id text NOT NULL,
+  websocket_id text NOT NULL,
+  is_active boolean DEFAULT true,
+  CONSTRAINT terminal_environments_pkey PRIMARY KEY (terminal_id),
+  CONSTRAINT terminal_environments_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id),
+  CONSTRAINT terminal_environments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT terminal_environments_environment_id_fkey FOREIGN KEY (environment_id) REFERENCES public.execution_environments(environment_id)
 );
-
--- Create index for WebSocket_Connections
-CREATE INDEX idx_websocket_connections_user ON WebSocket_Connections (user_id);
+CREATE TABLE public.users (
+  user_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  username text NOT NULL UNIQUE,
+  email text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  full_name text,
+  avatar_url text,
+  status text DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'inactive'::text, 'suspended'::text])),
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  last_login_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT users_pkey PRIMARY KEY (user_id)
+);
+CREATE TABLE public.websocket_connections (
+  connection_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  websocket_id text NOT NULL UNIQUE,
+  project_id uuid,
+  connection_type text DEFAULT 'editor'::text CHECK (connection_type = ANY (ARRAY['editor'::text, 'terminal'::text, 'preview'::text])),
+  connected_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  last_ping timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  is_active boolean DEFAULT true,
+  client_info jsonb,
+  CONSTRAINT websocket_connections_pkey PRIMARY KEY (connection_id),
+  CONSTRAINT websocket_connections_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT websocket_connections_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(project_id)
+);

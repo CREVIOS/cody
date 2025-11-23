@@ -16,6 +16,12 @@ const FileSystemService = require("./services/fileSystemService");
 const ContainerService = require("./services/containerService");
 const OutputManager = require("./services/outputManager");
 const { CollaborationService } = require("./services/collaborationService");
+const {
+  KeepRecentVersionsStrategy,
+  TimeBasedRetentionStrategy,
+  TaggedVersionsStrategy,
+  VersionRetentionManager
+} = require("./services/versionRetentionStrategies");
 
 // Create Express app with security middleware
 const app = express();
@@ -107,6 +113,7 @@ let fileSystemService;
 let containerService;
 let outputManager;
 let collaborationService;
+let versionRetentionManager;
 
 async function initializeServices() {
   try {
@@ -122,6 +129,11 @@ async function initializeServices() {
       roomCleanupInterval: 60 * 1000, // 1 minute
       roomIdleTimeout: 5 * 60 * 1000 // 5 minutes
     });
+
+    // Initialize version retention manager with default strategy
+    const defaultStrategy = new KeepRecentVersionsStrategy(10); // Keep 10 most recent versions by default
+    versionRetentionManager = new VersionRetentionManager(fileSystemService, defaultStrategy);
+    console.log('✅ Version retention manager initialized with KeepRecentVersionsStrategy(10)');
 
     // Connect output manager to container service
     containerService.outputManager = outputManager;
@@ -459,17 +471,208 @@ app.post('/api/projects/:projectId/copy', validateProjectId, asyncHandler(async 
 app.post('/api/projects/:projectId/move', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId } = req.params;
   const { sourcePath, destinationPath } = req.body;
-  
+
   if (!sourcePath || !destinationPath) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Both source and destination paths are required' 
+    return res.status(400).json({
+      success: false,
+      error: 'Both source and destination paths are required'
     });
   }
 
   const result = await fileSystemService.moveItem(projectId, sourcePath, destinationPath);
   res.json(result);
 }));
+
+// ==================== VERSION MANAGEMENT API ROUTES ====================
+
+// Get versioning status for the bucket
+app.get('/api/versioning/status', asyncHandler(async (req, res) => {
+  const result = await fileSystemService.getVersioningStatus();
+  res.json(result);
+}));
+
+// Enable versioning on the bucket (admin endpoint - run once)
+app.post('/api/versioning/enable', asyncHandler(async (req, res) => {
+  const result = await fileSystemService.enableVersioning();
+  res.json(result);
+}));
+
+// List all versions of a specific file
+app.get('/api/projects/:projectId/files/versions', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { path: filePath } = req.query;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required (use ?path=...)'
+    });
+  }
+
+  const result = await fileSystemService.listFileVersions(projectId, filePath);
+  res.json(result);
+}));
+
+// Get current (latest) version ID of a file
+app.get('/api/projects/:projectId/files/current-version', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { path: filePath } = req.query;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required (use ?path=...)'
+    });
+  }
+
+  const result = await fileSystemService.getCurrentVersionId(projectId, filePath);
+  res.json(result);
+}));
+
+// Get content of a specific version
+app.get('/api/projects/:projectId/files/version/:versionId', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId, versionId } = req.params;
+  const { path: filePath } = req.query;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required (use ?path=...)'
+    });
+  }
+
+  const result = await fileSystemService.getFileVersion(projectId, filePath, versionId);
+  res.json(result);
+}));
+
+// Restore file to a specific version
+app.post('/api/projects/:projectId/files/restore', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { path: filePath, versionId } = req.body;
+
+  if (!filePath || !versionId) {
+    return res.status(400).json({
+      success: false,
+      error: 'Both file path and versionId are required'
+    });
+  }
+
+  const result = await fileSystemService.restoreFileVersion(projectId, filePath, versionId);
+  res.json(result);
+}));
+
+// Delete a specific version
+app.delete('/api/projects/:projectId/files/version/:versionId', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId, versionId } = req.params;
+  const { path: filePath } = req.body;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required in request body'
+    });
+  }
+
+  const result = await fileSystemService.deleteFileVersion(projectId, filePath, versionId);
+  res.json(result);
+}));
+
+// ============================================================
+// Version Retention Strategy Endpoints (Strategy Pattern)
+// ============================================================
+
+// Apply retention policy to a specific file
+app.post('/api/projects/:projectId/retention/apply', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { path: filePath } = req.body;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required in request body'
+    });
+  }
+
+  const result = await versionRetentionManager.applyRetentionPolicy(projectId, filePath);
+  res.json(result);
+}));
+
+// Apply retention policy to all files in a project
+app.post('/api/projects/:projectId/retention/apply-all', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+
+  const result = await versionRetentionManager.applyRetentionPolicyToProject(projectId);
+  res.json(result);
+}));
+
+// Change retention strategy (demonstrates Strategy Pattern runtime swapping)
+app.post('/api/retention/strategy', asyncHandler(async (req, res) => {
+  const { strategyType, options } = req.body;
+
+  if (!strategyType) {
+    return res.status(400).json({
+      success: false,
+      error: 'Strategy type is required (keepRecent, timeBased, tagged)'
+    });
+  }
+
+  let newStrategy;
+
+  switch (strategyType) {
+    case 'keepRecent':
+      const maxVersions = options?.maxVersions || 10;
+      newStrategy = new KeepRecentVersionsStrategy(maxVersions);
+      break;
+
+    case 'timeBased':
+      newStrategy = new TimeBasedRetentionStrategy(options || {});
+      break;
+
+    case 'tagged':
+      newStrategy = new TaggedVersionsStrategy();
+      break;
+
+    default:
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid strategy type. Use: keepRecent, timeBased, or tagged'
+      });
+  }
+
+  versionRetentionManager.setStrategy(newStrategy);
+
+  res.json({
+    success: true,
+    message: `Retention strategy changed to ${newStrategy.getName()}`,
+    strategy: newStrategy.getName()
+  });
+}));
+
+// Get current retention strategy
+app.get('/api/retention/strategy', asyncHandler(async (req, res) => {
+  const currentStrategy = versionRetentionManager.strategy;
+
+  res.json({
+    success: true,
+    strategy: currentStrategy.getName(),
+    description: getStrategyDescription(currentStrategy)
+  });
+}));
+
+// Helper function to describe current strategy
+function getStrategyDescription(strategy) {
+  const name = strategy.getName();
+
+  if (name.startsWith('KeepRecent')) {
+    return `Keeps the most recent N versions, deletes older ones`;
+  } else if (name.startsWith('TimeBased')) {
+    return `Keeps all versions from last 24h, 1/day for 7 days, 1/week for 30 days`;
+  } else if (name === 'TaggedVersions') {
+    return `Keeps only tagged/release versions plus latest`;
+  }
+
+  return 'Unknown strategy';
+}
 
 // Container Management API Routes
 app.get('/api/projects/:projectId/container/status', validateProjectId, asyncHandler(async (req, res) => {

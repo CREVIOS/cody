@@ -1,0 +1,57 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+sequenceDiagram
+    participant Trigger as Scheduled Task or Manual Trigger
+    participant VRM as VersionRetentionManager
+    participant FSS as FileSystemService
+    participant MinIO as MinIO
+    participant Strategy as RetentionStrategy
+
+    rect rgb(240, 248, 255)
+        Note over Trigger,Strategy: Apply Retention Policy (Strategy Pattern)
+    end
+
+    Trigger->>VRM: applyRetentionPolicy()
+    activate VRM
+
+    rect rgb(255, 247, 237)
+        Note right of VRM: Strategy Pattern<br/>Scheduled task or manual trigger
+    end
+
+    VRM->>FSS: listVersions()
+    activate FSS
+    FSS->>MinIO: listObjects(IncludeVersion: true)
+    activate MinIO
+    MinIO-->>FSS: All versions
+    deactivate MinIO
+    FSS-->>VRM: versions[]
+    deactivate FSS
+
+    VRM->>Strategy: filterVersionsToKeep(versions)
+    activate Strategy
+
+    rect rgb(255, 247, 237)
+        Note right of Strategy: Strategy Pattern<br/>Strategy applies retention algorithm<br/>(varies by strategy type)
+    end
+
+    Strategy->>Strategy: Apply retention algorithm
+    Strategy-->>VRM: versionsToKeep[]
+    deactivate Strategy
+
+    VRM->>VRM: versionsToDelete = all - toKeep
+
+    rect rgb(254, 242, 242)
+        loop For each version to delete
+            VRM->>FSS: deleteVersion(versionId)
+            activate FSS
+            FSS->>MinIO: removeObject(versionId)
+            activate MinIO
+            MinIO-->>FSS: Deleted
+            deactivate MinIO
+            FSS-->>VRM: Success
+            deactivate FSS
+        end
+    end
+
+    VRM->>VRM: Log cleanup summary
+    VRM-->>Trigger: Cleanup complete
+    deactivate VRM
