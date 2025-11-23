@@ -713,6 +713,80 @@ class FileSystemService {
   }
 
   /**
+   * Get the current (latest) version ID of a file
+   * Returns null if file doesn't exist or has no versions
+   * OPTIMIZED: Uses statObject instead of listing all versions for better performance
+   */
+  async getCurrentVersionId(projectId, filePath) {
+    try {
+      const objectName = `${projectId}/${filePath}`;
+      
+      // Use statObject to get current version directly (much faster than listing all versions)
+      try {
+        const stat = await this.minioClient.statObject(this.bucketName, objectName);
+        
+        // statObject returns the current version's metadata including versionId
+        if (stat.versionId) {
+          return {
+            success: true,
+            versionId: stat.versionId,
+            exists: true,
+            lastModified: stat.lastModified
+          };
+        }
+        
+        // If no versionId in stat, file exists but versioning might not be enabled or it's a new file
+        return {
+          success: true,
+          versionId: null,
+          exists: true,
+          lastModified: stat.lastModified
+        };
+      } catch (statError) {
+        // If statObject fails, file doesn't exist
+        if (statError.code === 'NotFound' || statError.message?.includes('Not Found')) {
+          return {
+            success: true,
+            versionId: null,
+            exists: false
+          };
+        }
+        
+        // For other errors, try fallback to listFileVersions (slower but more reliable)
+        console.warn('statObject failed, falling back to listFileVersions:', statError.message);
+        const versionsResult = await this.listFileVersions(projectId, filePath);
+        if (!versionsResult.success || !versionsResult.versions || versionsResult.versions.length === 0) {
+          return {
+            success: true,
+            versionId: null,
+            exists: false
+          };
+        }
+
+        // Find the latest version (not a delete marker)
+        const latestVersion = versionsResult.versions.find(v => v.isLatest && !v.isDeleteMarker);
+        if (!latestVersion) {
+          return {
+            success: true,
+            versionId: null,
+            exists: false
+          };
+        }
+
+        return {
+          success: true,
+          versionId: latestVersion.versionId,
+          exists: true,
+          lastModified: latestVersion.lastModified
+        };
+      }
+    } catch (error) {
+      console.error('Error getting current version ID:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get versioning status for the bucket
    */
   async getVersioningStatus() {

@@ -513,6 +513,22 @@ app.get('/api/projects/:projectId/files/versions', validateProjectId, asyncHandl
   res.json(result);
 }));
 
+// Get current (latest) version ID of a file
+app.get('/api/projects/:projectId/files/current-version', validateProjectId, asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { path: filePath } = req.query;
+
+  if (!filePath) {
+    return res.status(400).json({
+      success: false,
+      error: 'File path is required (use ?path=...)'
+    });
+  }
+
+  const result = await fileSystemService.getCurrentVersionId(projectId, filePath);
+  res.json(result);
+}));
+
 // Get content of a specific version
 app.get('/api/projects/:projectId/files/version/:versionId', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId, versionId } = req.params;

@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { FileSystemItem, FileSystemContextType, SearchResult } from '@/types/fileSystem';
 import { ProjectPersistenceService, ProjectSession } from '@/lib/projectPersistence';
-import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand } from '@/lib/commands';
+import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand, SaveFileCommand, CreateFileCommand, CreateFolderCommand, DuplicateFileCommand } from '@/lib/commands';
 
 const FileSystemContext = createContext<FileSystemContextType | undefined>(undefined);
 
@@ -24,7 +24,7 @@ interface FileSystemProviderProps {
 export function FileSystemProvider({ children, projectId, projectName = '' }: FileSystemProviderProps) {
   const [fileTree, setFileTree] = useState<FileSystemItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileSystemItem | null>(null);
-  const [openFiles, setOpenFiles] = useState<Map<string, { item: FileSystemItem; content: string; isDirty: boolean }>>(new Map());
+  const [openFiles, setOpenFiles] = useState<Map<string, { item: FileSystemItem; content: string; savedContent: string; isDirty: boolean; isSaving?: boolean }>>(new Map());
   const [currentFileContent, setCurrentFileContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +116,12 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
                 const existing = updated.get(p);
                 if (existing) {
                   const updatedItem = { ...existing.item, size: new Blob([data.content]).size };
-                  updated.set(p, { item: updatedItem, content: data.content, isDirty: false });
+                  updated.set(p, { 
+                    item: updatedItem, 
+                    content: data.content, 
+                    savedContent: data.content, // Update saved content
+                    isDirty: false 
+                  });
                 }
                 return updated;
               });
@@ -264,6 +269,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
                   setOpenFiles(prev => new Map(prev).set(filePath, {
                     item: fileItem,
                     content: fileData.content,
+                    savedContent: fileData.content, // Track saved content
                     isDirty: false
                   }));
                 }
@@ -311,29 +317,45 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     if (!projectId) return;
     
     try {
-      const response = await fetch(`${baseUrl}/api/projects/${projectId}/files`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: path, content })
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
+      // Create file system service adapter for command
+      const fileSystemService = {
+        createFile: async (projId: string, filePath: string, fileContent: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath, content: fileContent })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to create file');
+        },
+        deleteItem: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to delete item');
+        }
+      };
+
+      // Callback to handle file creation in UI
+      const onFileCreated = (filePath: string) => {
         // If content is provided, set initial file size
         if (content) {
           // Create a new file item with proper size
           const fileItem: FileSystemItem = {
-            name: path.split('/').pop() || path,
-            path: path,
+            name: filePath.split('/').pop() || filePath,
+            path: filePath,
             type: 'file',
             size: new Blob([content]).size
           };
           
           // Add to open files
-          setOpenFiles(prev => new Map(prev).set(path, {
+          setOpenFiles(prev => new Map(prev).set(filePath, {
             item: fileItem,
             content: content,
+            savedContent: content, // Track saved content
             isDirty: false
           }));
           
@@ -342,33 +364,49 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           setCurrentFileContent(content);
           lastSavedContent.current = content;
         }
-        
-        await loadFileTree();
-      } else {
-        throw new Error(data.error || 'Failed to create file');
-      }
+      };
+
+      // Execute create using command pattern (enables undo)
+      const command = new CreateFileCommand('current-user', projectId, path, content, fileSystemService, onFileCreated);
+      await commandManager.execute(command);
+      
+      await loadFileTree();
     } catch (error) {
       handleError(error, 'create file');
     }
-  }, [projectId, baseUrl, loadFileTree]);
+  }, [projectId, baseUrl, loadFileTree, openFiles, setOpenFiles, setSelectedFile, setCurrentFileContent]);
 
   const createFolder = useCallback(async (path: string) => {
     if (!projectId) return;
     
     try {
-      const response = await fetch(`${baseUrl}/api/projects/${projectId}/folders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderPath: path })
-      });
+      // Create file system service adapter for command
+      const fileSystemService = {
+        createFolder: async (projId: string, folderPath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/folders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderPath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to create folder');
+        },
+        deleteItem: async (projId: string, itemPath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: itemPath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to delete item');
+        }
+      };
+
+      // Execute create folder using command pattern (enables undo)
+      const command = new CreateFolderCommand('current-user', projectId, path, fileSystemService);
+      await commandManager.execute(command);
       
-      const data = await response.json();
-      
-      if (data.success) {
-        await loadFileTree();
-      } else {
-        throw new Error(data.error || 'Failed to create folder');
-      }
+      await loadFileTree();
     } catch (error) {
       handleError(error, 'create folder');
     }
@@ -382,7 +420,8 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       const openFile = openFiles.get(item.path)!;
       setSelectedFile(item);
       setCurrentFileContent(openFile.content);
-      lastSavedContent.current = openFile.content;
+      // Use savedContent if available, otherwise use content
+      lastSavedContent.current = openFile.savedContent || openFile.content;
       saveProjectState();
       return;
     }
@@ -405,6 +444,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         setOpenFiles(prev => new Map(prev.set(item.path, { 
           item: updatedItem, 
           content, 
+          savedContent: content, // Track saved content
           isDirty: false 
         })));
         
@@ -449,16 +489,100 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   const saveFile = useCallback(async (path: string, content: string) => {
     if (!projectId) return;
     
-    try {
-      const response = await fetch(`${baseUrl}/api/projects/${projectId}/files/update`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, content })
+    // Check if content actually changed - don't create duplicate versions
+    const openFile = openFiles.get(path);
+    if (openFile && content === openFile.savedContent) {
+      // Content hasn't changed, just update state
+      setOpenFiles(prev => {
+        const newMap = new Map(prev);
+        const file = newMap.get(path);
+        if (file) {
+          newMap.set(path, {
+            ...file,
+            isDirty: false,
+            isSaving: false
+          });
+        }
+        return newMap;
       });
-      
-      const data = await response.json();
-      
-      if (data.success) {
+      lastSavedContent.current = content;
+      return; // Don't save if content hasn't changed
+    }
+    
+    try {
+      // OPTIMIZED: Mark file as saving immediately for better UX
+      setOpenFiles(prev => {
+        const newMap = new Map(prev);
+        const openFile = newMap.get(path);
+        if (openFile) {
+          newMap.set(path, { 
+            ...openFile, 
+            isDirty: false, // Mark as not dirty immediately (optimistic update)
+            isSaving: true // Track saving state
+          });
+        }
+        return newMap;
+      });
+
+      // Create file system service adapter for SaveFileCommand
+      const saveFileService = {
+        getCurrentVersionId: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/current-version?path=${encodeURIComponent(filePath)}`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to get current version`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to get current version');
+          return data;
+        },
+        updateFile: async (projId: string, filePath: string, fileContent: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/update`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath, content: fileContent })
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to update file`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to update file');
+          return data;
+        },
+        restoreFileVersion: async (projId: string, filePath: string, versionId: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath, versionId })
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to restore version`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to restore version');
+          return data;
+        },
+        getFileVersion: async (projId: string, filePath: string, versionId: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/version/${encodeURIComponent(versionId)}?path=${encodeURIComponent(filePath)}`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to get file version`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to get file version');
+          return data;
+        },
+        readFile: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/read?path=${encodeURIComponent(filePath)}`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to read file`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to read file');
+          return { success: true, content: data.content };
+        }
+      };
+
+      // Callback to update UI when content changes (for undo/redo)
+      const updateContent = (newContent: string) => {
         // Update the open file content
         setOpenFiles(prev => {
           const newMap = new Map(prev);
@@ -466,12 +590,14 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           if (openFile) {
             const updatedItem = {
               ...openFile.item,
-              size: new Blob([content]).size // Update file size based on content length
+              size: new Blob([newContent]).size
             };
             newMap.set(path, { 
               ...openFile, 
-              content, 
+              content: newContent,
+              savedContent: newContent, // Update saved content
               isDirty: false,
+              isSaving: false,
               item: updatedItem
             });
           }
@@ -485,7 +611,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
               if (item.path === path) {
                 return {
                   ...item,
-                  size: new Blob([content]).size
+                  size: new Blob([newContent]).size
                 };
               }
               if (item.children) {
@@ -501,22 +627,75 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           return updateFileInTree(prev);
         });
         
-        lastSavedContent.current = content;
-
-        // Notify peers via watcher channel for instant updates
-        const ws = watcherWsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(JSON.stringify({ type: 'file:changed', path, content }));
-          } catch {}
+        // Update current file content if this is the selected file
+        if (selectedFile?.path === path) {
+          setCurrentFileContent(newContent);
         }
-      } else {
-        throw new Error(data.error || 'Failed to save file');
+        
+        lastSavedContent.current = newContent;
+      };
+
+      // Get the content that was in the editor BEFORE this save
+      // This is what we'll restore to when undoing
+      const openFile = openFiles.get(path);
+      const previousContentBeforeSave = openFile?.content || null;
+
+      // Execute save using command pattern (enables undo/redo)
+      // Pass the previous content so we can restore to it on undo
+      const command = new SaveFileCommand(
+        'current-user', 
+        projectId, 
+        path, 
+        content, // New content being saved
+        previousContentBeforeSave, // Content that was in editor before save
+        saveFileService, 
+        updateContent
+      );
+      await commandManager.execute(command);
+
+      // Mark save as complete - update saved content
+      setOpenFiles(prev => {
+        const newMap = new Map(prev);
+        const openFile = newMap.get(path);
+        if (openFile) {
+          newMap.set(path, { 
+            ...openFile,
+            savedContent: content, // Update saved content
+            isDirty: false,
+            isSaving: false
+          });
+        }
+        return newMap;
+      });
+
+      // Update last saved content
+      lastSavedContent.current = content;
+
+      // Notify peers via watcher channel for instant updates
+      const ws = watcherWsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'file:changed', path, content }));
+        } catch {}
       }
     } catch (error) {
+      // On error, mark file as dirty again
+      setOpenFiles(prev => {
+        const newMap = new Map(prev);
+        const openFile = newMap.get(path);
+        if (openFile) {
+          newMap.set(path, { 
+            ...openFile, 
+            isDirty: true, // Mark as dirty on error
+            isSaving: false
+          });
+        }
+        return newMap;
+      });
       handleError(error, 'save file');
+      throw error; // Re-throw so caller knows save failed
     }
-  }, [projectId, baseUrl]);
+  }, [projectId, baseUrl, selectedFile, openFiles, commandManager]);
 
   const deleteItem = useCallback(async (path: string) => {
     if (!projectId) return;
@@ -621,7 +800,25 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
 
   const updateCurrentContent = useCallback((content: string) => {
     setCurrentFileContent(content);
-  }, []);
+    
+    // Update isDirty flag when content changes
+    if (selectedFile) {
+      setOpenFiles(prev => {
+        const newMap = new Map(prev);
+        const openFile = newMap.get(selectedFile.path);
+        if (openFile) {
+          // Compare with saved content to determine if dirty
+          const isDirty = content !== openFile.savedContent;
+          newMap.set(selectedFile.path, {
+            ...openFile,
+            content: content,
+            isDirty: isDirty
+          });
+        }
+        return newMap;
+      });
+    }
+  }, [selectedFile]);
 
   const searchFiles = useCallback(async (query: string): Promise<SearchResult[]> => {
     if (!projectId || !query.trim()) return [];
@@ -763,22 +960,147 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   }, []);
 
   const duplicateFile = useCallback(async (path: string) => {
-    // TODO: Implement duplicate functionality
-    console.log('Duplicate not implemented yet', { path });
-  }, []);
+    if (!projectId) return;
+    
+    try {
+      // Generate destination path (add "copy" suffix before extension)
+      const pathParts = path.split('/');
+      const fileName = pathParts.pop() || path;
+      const directory = pathParts.join('/');
+      
+      // Extract name and extension
+      const lastDotIndex = fileName.lastIndexOf('.');
+      let destinationPath: string;
+      
+      if (lastDotIndex > 0) {
+        // Has extension
+        const nameWithoutExt = fileName.substring(0, lastDotIndex);
+        const extension = fileName.substring(lastDotIndex);
+        destinationPath = directory ? `${directory}/${nameWithoutExt} copy${extension}` : `${nameWithoutExt} copy${extension}`;
+      } else {
+        // No extension
+        destinationPath = directory ? `${directory}/${fileName} copy` : `${fileName} copy`;
+      }
+      
+      // Create file system service adapter for command
+      const fileSystemService = {
+        readFile: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/read?path=${encodeURIComponent(filePath)}`);
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to read file');
+          return data.content;
+        },
+        createFile: async (projId: string, filePath: string, content: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/files`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath, content })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to create file');
+        },
+        deleteItem: async (projId: string, filePath: string) => {
+          const response = await fetch(`${baseUrl}/api/projects/${projId}/items/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+          });
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to delete item');
+        }
+      };
 
-  // Auto-save functionality
+      // Callback to handle file duplication in UI
+      const onFileDuplicated = (sourcePath: string, destPath: string) => {
+        // Open the duplicated file if source was open
+        if (openFiles.has(sourcePath)) {
+          const sourceFile = openFiles.get(sourcePath)!;
+          const fileItem: FileSystemItem = {
+            name: destPath.split('/').pop() || destPath,
+            path: destPath,
+            type: 'file',
+            size: sourceFile.item.size
+          };
+          
+          setOpenFiles(prev => new Map(prev).set(destPath, {
+            item: fileItem,
+            content: sourceFile.content,
+            savedContent: sourceFile.savedContent,
+            isDirty: false
+          }));
+          
+          // Set as selected file
+          setSelectedFile(fileItem);
+          setCurrentFileContent(sourceFile.content);
+          lastSavedContent.current = sourceFile.savedContent;
+        }
+      };
+
+      // Execute duplicate using command pattern (enables undo)
+      const command = new DuplicateFileCommand('current-user', projectId, path, destinationPath, fileSystemService, onFileDuplicated);
+      await commandManager.execute(command);
+      
+      await loadFileTree();
+    } catch (error) {
+      handleError(error, 'duplicate file');
+    }
+  }, [projectId, baseUrl, openFiles, loadFileTree, setOpenFiles, setSelectedFile, setCurrentFileContent]);
+
+  // Auto-save functionality with debouncing
+  // Auto-saves after 3 seconds of inactivity
+  const isSavingRef = React.useRef(false);
+  const autoSaveTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  
   React.useEffect(() => {
-    if (!selectedFile || !currentFileContent || currentFileContent === lastSavedContent.current) {
+    if (!selectedFile || !currentFileContent) {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
-      saveFile(selectedFile.path, currentFileContent);
-    }, 2000); // Auto-save after 2 seconds of inactivity
+    // Check if content is actually different from saved content
+    const openFile = openFiles.get(selectedFile.path);
+    if (!openFile || currentFileContent === openFile.savedContent) {
+      // Content matches saved content, no need to save
+      return;
+    }
 
-    return () => clearTimeout(timeoutId);
-  }, [currentFileContent, selectedFile, saveFile]);
+    // Don't auto-save if a save is already in progress
+    if (isSavingRef.current) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    // Set new timeout for auto-save (3 seconds of inactivity)
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      // Check again before saving
+      const currentOpenFile = openFiles.get(selectedFile.path);
+      if (
+        isSavingRef.current || 
+        !currentOpenFile || 
+        currentFileContent === currentOpenFile.savedContent
+      ) {
+        return;
+      }
+      
+      try {
+        isSavingRef.current = true;
+        await saveFile(selectedFile.path, currentFileContent);
+      } catch (error) {
+        console.error('Auto-save failed:', error);
+      } finally {
+        isSavingRef.current = false;
+      }
+    }, 3000); // 3 seconds of inactivity
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [currentFileContent, selectedFile, saveFile, openFiles]);
 
   const value: FileSystemContextType = {
     projectId,

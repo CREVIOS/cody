@@ -50,25 +50,44 @@ export function useCommandManager() {
   // Update state when command stack changes
   useEffect(() => {
     const handleStackChange = () => {
-      setState({
+      const newState = {
         canUndo: commandManager.canUndo(),
         canRedo: commandManager.canRedo(),
         undoDescription: commandManager.getUndoDescription(),
         redoDescription: commandManager.getRedoDescription(),
-      });
+      };
+      
+      // Debug logging
+      console.log('[useCommandManager] State update:', newState);
+      
+      setState(newState);
     };
+
+    // Initial state check
+    handleStackChange();
 
     // Subscribe to stack change events
     const unsubscribe = eventBus.subscribe(
       EventType.PERMISSION_CHANGED, // Reusing existing event type
       (event: any) => {
+        console.log('[useCommandManager] Event received:', event);
         if (event.permission === 'command_stack_changed') {
+          console.log('[useCommandManager] Command stack changed event detected');
           handleStackChange();
         }
       }
     );
 
-    return unsubscribe;
+    // Also poll the state periodically as a fallback (in case events are missed)
+    // This ensures the UI stays in sync even if events fail
+    const pollInterval = setInterval(() => {
+      handleStackChange();
+    }, 500); // Check every 500ms
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollInterval);
+    };
   }, []);
 
   // Memoized action handlers
