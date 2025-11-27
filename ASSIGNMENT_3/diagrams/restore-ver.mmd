@@ -1,0 +1,82 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+sequenceDiagram
+    actor User
+    participant UI as VersionHistoryPanel
+    participant CM as CommandManager
+    participant Cmd as RestoreVersionCommand
+    participant FSS as FileSystemService
+    participant MinIO as MinIO
+
+    rect rgb(240, 248, 255)
+        Note over User,MinIO: Restore Version (Command + Template Method + Memento)
+    end
+
+    rect rgb(255, 247, 237)
+        Note over User,MinIO: Current Implementation: Direct REST API Call
+    end
+
+    User->>UI: Select version and click "Restore"
+    activate UI
+
+    UI->>User: confirm("Are you sure?") [synchronous blocking]
+    User-->>UI: User confirms (or cancels)
+    alt User confirms
+        UI->>FSS: POST /api/projects/{projectId}/files/restore<br/>{path: filePath, versionId: versionId}
+        activate FSS
+
+        rect rgb(255, 247, 237)
+            Note right of FSS: REST handler calls restoreFileVersion method
+        end
+        FSS->>FSS: restoreFileVersion(projectId, filePath, versionId)
+
+        Note over FSS: getFileVersion() is called internally by restoreFileVersion()
+        FSS->>FSS: getFileVersion(projectId, filePath, versionId)
+        FSS->>MinIO: getObject(bucket, objectName, {versionId})
+        activate MinIO
+        MinIO-->>FSS: Old version content stream
+        deactivate MinIO
+
+        FSS->>FSS: Read stream to string (for await chunk)
+        FSS->>MinIO: statObject(bucket, objectName, {versionId})
+        activate MinIO
+        MinIO-->>FSS: metadata (size, lastModified, etag)
+        deactivate MinIO
+        
+        Note over FSS: getFileVersion returns to restoreFileVersion
+
+        FSS->>FSS: Create buffer from content (Buffer.from(content, 'utf8'))
+        FSS->>MinIO: putObject(bucket, objectName, buffer, buffer.length,<br/>metadata: x-amz-meta-restored-from, x-amz-meta-restored-at)
+        activate MinIO
+        rect rgb(255, 247, 237)
+            Note right of MinIO: MinIO creates NEW version<br/>with old content<br/>(Versioning is automatic)
+        end
+        MinIO-->>FSS: Success, new versionId
+        deactivate MinIO
+
+        FSS-->>UI: {success: true, message: "File restored to version ...", path: filePath, restoredFrom: versionId}
+        deactivate FSS
+
+        alt Exception during fetch/response.json() (catch block)
+            UI->>UI: alert("Error restoring version: " + error.message)
+            UI-->>User: "Error occurred"
+        else No exception
+            alt data.success == true
+                UI->>UI: alert("File restored successfully!")
+                opt onRestore callback provided
+                    UI->>UI: onRestore(versionId) callback
+                end
+                UI->>UI: loadVersions() (reload version list)
+                UI-->>User: "File restored successfully!"
+            else data.success == false
+                UI->>UI: alert("Failed to restore: " + data.error)
+                UI-->>User: "Failed to restore"
+            end
+        end
+    else
+        UI-->>User: Restore cancelled (function returns early)
+    end
+    deactivate UI
+
+    rect rgb(240, 253, 244)
+        Note over User,MinIO: Future Implementation: Command Pattern Integration<br/>(RestoreVersionCommand exists but not yet integrated)
+    end

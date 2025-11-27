@@ -97,29 +97,39 @@ This feature demonstrates **multiple design patterns working together** to creat
 
 **Implementation**:
 - `RestoreVersionCommand` extends `BaseCommand`
-- Implements `execute()`, `undo()`, `redo()` methods
-- Stores previous and restored content for undo capability
-- Integrates with existing `CommandManager`
+- Implements `doExecute()`, `doUndo()` hook methods
+- Stores `previousContent` and `previousVersionId` for undo capability
+- Uses `VersionService` interface for backend communication
+- Integrates with existing `CommandManager` (max 100 commands in stack)
 
 **Why this pattern?**
 - Enables undo/redo for version restore operations
 - Provides consistent interface with other file operations
 - Supports command history for audit trails
+- Decouples command from API implementation via `VersionService` interface
 
 **Code Evidence**:
 ```typescript
 // Frontend/app/lib/commands/RestoreVersionCommand.ts
 export class RestoreVersionCommand extends BaseCommand {
-  async doExecute() {
-    // Save current content for undo
-    this.previousContent = await getCurrentContent();
-    // Restore to target version
-    await restoreVersion(this.targetVersionId);
+  private previousContent: string | null = null;
+  private previousVersionId: string | null = null;
+  
+  protected async doExecute(): Promise<void> {
+    // 1. Get current version ID before restoring
+    const versions = await this.versionService.listFileVersions(...);
+    this.previousVersionId = versions.find(v => v.isLatest)?.versionId;
+    
+    // 2. Save current content for undo
+    this.previousContent = await this.versionService.getCurrentFileContent(...);
+    
+    // 3. Restore to target version
+    await this.versionService.restoreFileVersion(..., this.targetVersionId);
   }
 
-  async doUndo() {
-    // Restore previous content
-    await restoreContent(this.previousContent);
+  protected async doUndo(): Promise<void> {
+    // Restore to previous version ID
+    await this.versionService.restoreFileVersion(..., this.previousVersionId);
   }
 }
 ```
@@ -155,11 +165,11 @@ abstract class BaseCommand {
 **Purpose**: Enable runtime selection of version retention policies
 
 **Implementation**:
-- `IRetentionStrategy` interface defines `filterVersionsToKeep()`
-- `KeepRecentVersionsStrategy`: Keep N most recent
-- `TimeBasedRetentionStrategy`: Keep hourly/daily/weekly
+- `IRetentionStrategy` abstract class defines `filterVersionsToKeep()` and `getName()`
+- `KeepRecentVersionsStrategy`: Keep N most recent versions
+- `TimeBasedRetentionStrategy`: Keep all from last 24h, 1/day for 7 days, 1/week for 30 days
 - `TaggedVersionsStrategy`: Keep tagged/release versions only
-- `VersionRetentionManager` uses strategies interchangeably
+- `VersionRetentionManager` uses strategies interchangeably and can swap at runtime
 
 **Why this pattern?**
 - Different projects need different retention policies

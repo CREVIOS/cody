@@ -1,0 +1,211 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+%% File Version History - Class Diagram
+classDiagram
+
+    %% Frontend - Command Pattern
+    class Command {
+        <<interface>>
+        +execute() Promise
+        +undo() Promise
+        +redo() Promise
+        +canUndo() boolean
+        +getDescription() string
+        +serialize() CommandData
+    }
+
+    class BaseCommand {
+        <<abstract>>
+        #executed: boolean
+        #timestamp: number
+        #userId: string
+        #projectId: string
+        +execute() Promise
+        +undo() Promise
+        +redo() Promise
+        #doExecute() Promise*
+        #doUndo() Promise*
+        +canUndo() boolean*
+        +getDescription() string*
+        +serialize() CommandData*
+    }
+
+    class VersionService {
+        <<interface>>
+        +listFileVersions(projectId: string, filePath: string) Promise
+        +getFileVersion(projectId: string, filePath: string, versionId: string) Promise
+        +restoreFileVersion(projectId: string, filePath: string, versionId: string) Promise
+        +getCurrentFileContent(projectId: string, filePath: string) Promise
+    }
+
+    class RestoreVersionCommand {
+        -previousContent: string | null
+        -previousVersionId: string | null
+        -restoredContent: string | null
+        -projectId: string
+        -filePath: string
+        -targetVersionId: string
+        -versionService: VersionService
+        -onContentUpdate: Function | undefined
+        #doExecute() Promise
+        #doUndo() Promise
+        +getDescription() string
+        +canUndo() boolean
+        +serialize() CommandData
+    }
+
+    class CommandManager {
+        -undoStack: Command[]
+        -redoStack: Command[]
+        -maxStackSize: number
+        +execute(command: Command) Promise
+        +undo() Promise
+        +redo() Promise
+        +canUndo() boolean
+        +canRedo() boolean
+        +getUndoDescription() string | null
+        +getRedoDescription() string | null
+        +getHistory() Command[]
+        +serialize() CommandData[]
+        +clear() void
+        -emitStateChange() void
+    }
+
+    class VersionHistoryPanel {
+        <<React Component>>
+        +projectId: string
+        +file: FileSystemItem
+        +baseUrl: string
+        +onRestore: Function | undefined
+        +onClose: Function | undefined
+        -versions: FileVersion[]
+        -loading: boolean
+        -error: string | null
+        -selectedVersion: string | null
+        -versionContent: string | null
+        +loadVersions() Promise
+        +loadVersionContent(versionId) Promise
+        +handleRestore(versionId) Promise
+        +formatDate(dateString) string
+        +formatSize(bytes) string
+    }
+
+    %% Backend - Strategy Pattern
+    class IRetentionStrategy {
+        <<abstract>>
+        +filterVersionsToKeep(versions) Array
+        +getName() string
+    }
+
+    class KeepRecentVersionsStrategy {
+        -maxVersions: number
+        +constructor(maxVersions?: number)
+        +filterVersionsToKeep(versions: Array) Array
+        +getName() string
+    }
+
+    class TimeBasedRetentionStrategy {
+        -keepAllHours: number
+        -keepDailyDays: number
+        -keepWeeklyDays: number
+        +constructor(options?: object)
+        +filterVersionsToKeep(versions: Array) Array
+        +getName() string
+        -getWeekKey(date: Date) string
+        -getWeekNumber(date: Date) number
+    }
+
+    class TaggedVersionsStrategy {
+        +filterVersionsToKeep(versions) Array
+        +getName() string
+    }
+
+    class VersionRetentionManager {
+        -fileSystemService: FileSystemService
+        -strategy: IRetentionStrategy
+        +constructor(fileSystemService: FileSystemService, strategy: IRetentionStrategy)
+        +setStrategy(strategy: IRetentionStrategy) void
+        +applyRetentionPolicy(projectId: string, filePath: string) Promise
+        +applyRetentionPolicyToProject(projectId: string) Promise
+    }
+
+    %% Backend - Service Layer
+    class FileSystemService {
+        -minioClient: MinIO.Client
+        -bucketName: string
+        +constructor()
+        +listFileVersions(projectId: string, filePath: string) Promise
+        +getFileVersion(projectId: string, filePath: string, versionId: string) Promise
+        +restoreFileVersion(projectId: string, filePath: string, versionId: string) Promise
+        +deleteFileVersion(projectId: string, filePath: string, versionId: string) Promise
+        +getCurrentVersionId(projectId: string, filePath: string) Promise
+        +getVersioningStatus() Promise
+        +enableVersioning() Promise
+        +readFile(projectId: string, filePath: string) Promise
+        +createFile(projectId: string, filePath: string, content?: string) Promise
+        +updateFile(projectId: string, filePath: string, content: string) Promise
+        +deleteItem(projectId: string, itemPath: string) Promise
+    }
+
+    %% Storage - Memento Pattern (Conceptual)
+    class MinIOVersion {
+        <<Memento>>
+        <<immutable>>
+        +versionId: string
+        +isLatest: boolean
+        +lastModified: Date
+        +size: number
+        +etag: string
+        +isDeleteMarker: boolean
+    }
+
+    class MinIOClient {
+        <<External Library>>
+        +listObjects(bucket, prefix, recursive, options) Stream
+        +getObject(bucket, object, options) Stream
+        +putObject(bucket, object, buffer, length, metadata) Promise
+        +statObject(bucket, object, options) Promise
+        +removeObject(bucket, object, options) Promise
+        +setBucketVersioning(bucket, config) Promise
+        +getBucketVersioning(bucket) Promise
+    }
+
+    %% Data Transfer Objects
+    class FileVersion {
+        +versionId: string
+        +isLatest: boolean
+        +lastModified: string
+        +size: number
+        +etag: string
+        +isDeleteMarker: boolean
+    }
+
+    class FileSystemItem {
+        +name: string
+        +path: string
+        +type: "file" | "folder"
+        +size?: number
+        +lastModified?: Date
+    }
+
+    %% Relationships
+    Command <|.. BaseCommand : implements
+    BaseCommand <|-- RestoreVersionCommand : extends
+    CommandManager o-- Command : manages
+    RestoreVersionCommand ..> VersionService : uses
+    VersionService ..> FileSystemService : adapts via REST API
+    VersionHistoryPanel ..> FileSystemService : calls REST API directly (current)
+    VersionHistoryPanel ..> CommandManager : could use (future integration)
+    VersionHistoryPanel ..> RestoreVersionCommand : could create (future integration)
+
+    IRetentionStrategy <|-- KeepRecentVersionsStrategy : extends
+    IRetentionStrategy <|-- TimeBasedRetentionStrategy : extends
+    IRetentionStrategy <|-- TaggedVersionsStrategy : extends
+    VersionRetentionManager o-- IRetentionStrategy : uses
+    VersionRetentionManager ..> FileSystemService : uses
+
+    FileSystemService o-- MinIOClient : uses
+    FileSystemService ..> MinIOVersion : creates/manages
+
+    VersionHistoryPanel ..> FileVersion : displays
+    VersionHistoryPanel ..> FileSystemItem : for
+

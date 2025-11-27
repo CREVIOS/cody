@@ -1,0 +1,82 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f4f8', 'primaryTextColor':'#2c3e50', 'primaryBorderColor':'#3498db', 'lineColor':'#3498db', 'secondaryColor':'#f0f9ff', 'tertiaryColor':'#e0f2fe', 'noteBkgColor':'#fff7ed', 'noteTextColor':'#2c3e50', 'noteBorderColor':'#f59e0b', 'activationBkgColor':'#dbeafe', 'activationBorderColor':'#3b82f6'}}}%%
+sequenceDiagram
+    actor User
+    participant UI as FileEditor
+    participant CM as CommandManager
+    participant Cmd as RestoreVersionCommand
+    participant VS as VersionService
+    participant FSS as FileSystemService
+    participant MinIO as MinIO
+
+    rect rgb(240, 248, 255)
+        Note over User,MinIO: Undo Restore
+    end
+
+    User->>UI: Press Ctrl+Z (Undo)
+    activate UI
+
+    UI->>CM: undo()
+    activate CM
+
+    CM->>CM: Pop from undoStack
+    CM->>CM: Check command.canUndo()
+    rect rgb(255, 247, 237)
+        Note right of CM: CommandManager checks canUndo()<br/>before calling undo()<br/>If false, put back to stack and throw error
+    end
+    CM->>Cmd: undo()
+    activate Cmd
+
+    rect rgb(255, 247, 237)
+        Note right of Cmd: Template Method Pattern<br/>BaseCommand.undo() orchestrates:<br/>1. Check if executed == false (throw error)<br/>2. Check canUndo() again (throw error if false)<br/>3. Call doUndo() hook<br/>4. Set executed = false (after doUndo returns)
+    end
+
+    Cmd->>Cmd: Check if executed == false
+    Cmd->>Cmd: Check canUndo() again
+    Cmd->>Cmd: doUndo() <<hook method>>
+    activate Cmd
+
+    Cmd->>Cmd: Check previousVersionId exists
+    rect rgb(240, 253, 244)
+        Note right of Cmd: Memento Pattern<br/>Restore previous content<br/>from saved memento
+    end
+
+    Cmd->>VS: restoreFileVersion(projectId, filePath, previousVersionId)
+    activate VS
+    VS->>FSS: POST /api/projects/{projectId}/files/restore<br/>{path: filePath, versionId: previousVersionId}
+    activate FSS
+    FSS->>FSS: restoreFileVersion(projectId, filePath, previousVersionId)
+    FSS->>FSS: getFileVersion(projectId, filePath, previousVersionId)
+    FSS->>MinIO: getObject(bucket, objectName, {versionId: previousVersionId})
+    activate MinIO
+    MinIO-->>FSS: Previous version content stream
+    deactivate MinIO
+    FSS->>FSS: Read stream to string
+    FSS->>FSS: Create buffer from content (Buffer.from(content, 'utf8'))
+    FSS->>MinIO: putObject(bucket, objectName, buffer, buffer.length,<br/>metadata: x-amz-meta-restored-from, x-amz-meta-restored-at)
+    activate MinIO
+    rect rgb(255, 247, 237)
+        Note right of MinIO: MinIO creates NEW version<br/>with previous content<br/>(Versioning is automatic)
+    end
+    MinIO->>MinIO: Generate new versionId
+    MinIO-->>FSS: Success, new versionId
+    deactivate MinIO
+    FSS-->>VS: {success: true, message: "File restored to version ...", path: filePath, restoredFrom: previousVersionId}
+    deactivate FSS
+    VS-->>Cmd: {success: true}
+    deactivate VS
+
+    Cmd->>Cmd: onContentUpdate(previousContent)
+    Cmd-->>Cmd: doUndo() returns
+    deactivate Cmd
+    Cmd->>Cmd: this.executed = false
+    Cmd-->>CM: Undo complete
+    deactivate Cmd
+
+    CM->>CM: Push to redoStack
+    CM->>CM: emitStateChange()
+    CM-->>UI: Undo successful
+    deactivate CM
+
+    UI->>UI: Refresh file content
+    UI-->>User: "Restore undone"
+    deactivate UI

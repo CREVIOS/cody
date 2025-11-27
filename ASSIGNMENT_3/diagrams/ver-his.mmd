@@ -12,16 +12,16 @@ sequenceDiagram
     User->>UI: Click "Version History" button
     activate UI
 
-    UI->>FSS: getVersions()
+    UI->>FSS: GET /api/projects/{projectId}/files/versions?path={filePath}
     activate FSS
 
-    FSS->>MinIO: listObjects(IncludeVersion: true)
+    FSS->>MinIO: listObjects(bucket, objectName, false, {IncludeVersion: true})
     activate MinIO
     MinIO-->>FSS: Stream of version objects
     deactivate MinIO
 
-    FSS->>FSS: Transform to FileVersion[] format
-    FSS-->>UI: {success: true, versions: [...]}
+    FSS->>FSS: Transform to FileVersion[] format\n(sort by lastModified descending)
+    FSS-->>UI: {success: true, file: filePath, versions: [...], totalVersions: N}
     deactivate FSS
 
     UI->>UI: Display version timeline with timestamps and metadata

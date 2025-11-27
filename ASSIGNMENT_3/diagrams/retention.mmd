@@ -10,20 +10,21 @@ sequenceDiagram
         Note over Trigger,Strategy: Apply Retention Policy (Strategy Pattern)
     end
 
-    Trigger->>VRM: applyRetentionPolicy()
+    Trigger->>VRM: applyRetentionPolicy(projectId, filePath)
     activate VRM
 
     rect rgb(255, 247, 237)
         Note right of VRM: Strategy Pattern<br/>Scheduled task or manual trigger
     end
 
-    VRM->>FSS: listVersions()
+    VRM->>FSS: listFileVersions(projectId, filePath)
     activate FSS
-    FSS->>MinIO: listObjects(IncludeVersion: true)
+    FSS->>MinIO: listObjects(bucket, objectName, false, { IncludeVersion: true })
     activate MinIO
-    MinIO-->>FSS: All versions
+    MinIO-->>FSS: Stream of version objects
     deactivate MinIO
-    FSS-->>VRM: versions[]
+    FSS->>FSS: Transform to FileVersion[] format\n(sort by lastModified descending)
+    FSS-->>VRM: {success: true, file: filePath, versions: [...], totalVersions: N}
     deactivate FSS
 
     VRM->>Strategy: filterVersionsToKeep(versions)
@@ -37,21 +38,22 @@ sequenceDiagram
     Strategy-->>VRM: versionsToKeep[]
     deactivate Strategy
 
-    VRM->>VRM: versionsToDelete = all - toKeep
+    VRM->>VRM: versionIdsToKeep = new Set(versionsToKeep.map(v => v.versionId))
+    VRM->>VRM: versionsToDelete = all.filter(v =>\n!versionIdsToKeep.has(v.versionId)\n&& !v.isLatest)
 
     rect rgb(254, 242, 242)
         loop For each version to delete
-            VRM->>FSS: deleteVersion(versionId)
+            VRM->>FSS: deleteFileVersion(projectId, filePath, versionId)
             activate FSS
-            FSS->>MinIO: removeObject(versionId)
+            FSS->>MinIO: removeObject(bucket, objectName, {versionId: versionId})
             activate MinIO
             MinIO-->>FSS: Deleted
             deactivate MinIO
-            FSS-->>VRM: Success
+            FSS-->>VRM: {success: true, message: "Version ... deleted successfully", path: filePath, deletedVersion: versionId}
             deactivate FSS
         end
     end
 
     VRM->>VRM: Log cleanup summary
-    VRM-->>Trigger: Cleanup complete
+    VRM-->>Trigger: {success: true, strategy: "...",\ntotalVersions: N, keptVersions: M,\ndeletedVersions: K, deletedVersionIds: [...]}
     deactivate VRM
