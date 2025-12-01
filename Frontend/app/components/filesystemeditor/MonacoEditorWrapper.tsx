@@ -4,7 +4,7 @@ import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
 import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
 import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
 import { Editor } from '@monaco-editor/react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 // Using any to avoid depending on monaco-editor type package
 import { useRealtimeCursors } from '@/hooks/use-realtime-cursors';
 
@@ -35,6 +35,21 @@ interface MonacoEditorWrapperProps {
     wsUrl?: string;
     offlineSupport?: boolean;
   };
+  
+  // Callback to receive collaboration actions (for save pipeline)
+  onCollaborationReady?: (actions: { getSnapshot?: () => string }) => void;
+  
+  // Phase 5: Lock state for permission enforcement
+  lockState?: {
+    state: "UNLOCKED" | "LOCKED";
+    locked_by?: string | null;
+    canEdit?: boolean;
+    expires_in?: number | null;
+  } | null;
+  lockStatusMessage?: string;
+  
+  // Phase 7: WebSocket status callback for debug panel
+  onWsStatusChange?: (status: 'connected' | 'disconnected' | 'syncing' | 'error') => void;
 }
 
 export function MonacoEditorWrapper({
@@ -48,6 +63,10 @@ export function MonacoEditorWrapper({
   roomName,
   docKey,
   forceReadOnly = false,
+  onCollaborationReady,
+  lockState,
+  lockStatusMessage,
+  onWsStatusChange,
 }: MonacoEditorWrapperProps) {
   const editorRef = useRef<any | null>(null);
 
@@ -60,23 +79,78 @@ export function MonacoEditorWrapper({
     docKey: docKey ?? roomName,
   });
 
-  // Apply read-only mode based on permission and current leader/editor
+  // Phase 5: Determine effective read-only state from locks and permissions
+  const effectiveReadOnly = useMemo(() => {
+    if (forceReadOnly) return true;
+    
+    // Check lock state if available
+    if (lockState) {
+      if (lockState.state === 'LOCKED') {
+        // Locked by someone else - read-only
+        if (lockState.locked_by && lockState.locked_by !== userId) {
+          return true;
+        }
+        // Use canEdit from lock state if available
+        if ('canEdit' in lockState && !lockState.canEdit) {
+          return true;
+        }
+      }
+    }
+    
+    // Fallback to realtime cursor system
+    return !isEditor;
+  }, [forceReadOnly, lockState, userId, isEditor]);
+
+  // Phase 5: Get lock status message
+  const readOnlyMessage = useMemo(() => {
+    if (forceReadOnly) {
+      return { value: '🔒 You do not have edit permission for this project' };
+    }
+    
+    if (lockState?.state === 'LOCKED' && lockState.locked_by && lockState.locked_by !== userId) {
+      return { value: lockStatusMessage || `🔒 File locked by ${lockState.locked_by.substring(0, 8)}...` };
+    }
+    
+    if (!isEditor) {
+      return { value: '🔒 Another user is editing this file' };
+    }
+    
+    return undefined;
+  }, [forceReadOnly, lockState, userId, isEditor, lockStatusMessage]);
+
+  // Apply read-only mode based on lock state and permissions
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed) return;
     ed.updateOptions({
-      readOnly: forceReadOnly || !isEditor,
-      readOnlyMessage: forceReadOnly
-        ? { value: '🔒 You do not have edit permission for this project' }
-        : (!isEditor ? { value: '🔒 Another user is editing this file' } : undefined),
+      readOnly: effectiveReadOnly,
+      readOnlyMessage: readOnlyMessage,
     });
     const node = ed.getDomNode();
-    if (node) node.style.outline = (forceReadOnly || !isEditor) ? '1px dashed #ef4444' : 'none';
-  }, [isEditor, forceReadOnly]);
+    if (node) node.style.outline = effectiveReadOnly ? '1px dashed #ef4444' : 'none';
+  }, [effectiveReadOnly, readOnlyMessage]);
+
+  // Phase 5: Only enable CRDT editing if user has lock
+  const canEditWithLock = useMemo(() => {
+    if (!lockState) return false; // No lock state yet
+    if (lockState.state === 'LOCKED') {
+      // Check if user holds the lock
+      if (lockState.locked_by && lockState.locked_by !== userId) {
+        return false; // Locked by someone else
+      }
+      // Use canEdit from lock state if available
+      if ('canEdit' in lockState) {
+        return lockState.canEdit;
+      }
+      return true; // User holds the lock
+    }
+    return lockState.state === 'UNLOCKED';
+  }, [lockState, userId]);
 
   // Setup collaboration if enabled
+  // Phase 5: CRDT binding only active when user has edit lock
   const [collabState, collabActions] = useCollaborativeEditor(
-    collaboration?.enabled
+    collaboration?.enabled && canEditWithLock
       ? {
           editor: editorRef.current,
           docId: collaboration.docId,
@@ -84,6 +158,7 @@ export function MonacoEditorWrapper({
           wsUrl: collaboration.wsUrl,
           offlineSupport: collaboration.offlineSupport,
           logging: true,
+          initialContent: content, // Pass initial content from backend/MinIO
         }
       : {
           editor: null,
@@ -91,6 +166,50 @@ export function MonacoEditorWrapper({
           user: { id: '', name: '' },
         }
   );
+
+  // Pass collaboration actions to parent for save pipeline
+  useEffect(() => {
+    if (collaboration?.enabled && collabActions && onCollaborationReady) {
+      onCollaborationReady({
+        getSnapshot: collabActions.getSnapshot,
+        setContent: collabActions.setContent,
+      });
+    }
+  }, [collaboration?.enabled, collabActions, onCollaborationReady]);
+
+  // Phase 7: Report WebSocket status to parent for debug panel
+  useEffect(() => {
+    if (!collaboration?.enabled || !onWsStatusChange) {
+      // If collaboration is disabled, report disconnected
+      if (onWsStatusChange) {
+        onWsStatusChange('disconnected');
+      }
+      return;
+    }
+    
+    // Map collabState.status to WebSocket status
+    // ConnectionStatus is: 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+    // Map to: 'connected' | 'disconnected' | 'syncing' | 'error'
+    const status = collabState.status || 'disconnected';
+    let mappedStatus: 'connected' | 'disconnected' | 'syncing' | 'error';
+    
+    if (status === 'connected') {
+      mappedStatus = 'connected';
+    } else if (status === 'connecting' || status === 'reconnecting') {
+      mappedStatus = 'syncing';
+    } else if (collabState.error) {
+      mappedStatus = 'error';
+    } else {
+      mappedStatus = 'disconnected';
+    }
+    
+    onWsStatusChange(mappedStatus);
+    
+    // Phase 7: Show offline warning if disconnected
+    if (mappedStatus === 'disconnected' && process.env.NODE_ENV === 'development') {
+      console.warn('[Phase 7] Collaboration offline — changes are local only');
+    }
+  }, [collabState.status, collabState.error, collaboration?.enabled, onWsStatusChange]);
 
   // Inject remote cursor styles on mount
   useEffect(() => {
@@ -194,10 +313,8 @@ export function MonacoEditorWrapper({
           onMount={handleEditorDidMount}
           loading={<div className="flex items-center justify-center h-full text-[#cccccc]">Loading editor...</div>}
         options={{
-          readOnly: forceReadOnly || !isEditor,
-          readOnlyMessage: forceReadOnly
-            ? { value: '🔒 You do not have edit permission for this project' }
-            : (!isEditor ? { value: '🔒 Another user is editing this file' } : undefined),
+          readOnly: effectiveReadOnly,
+          readOnlyMessage: readOnlyMessage,
           fontSize: 14,
           lineHeight: 21,
           

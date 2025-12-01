@@ -234,6 +234,7 @@ export function FileInfoBar({
                 onClick={handleUndo}
                 disabled={!canUndo}
                 title={undoDescription || "Nothing to undo (Ctrl+Z)"}
+                data-testid="file-undo-button"
                 className={`p-1.5 rounded transition-colors duration-150 ${
                   canUndo
                     ? (isDark
@@ -255,6 +256,7 @@ export function FileInfoBar({
                 onClick={handleRedo}
                 disabled={!canRedo}
                 title={redoDescription || "Nothing to redo (Ctrl+Y)"}
+                data-testid="file-redo-button"
                 className={`p-1.5 rounded transition-colors duration-150 ${
                   canRedo
                     ? (isDark
@@ -276,6 +278,7 @@ export function FileInfoBar({
           {/* Save button */}
           <button
             onClick={onSave}
+            data-testid="file-save-button"
             className={`px-3 py-1 text-xs rounded transition-colors duration-150 font-medium ${
               isSaving
                 ? (isDark

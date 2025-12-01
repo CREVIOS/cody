@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import WebSocketConnection
 from db import AsyncSessionLocal
 
-LOCK_TIMEOUT = timedelta(minutes=2)
+LOCK_TIMEOUT = timedelta(seconds=30)  # Locks expire after 15 seconds without heartbeat
 CLEANUP_INTERVAL = timedelta(seconds=30)  # Run cleanup every 30 seconds
 
 log = logging.getLogger("app.locks.service")
@@ -21,13 +21,42 @@ log = logging.getLogger("app.locks.service")
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
-def _as_state_dict_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _as_state_dict_row(row: Optional[Dict[str, Any]], current_user_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
+    """
+    Convert lock row to state dictionary with Phase 5 format.
+    Includes canEdit and expires_in fields.
+    """
     if not row or row.get("state") == "UNLOCKED" or not row.get("holder_user_id"):
-        return {"state": "UNLOCKED"}
+        return {
+            "state": "UNLOCKED",
+            "locked_by": None,
+            "canEdit": True,  # Unlocked files can be edited
+            "expires_in": None,
+        }
+    
+    holder_id = str(row["holder_user_id"])
+    expires_at = row.get("expires_at")
+    
+    # Calculate expires_in in seconds
+    expires_in = None
+    if expires_at:
+        if isinstance(expires_at, str):
+            from dateutil.parser import parse
+            expires_at = parse(expires_at)
+        if isinstance(expires_at, datetime):
+            delta = expires_at - _now()
+            expires_in = max(0, int(delta.total_seconds()))
+    
+    # Determine canEdit: user can edit if they hold the lock
+    can_edit = current_user_id is not None and str(current_user_id) == holder_id
+    
     return {
         "state": "LOCKED",
-        "holder_user_id": str(row["holder_user_id"]),
-        "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
+        "locked_by": holder_id,
+        "holder_user_id": holder_id,  # Keep for backward compatibility
+        "canEdit": can_edit,
+        "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at,
+        "expires_in": expires_in,
     }
 
 async def _fetch_lock_row(db: AsyncSession, file_id: uuid.UUID, for_update: bool = False) -> Optional[Dict[str, Any]]:
@@ -132,10 +161,14 @@ async def _active_user_ids_on_file(db: AsyncSession, file_id: uuid.UUID) -> set[
 
 # -------------------- public API --------------------
 
-async def get_state(db: AsyncSession, file_id: uuid.UUID) -> Dict[str, Any]:
+async def get_state(db: AsyncSession, file_id: uuid.UUID, current_user_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
+    """
+    Get current lock state with Phase 5 format.
+    Auto-expires stale locks (last_seen > 15s).
+    """
     await _cleanup_expired(db)
     row = await _fetch_lock_row(db, file_id)
-    return _as_state_dict_row(row)
+    return _as_state_dict_row(row, current_user_id)
 
 async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID, role: str) -> Dict[str, Any]:
     """
@@ -166,7 +199,7 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
             await db.flush()  # Ensure changes are visible in this transaction
             result = await _fetch_lock_row(db, file_id)
             await db.commit()
-            return _as_state_dict_row(result)
+            return _as_state_dict_row(result, user_id)
 
         # Non-owner: Check active websocket connections
         active_users = await _active_user_ids_on_file(db, file_id)
@@ -182,7 +215,7 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
             await db.flush()
             result = await _fetch_lock_row(db, file_id)
             await db.commit()
-            return _as_state_dict_row(result)
+            return _as_state_dict_row(result, user_id)
 
         # Multiple users - check lock state (row is already locked via FOR UPDATE)
         # If unlocked, grant to first requester
@@ -192,7 +225,7 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
             await db.flush()
             result = await _fetch_lock_row(db, file_id)
             await db.commit()
-            return _as_state_dict_row(result)
+            return _as_state_dict_row(result, user_id)
 
         # If I already hold it, renew
         if str(row.get("holder_user_id")) == str(user_id):
@@ -201,15 +234,13 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
             await db.flush()
             result = await _fetch_lock_row(db, file_id)
             await db.commit()
-            return _as_state_dict_row(result)
+            return _as_state_dict_row(result, user_id)
 
-        # Someone else holds it - blocked
+        # Someone else holds it - return locked state (don't raise exception)
         log.info("🚫 Blocked: another user holds the lock (holder=%s)", row.get("holder_user_id"))
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail="File is being edited by another user. Please wait."
-        )
+        # Return locked state instead of raising exception
+        return _as_state_dict_row(row, user_id)
 
 async def release_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) -> Dict[str, Any]:
     """
@@ -236,7 +267,12 @@ async def release_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID)
         await db.flush()
         await db.commit()
 
-        return {"state": "UNLOCKED"}
+        return {
+            "state": "UNLOCKED",
+            "locked_by": None,
+            "canEdit": True,
+            "expires_in": None,
+        }
 
 async def heartbeat(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) -> Dict[str, Any]:
     """
@@ -264,7 +300,7 @@ async def heartbeat(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) ->
         result = await _fetch_lock_row(db, file_id)
         await db.commit()
 
-        return _as_state_dict_row(result)
+        return _as_state_dict_row(result, user_id)
 
 # -------------------- background tasks --------------------
 

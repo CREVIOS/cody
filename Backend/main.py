@@ -195,6 +195,17 @@ async def health_check():
 router_factory = create_router_factory(routers_package="routers", api_prefix="/api/v1")
 router_factory.register_all_routers(app)
 
+# MANUAL REGISTRATION: Ensure files router is registered (temporary fix)
+# The factory should handle this, but manually registering to ensure it works
+try:
+    from routers import files
+    app.include_router(files.router, prefix="/api/v1")
+    logger.info("✅ Manually registered files router")
+except Exception as e:
+    logger.error(f"❌ Failed to manually register files router: {e}")
+    import traceback
+    traceback.print_exc()
+
 # OLD APPROACH (Before Factory Pattern):
 # Had to manually register each router - repetitive and error-prone!
 # app.include_router(users.router, prefix="/api/v1")

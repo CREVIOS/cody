@@ -49,11 +49,16 @@ async def resolve_file_identifier(
 async def get_lock_state(
     file_identifier: str,
     db: AsyncSession = Depends(get_db),
-    project_id: Optional[UUID] = Query(None, description="Project ID (required when using file path)")
+    project_id: Optional[UUID] = Query(None, description="Project ID (required when using file path)"),
+    user_id: Optional[UUID] = Query(None, description="Current user ID (for canEdit calculation)")
 ):
-    """Get current lock state for a file. Accepts either file_id UUID or file path."""
+    """
+    Get current lock state for a file. Accepts either file_id UUID or file path.
+    Auto-expires stale locks (last_seen > 15s).
+    Returns Phase 5 format with canEdit and expires_in.
+    """
     file_id = await resolve_file_identifier(file_identifier, db, project_id)
-    state = await lock_service.get_state(db, file_id)
+    state = await lock_service.get_state(db, file_id, current_user_id=user_id)
     return {"state": state}
 
 @router.post("/{file_identifier}/request")

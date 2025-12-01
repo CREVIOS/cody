@@ -76,6 +76,83 @@ async def read_file_version(
         )
     return version
 
+@router.get("/{version_id}/content")
+async def get_file_version_content(
+    version_id: UUID,
+    project_id: UUID = Query(..., description="Project ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 6: Get the content of a specific file version.
+    Fetches content from MinIO using the version_link stored in the database.
+    """
+    import httpx
+    import os
+    import re
+    
+    version = await crud.crud_file_version.get(db, id=version_id)
+    if not version:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File version not found"
+        )
+    
+    # Extract MinIO version ID from version_link
+    # Format: minio://{project_id}/{file_path}#{version_id}
+    version_link = version.version_link
+    minio_version_match = re.search(r'#([^#]+)$', version_link)
+    minio_version_id = minio_version_match.group(1) if minio_version_match else None
+    
+    # Extract file path from version_link
+    file_path_match = re.search(r'minio://[^/]+/(.+?)(?:#|$)', version_link)
+    file_path = file_path_match.group(1) if file_path_match else None
+    
+    if not file_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid version_link format"
+        )
+    
+    # Fetch content from SBackend
+    sbackend_url = os.getenv("SBACKEND_URL", "http://localhost:3001")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if minio_version_id:
+                # Use version-specific endpoint
+                response = await client.get(
+                    f"{sbackend_url}/api/projects/{project_id}/files/version/{minio_version_id}",
+                    params={"path": file_path}
+                )
+            else:
+                # Fallback to current file content
+                response = await client.get(
+                    f"{sbackend_url}/api/projects/{project_id}/files/read",
+                    params={"path": file_path}
+                )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to fetch version content: {result.get('error', 'Unknown error')}"
+                )
+            
+            return {
+                "versionId": str(version.version_id),
+                "content": result.get("content", ""),
+                "size": version.size_in_bytes,
+                "createdAt": version.created_at.isoformat(),
+                "createdBy": str(version.created_by)
+            }
+            
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"SBackend service unavailable: {str(e)}"
+        )
+
 @router.put("/{version_id}", response_model=schemas.FileVersion)
 async def update_file_version(
     version_id: UUID,

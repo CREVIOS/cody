@@ -314,7 +314,8 @@ class CollaborationRoom extends EventEmitter {
       });
 
       if (response.status === 200 && response.data) {
-        const lockState = response.data;
+        // Fix: Backend returns { state: { ... } }, so we need to read response.data.state
+        const lockState = response.data.state || response.data;
 
         // Check if locked and if this user is the holder
         if (lockState.state === 'LOCKED') {
