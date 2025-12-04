@@ -79,44 +79,61 @@ export function MonacoEditorWrapper({
     docKey: docKey ?? roomName,
   });
 
-  // Phase 5: Determine effective read-only state from locks and permissions
+  // COMMENTED OUT: Lock-based read-only check disabled (CRDT-only mode)
+  // // Phase 5: Determine effective read-only state from locks and permissions
+  // const effectiveReadOnly = useMemo(() => {
+  //   if (forceReadOnly) return true;
+  //   
+  //   // Check lock state if available
+  //   if (lockState) {
+  //     if (lockState.state === 'LOCKED') {
+  //       // Locked by someone else - read-only
+  //       if (lockState.locked_by && lockState.locked_by !== userId) {
+  //         return true;
+  //       }
+  //       // Use canEdit from lock state if available
+  //       if ('canEdit' in lockState && !lockState.canEdit) {
+  //         return true;
+  //       }
+  //     }
+  //   }
+  //   
+  //   // Fallback to realtime cursor system
+  //   return !isEditor;
+  // }, [forceReadOnly, lockState, userId, isEditor]);
+  
+  // CRDT-only mode: NEVER block writes - always allow editing
+  // Write permissions should never be blocked in CRDT mode
   const effectiveReadOnly = useMemo(() => {
-    if (forceReadOnly) return true;
-    
-    // Check lock state if available
-    if (lockState) {
-      if (lockState.state === 'LOCKED') {
-        // Locked by someone else - read-only
-        if (lockState.locked_by && lockState.locked_by !== userId) {
-          return true;
-        }
-        // Use canEdit from lock state if available
-        if ('canEdit' in lockState && !lockState.canEdit) {
-          return true;
-        }
-      }
-    }
-    
-    // Fallback to realtime cursor system
-    return !isEditor;
-  }, [forceReadOnly, lockState, userId, isEditor]);
+    // Always return false - never make editor read-only in CRDT mode
+    // CRDT handles conflict resolution automatically, so all users can edit
+    return false;
+  }, []);
 
-  // Phase 5: Get lock status message
+  // COMMENTED OUT: Lock status message disabled (CRDT-only mode)
+  // // Phase 5: Get lock status message
+  // const readOnlyMessage = useMemo(() => {
+  //   if (forceReadOnly) {
+  //     return { value: '🔒 You do not have edit permission for this project' };
+  //   }
+  //   
+  //   if (lockState?.state === 'LOCKED' && lockState.locked_by && lockState.locked_by !== userId) {
+  //     return { value: lockStatusMessage || `🔒 File locked by ${lockState.locked_by.substring(0, 8)}...` };
+  //   }
+  //   
+  //   if (!isEditor) {
+  //     return { value: '🔒 Another user is editing this file' };
+  //   }
+  //   
+  //   return undefined;
+  // }, [forceReadOnly, lockState, userId, isEditor, lockStatusMessage]);
+  
+  // CRDT-only mode: no read-only messages - everyone can edit
   const readOnlyMessage = useMemo(() => {
-    if (forceReadOnly) {
-      return { value: '🔒 You do not have edit permission for this project' };
-    }
-    
-    if (lockState?.state === 'LOCKED' && lockState.locked_by && lockState.locked_by !== userId) {
-      return { value: lockStatusMessage || `🔒 File locked by ${lockState.locked_by.substring(0, 8)}...` };
-    }
-    
-    if (!isEditor) {
-      return { value: '🔒 Another user is editing this file' };
-    }
-    
+    // Never show read-only messages in CRDT mode
+    // All users can edit simultaneously
     return undefined;
-  }, [forceReadOnly, lockState, userId, isEditor, lockStatusMessage]);
+  }, []);
 
   // Apply read-only mode based on lock state and permissions
   useEffect(() => {
@@ -130,24 +147,29 @@ export function MonacoEditorWrapper({
     if (node) node.style.outline = effectiveReadOnly ? '1px dashed #ef4444' : 'none';
   }, [effectiveReadOnly, readOnlyMessage]);
 
-  // Phase 5: Only enable CRDT editing if user has lock
-  const canEditWithLock = useMemo(() => {
-    if (!lockState) return false; // No lock state yet
-    if (lockState.state === 'LOCKED') {
-      // Check if user holds the lock
-      if (lockState.locked_by && lockState.locked_by !== userId) {
-        return false; // Locked by someone else
-      }
-      // Use canEdit from lock state if available
-      if ('canEdit' in lockState) {
-        return lockState.canEdit;
-      }
-      return true; // User holds the lock
-    }
-    return lockState.state === 'UNLOCKED';
-  }, [lockState, userId]);
+  // COMMENTED OUT: Lock-based CRDT enable check disabled (CRDT-only mode)
+  // // Phase 5: Only enable CRDT editing if user has lock
+  // const canEditWithLock = useMemo(() => {
+  //   if (!lockState) return false; // No lock state yet
+  //   if (lockState.state === 'LOCKED') {
+  //     // Check if user holds the lock
+  //     if (lockState.locked_by && lockState.locked_by !== userId) {
+  //       return false; // Locked by someone else
+  //     }
+  //     // Use canEdit from lock state if available
+  //     if ('canEdit' in lockState) {
+  //       return lockState.canEdit;
+  //     }
+  //     return true; // User holds the lock
+  //   }
+  //   return lockState.state === 'UNLOCKED';
+  // }, [lockState, userId]);
+  
+  // CRDT-only mode: always enable CRDT if collaboration is enabled (no lock checks)
+  const canEditWithLock = true;
 
   // Setup collaboration if enabled
+  // COMMENTED OUT: Lock check removed - CRDT always enabled when collaboration is enabled
   // Phase 5: CRDT binding only active when user has edit lock
   const [collabState, collabActions] = useCollaborativeEditor(
     collaboration?.enabled && canEditWithLock
@@ -295,8 +317,10 @@ export function MonacoEditorWrapper({
           : 'bg-[#ffffff] border-[#e5e5e5] text-[#383838]'
       }`}>
         <span>Room: {roomName}</span>
-        <span>{(forceReadOnly || !isEditor) ? '🔒 Read-only' : '✅ You can edit'}</span>
-        {!isEditor && activeEditor ? <span className="opacity-70">editor: {activeEditor}</span> : null}
+        {/* COMMENTED OUT: Leader election read-only check disabled (CRDT-only mode) */}
+        {/* <span>{(forceReadOnly || !isEditor) ? '🔒 Read-only' : '✅ You can edit'}</span> */}
+        <span>{forceReadOnly ? '🔒 Read-only (no permission)' : '✅ You can edit (CRDT mode)'}</span>
+        {/* {!isEditor && activeEditor ? <span className="opacity-70">editor: {activeEditor}</span> : null} */}
         <span className="opacity-70">
           Inactivity: {Math.floor(inactivitySeconds / 60)}m {inactivitySeconds % 60}s
         </span>

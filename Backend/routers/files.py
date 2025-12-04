@@ -202,22 +202,25 @@ async def get_file_realtime_key(
     # Format: doc:{project_id}:{file_uuid} - stable across sessions
     doc_id = f"doc:{project_id}:{file_uuid}"
 
-    # Get user permissions for this project
-    from services.permission_enforcer import get_user_permissions_map
-    permissions_map = await get_user_permissions_map(
-        db,
-        project_id=project_id,
-        user_id=user_id,
-        permissions_to_check=["canEdit", "canView"],
-    )
-
+    # COMMENTED OUT: Permission checks disabled (CRDT-only mode)
+    # # Get user permissions for this project
+    # from services.permission_enforcer import get_user_permissions_map
+    # permissions_map = await get_user_permissions_map(
+    #     db,
+    #     project_id=project_id,
+    #     user_id=user_id,
+    #     permissions_to_check=["canEdit", "canView"],
+    # )
+    
+    # CRDT-only mode: Always return true for all permissions
+    # Write permissions should never be blocked in CRDT mode
     return RealtimeKey(
         docId=doc_id,
         fileId=str(file_uuid),
         projectId=str(project_id),
         permissions=RealtimeKeyPermissions(
-            canEdit=permissions_map.get("canEdit", False),
-            canView=permissions_map.get("canView", False),
+            canEdit=True,  # Always allow editing in CRDT mode
+            canView=True,  # Always allow viewing in CRDT mode
         )
     )
 
@@ -255,21 +258,24 @@ async def save_file_content(
             detail=f"Invalid file identifier: {str(e)}"
         )
     
+    # COMMENTED OUT: Lock enforcement disabled (CRDT-only mode)
     # Phase 6 Step 7: Lock enforcement - verify user holds the lock
-    lock_state = await lock_service.get_state(db, file_uuid, current_user_id=user_id)
-    if lock_state.get("state") == "LOCKED":
-        locked_by = lock_state.get("locked_by") or lock_state.get("holder_user_id")
-        if locked_by and str(locked_by) != str(user_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Lock required to save changes. You do not hold the lock for this file."
-            )
-        # Also check canEdit flag
-        if not lock_state.get("canEdit", False):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Lock required to save changes. You do not have edit permission."
-            )
+    # lock_state = await lock_service.get_state(db, file_uuid, current_user_id=user_id)
+    # if lock_state.get("state") == "LOCKED":
+    #     locked_by = lock_state.get("locked_by") or lock_state.get("holder_user_id")
+    #     if locked_by and str(locked_by) != str(user_id):
+    #         raise HTTPException(
+    #             status_code=status.HTTP_403_FORBIDDEN,
+    #             detail="Lock required to save changes. You do not hold the lock for this file."
+    #         )
+    #     # Also check canEdit flag
+    #     if not lock_state.get("canEdit", False):
+    #         raise HTTPException(
+    #             status_code=status.HTTP_403_FORBIDDEN,
+    #             detail="Lock required to save changes. You do not have edit permission."
+    #         )
+    
+    # CRDT-only mode: No lock checks - all users can save
     
     # Verify project exists
     project = await crud.crud_project.get(db, id=project_id)

@@ -161,14 +161,28 @@ async def _active_user_ids_on_file(db: AsyncSession, file_id: uuid.UUID) -> set[
 
 # -------------------- public API --------------------
 
+# FILE LOCKING MECHANISM COMMENTED OUT - CRDT ONLY MODE
+# All lock functions return default "UNLOCKED" state to keep CRDT working
+
 async def get_state(db: AsyncSession, file_id: uuid.UUID, current_user_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
     """
     Get current lock state with Phase 5 format.
     Auto-expires stale locks (last_seen > 15s).
+    
+    COMMENTED OUT: Always returns UNLOCKED state
     """
-    await _cleanup_expired(db)
-    row = await _fetch_lock_row(db, file_id)
-    return _as_state_dict_row(row, current_user_id)
+    # COMMENTED OUT: Lock mechanism disabled
+    # await _cleanup_expired(db)
+    # row = await _fetch_lock_row(db, file_id)
+    # return _as_state_dict_row(row, current_user_id)
+    
+    # Return default unlocked state
+    return {
+        "state": "UNLOCKED",
+        "locked_by": None,
+        "canEdit": True,
+        "expires_in": None,
+    }
 
 async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID, role: str) -> Dict[str, Any]:
     """
@@ -179,128 +193,161 @@ async def request_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID,
     - Everyone else: If only 1 person connected, they can edit. If 2+, first person locks, others blocked.
 
     Uses SELECT FOR UPDATE to prevent race conditions.
+    
+    COMMENTED OUT: Always returns UNLOCKED state
     """
-    # Cleanup expired locks first (separate transaction)
-    await _cleanup_expired(db)
-
-    now = _now()
-    role_norm = (role or "").strip().lower()
-    OWNER_ROLES = {"owner", "admin", "administrator"}
-    is_owner = role_norm in OWNER_ROLES
-
-    log.info("📥 request_lock file=%s user=%s role=%s is_owner=%s", file_id, user_id, role_norm, is_owner)
-
-    # Start a new transaction for atomic lock operation
-    async with db.begin_nested():
-        # OWNER: Always grant immediately with preemption
-        if is_owner:
-            log.info("👑 OWNER - granting lock immediately (may preempt current holder)")
-            await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
-            await db.flush()  # Ensure changes are visible in this transaction
-            result = await _fetch_lock_row(db, file_id)
-            await db.commit()
-            return _as_state_dict_row(result, user_id)
-
-        # Non-owner: Check active websocket connections
-        active_users = await _active_user_ids_on_file(db, file_id)
-        log.info("👥 active_users=%s (count=%d)", [str(u) for u in active_users], len(active_users))
-
-        # Acquire exclusive lock on the file_locks row to prevent race conditions
-        row = await _fetch_lock_row(db, file_id, for_update=True)
-
-        # If only 1 person (me), grant immediately
-        if len(active_users) <= 1:
-            log.info("🚶 Single user - granting lock")
-            await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
-            await db.flush()
-            result = await _fetch_lock_row(db, file_id)
-            await db.commit()
-            return _as_state_dict_row(result, user_id)
-
-        # Multiple users - check lock state (row is already locked via FOR UPDATE)
-        # If unlocked, grant to first requester
-        if not row or row.get("state") == "UNLOCKED" or not row.get("holder_user_id"):
-            log.info("🔓 Multi-user, unlocked - granting to first requester")
-            await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
-            await db.flush()
-            result = await _fetch_lock_row(db, file_id)
-            await db.commit()
-            return _as_state_dict_row(result, user_id)
-
-        # If I already hold it, renew
-        if str(row.get("holder_user_id")) == str(user_id):
-            log.info("🔄 Already holds lock - renewing")
-            await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
-            await db.flush()
-            result = await _fetch_lock_row(db, file_id)
-            await db.commit()
-            return _as_state_dict_row(result, user_id)
-
-        # Someone else holds it - return locked state (don't raise exception)
-        log.info("🚫 Blocked: another user holds the lock (holder=%s)", row.get("holder_user_id"))
-        await db.commit()
-        # Return locked state instead of raising exception
-        return _as_state_dict_row(row, user_id)
+    # COMMENTED OUT: Lock mechanism disabled
+    # # Cleanup expired locks first (separate transaction)
+    # await _cleanup_expired(db)
+    # 
+    # now = _now()
+    # role_norm = (role or "").strip().lower()
+    # OWNER_ROLES = {"owner", "admin", "administrator"}
+    # is_owner = role_norm in OWNER_ROLES
+    # 
+    # log.info("📥 request_lock file=%s user=%s role=%s is_owner=%s", file_id, user_id, role_norm, is_owner)
+    # 
+    # # Start a new transaction for atomic lock operation
+    # async with db.begin_nested():
+    #     # OWNER: Always grant immediately with preemption
+    #     if is_owner:
+    #         log.info("👑 OWNER - granting lock immediately (may preempt current holder)")
+    #         await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
+    #         await db.flush()  # Ensure changes are visible in this transaction
+    #         result = await _fetch_lock_row(db, file_id)
+    #         await db.commit()
+    #         return _as_state_dict_row(result, user_id)
+    # 
+    #     # Non-owner: Check active websocket connections
+    #     active_users = await _active_user_ids_on_file(db, file_id)
+    #     log.info("👥 active_users=%s (count=%d)", [str(u) for u in active_users], len(active_users))
+    # 
+    #     # Acquire exclusive lock on the file_locks row to prevent race conditions
+    #     row = await _fetch_lock_row(db, file_id, for_update=True)
+    # 
+    #     # If only 1 person (me), grant immediately
+    #     if len(active_users) <= 1:
+    #         log.info("🚶 Single user - granting lock")
+    #         await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
+    #         await db.flush()
+    #         result = await _fetch_lock_row(db, file_id)
+    #         await db.commit()
+    #         return _as_state_dict_row(result, user_id)
+    # 
+    #     # Multiple users - check lock state (row is already locked via FOR UPDATE)
+    #     # If unlocked, grant to first requester
+    #     if not row or row.get("state") == "UNLOCKED" or not row.get("holder_user_id"):
+    #         log.info("🔓 Multi-user, unlocked - granting to first requester")
+    #         await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
+    #         await db.flush()
+    #         result = await _fetch_lock_row(db, file_id)
+    #         await db.commit()
+    #         return _as_state_dict_row(result, user_id)
+    # 
+    #     # If I already hold it, renew
+    #     if str(row.get("holder_user_id")) == str(user_id):
+    #         log.info("🔄 Already holds lock - renewing")
+    #         await _upsert_lock(db, file_id, user_id, "LOCKED", now + LOCK_TIMEOUT)
+    #         await db.flush()
+    #         result = await _fetch_lock_row(db, file_id)
+    #         await db.commit()
+    #         return _as_state_dict_row(result, user_id)
+    # 
+    #     # Someone else holds it - return locked state (don't raise exception)
+    #     log.info("🚫 Blocked: another user holds the lock (holder=%s)", row.get("holder_user_id"))
+    #     await db.commit()
+    #     # Return locked state instead of raising exception
+    #     return _as_state_dict_row(row, user_id)
+    
+    # Return default unlocked state
+    return {
+        "state": "UNLOCKED",
+        "locked_by": None,
+        "canEdit": True,
+        "expires_in": None,
+    }
 
 async def release_lock(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) -> Dict[str, Any]:
     """
     Atomically release a lock with ownership verification.
     Uses SELECT FOR UPDATE to prevent race conditions.
+    
+    COMMENTED OUT: Always returns UNLOCKED state
     """
-    await _cleanup_expired(db)
-
-    async with db.begin_nested():
-        # Lock the row exclusively to prevent concurrent modifications
-        row = await _fetch_lock_row(db, file_id, for_update=True)
-
-        if not row or row.get("state") == "UNLOCKED":
-            await db.commit()
-            return _as_state_dict_row(row)
-
-        # Verify ownership before releasing
-        if str(row.get("holder_user_id")) != str(user_id):
-            await db.commit()
-            raise HTTPException(status_code=403, detail="You do not hold this lock.")
-
-        log.info("🔓 Releasing lock for user %s", user_id)
-        await _unlock(db, file_id)
-        await db.flush()
-        await db.commit()
-
-        return {
-            "state": "UNLOCKED",
-            "locked_by": None,
-            "canEdit": True,
-            "expires_in": None,
-        }
+    # COMMENTED OUT: Lock mechanism disabled
+    # await _cleanup_expired(db)
+    # 
+    # async with db.begin_nested():
+    #     # Lock the row exclusively to prevent concurrent modifications
+    #     row = await _fetch_lock_row(db, file_id, for_update=True)
+    # 
+    #     if not row or row.get("state") == "UNLOCKED":
+    #         await db.commit()
+    #         return _as_state_dict_row(row)
+    # 
+    #     # Verify ownership before releasing
+    #     if str(row.get("holder_user_id")) != str(user_id):
+    #         await db.commit()
+    #         raise HTTPException(status_code=403, detail="You do not hold this lock.")
+    # 
+    #     log.info("🔓 Releasing lock for user %s", user_id)
+    #     await _unlock(db, file_id)
+    #     await db.flush()
+    #     await db.commit()
+    # 
+    #     return {
+    #         "state": "UNLOCKED",
+    #         "locked_by": None,
+    #         "canEdit": True,
+    #         "expires_in": None,
+    #     }
+    
+    # Return default unlocked state
+    return {
+        "state": "UNLOCKED",
+        "locked_by": None,
+        "canEdit": True,
+        "expires_in": None,
+    }
 
 async def heartbeat(db: AsyncSession, file_id: uuid.UUID, user_id: uuid.UUID) -> Dict[str, Any]:
     """
     Atomically extend lock expiration with ownership verification.
     Uses SELECT FOR UPDATE to prevent race conditions.
+    
+    COMMENTED OUT: Always returns UNLOCKED state
     """
-    await _cleanup_expired(db)
-
-    async with db.begin_nested():
-        # Lock the row exclusively to prevent concurrent modifications
-        row = await _fetch_lock_row(db, file_id, for_update=True)
-
-        if not row or row.get("state") == "UNLOCKED":
-            await db.commit()
-            raise HTTPException(status_code=404, detail="No active lock.")
-
-        # Verify ownership before extending
-        if str(row.get("holder_user_id")) != str(user_id):
-            await db.commit()
-            raise HTTPException(status_code=403, detail="You are not the lock holder.")
-
-        log.info("💓 Heartbeat from user %s", user_id)
-        await _upsert_lock(db, file_id, user_id, "LOCKED", _now() + LOCK_TIMEOUT)
-        await db.flush()
-        result = await _fetch_lock_row(db, file_id)
-        await db.commit()
-
-        return _as_state_dict_row(result, user_id)
+    # COMMENTED OUT: Lock mechanism disabled
+    # await _cleanup_expired(db)
+    # 
+    # async with db.begin_nested():
+    #     # Lock the row exclusively to prevent concurrent modifications
+    #     row = await _fetch_lock_row(db, file_id, for_update=True)
+    # 
+    #     if not row or row.get("state") == "UNLOCKED":
+    #         await db.commit()
+    #         raise HTTPException(status_code=404, detail="No active lock.")
+    # 
+    #     # Verify ownership before extending
+    #     if str(row.get("holder_user_id")) != str(user_id):
+    #         await db.commit()
+    #         raise HTTPException(status_code=403, detail="You are not the lock holder.")
+    # 
+    #     log.info("💓 Heartbeat from user %s", user_id)
+    #     await _upsert_lock(db, file_id, user_id, "LOCKED", _now() + LOCK_TIMEOUT)
+    #     await db.flush()
+    #     result = await _fetch_lock_row(db, file_id)
+    #     await db.commit()
+    # 
+    #     return _as_state_dict_row(result, user_id)
+    
+    # Return default unlocked state
+    return {
+        "state": "UNLOCKED",
+        "locked_by": None,
+        "canEdit": True,
+        "expires_in": None,
+    }
 
 # -------------------- background tasks --------------------
 
@@ -311,48 +358,59 @@ async def start_lock_cleanup_task():
     """
     Start background task for continuous lock expiration monitoring.
     This ensures locks are cleaned up even if no requests arrive.
+    
+    COMMENTED OUT: Lock cleanup disabled
     """
-    global _cleanup_running, _cleanup_task
-
-    if _cleanup_running:
-        log.warning("Lock cleanup task is already running")
-        return
-
-    _cleanup_running = True
-    log.info("🧹 Starting continuous lock cleanup task (interval: %s seconds)", CLEANUP_INTERVAL.total_seconds())
-
-    async def cleanup_loop():
-        while _cleanup_running:
-            try:
-                async with AsyncSessionLocal() as db:
-                    count = await _cleanup_expired(db)
-                    if count > 0:
-                        log.info("🧹 Cleaned up %d expired lock(s)", count)
-            except Exception as e:
-                log.error("Error in lock cleanup task: %s", e, exc_info=True)
-
-            # Wait before next cleanup
-            await asyncio.sleep(CLEANUP_INTERVAL.total_seconds())
-
-    _cleanup_task = asyncio.create_task(cleanup_loop())
-    return _cleanup_task
+    # COMMENTED OUT: Lock mechanism disabled
+    # global _cleanup_running, _cleanup_task
+    # 
+    # if _cleanup_running:
+    #     log.warning("Lock cleanup task is already running")
+    #     return
+    # 
+    # _cleanup_running = True
+    # log.info("🧹 Starting continuous lock cleanup task (interval: %s seconds)", CLEANUP_INTERVAL.total_seconds())
+    # 
+    # async def cleanup_loop():
+    #     while _cleanup_running:
+    #         try:
+    #             async with AsyncSessionLocal() as db:
+    #                 count = await _cleanup_expired(db)
+    #                 if count > 0:
+    #                     log.info("🧹 Cleaned up %d expired lock(s)", count)
+    #         except Exception as e:
+    #             log.error("Error in lock cleanup task: %s", e, exc_info=True)
+    # 
+    #         # Wait before next cleanup
+    #         await asyncio.sleep(CLEANUP_INTERVAL.total_seconds())
+    # 
+    # _cleanup_task = asyncio.create_task(cleanup_loop())
+    # return _cleanup_task
+    
+    log.info("🧹 Lock cleanup task disabled (CRDT-only mode)")
+    return None
 
 async def stop_lock_cleanup_task():
     """
     Stop the background lock cleanup task gracefully.
+    
+    COMMENTED OUT: Lock cleanup disabled
     """
-    global _cleanup_running, _cleanup_task
-
-    if not _cleanup_running:
-        return
-
-    log.info("🛑 Stopping lock cleanup task")
-    _cleanup_running = False
-
-    if _cleanup_task:
-        _cleanup_task.cancel()
-        try:
-            await _cleanup_task
-        except asyncio.CancelledError:
-            pass
-        _cleanup_task = None
+    # COMMENTED OUT: Lock mechanism disabled
+    # global _cleanup_running, _cleanup_task
+    # 
+    # if not _cleanup_running:
+    #     return
+    # 
+    # log.info("🛑 Stopping lock cleanup task")
+    # _cleanup_running = False
+    # 
+    # if _cleanup_task:
+    #     _cleanup_task.cancel()
+    #     try:
+    #         await _cleanup_task
+    #     except asyncio.CancelledError:
+    #         pass
+    #     _cleanup_task = None
+    
+    log.info("🛑 Lock cleanup task disabled (CRDT-only mode)")

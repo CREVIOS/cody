@@ -81,23 +81,30 @@ export function FileEditorContent({
   const canEdit = hasPermission('canEdit');
   const canRequestLock = hasPermission('canRequestLock');
 
-  // File lock management - Phase 5: Auto-request lock on file open
-  const [isRequestingLock, setIsRequestingLock] = useState(false);
-  const {
-    state: lockState,
-    canEdit: hasEditLock,
-    request: requestLock,
-    release: releaseLock,
-  } = useFileLock({
-    fileId: selectedFile?.path,
-    userId: user?.user_id,
-    role: (userRole?.toLowerCase() || 'editor') as 'owner' | 'admin' | 'editor' | 'viewer',
-    autoRequest: true, // Phase 5: Auto-request lock when file opens
-    heartbeatMs: 5_000, // Phase 5: Heartbeat every 5 seconds
-    canRequestLock: canRequestLock,
-    canLock: canEdit,
-    projectId: projectId,
-  });
+  // COMMENTED OUT: File lock management disabled (CRDT-only mode)
+  // // File lock management - Phase 5: Auto-request lock on file open
+  // const [isRequestingLock, setIsRequestingLock] = useState(false);
+  // const {
+  //   state: lockState,
+  //   canEdit: hasEditLock,
+  //   request: requestLock,
+  //   release: releaseLock,
+  // } = useFileLock({
+  //   fileId: selectedFile?.path,
+  //   userId: user?.user_id,
+  //   role: (userRole?.toLowerCase() || 'editor') as 'owner' | 'admin' | 'editor' | 'viewer',
+  //   autoRequest: true, // Phase 5: Auto-request lock when file opens
+  //   heartbeatMs: 5_000, // Phase 5: Heartbeat every 5 seconds
+  //   canRequestLock: canRequestLock,
+  //   canLock: canEdit,
+  //   projectId: projectId,
+  // });
+  
+  // Mock lock state for compatibility (always unlocked)
+  const lockState = null;
+  const isRequestingLock = false;
+  const requestLock = async () => ({ state: "UNLOCKED", locked_by: null, canEdit: true, expires_in: null });
+  const releaseLock = async () => ({ state: "UNLOCKED", locked_by: null, canEdit: true, expires_in: null });
 
   // Determine language based on file extension
   useEffect(() => {
@@ -107,49 +114,50 @@ export function FileEditorContent({
     }
   }, [selectedFile]);
 
-  // Phase 5: Request lock when file opens
-  useEffect(() => {
-    if (!selectedFile || !user?.user_id || !canEdit) return;
-    
-    // Request lock automatically when file opens
-    const requestLockOnOpen = async () => {
-      try {
-        await requestLock();
-      } catch (error) {
-        console.error('Failed to request lock on file open:', error);
-      }
-    };
-    
-    requestLockOnOpen();
-  }, [selectedFile?.path, user?.user_id, canEdit, requestLock]);
-
-  // Phase 5: Release lock when switching files or closing
-  useEffect(() => {
-    return () => {
-      // Cleanup: release lock when component unmounts or file changes
-      if (selectedFile?.path && user?.user_id) {
-        releaseLock().catch((error) => {
-          console.error('Failed to release lock on cleanup:', error);
-        });
-      }
-    };
-  }, [selectedFile?.path, user?.user_id, releaseLock]);
-
-  // Phase 5: Release lock on browser unload
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (selectedFile?.path && user?.user_id) {
-        // Use sendBeacon for reliable unload handling
-        navigator.sendBeacon(
-          `${API_BASE_URL}/api/v1/locks/${encodeURIComponent(selectedFile.path)}/release?project_id=${encodeURIComponent(projectId || '')}`,
-          JSON.stringify({ user_id: user.user_id })
-        );
-      }
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [selectedFile?.path, user?.user_id, projectId, API_BASE_URL]);
+  // COMMENTED OUT: Lock request/release disabled (CRDT-only mode)
+  // // Phase 5: Request lock when file opens
+  // useEffect(() => {
+  //   if (!selectedFile || !user?.user_id || !canEdit) return;
+  //   
+  //   // Request lock automatically when file opens
+  //   const requestLockOnOpen = async () => {
+  //     try {
+  //       await requestLock();
+  //     } catch (error) {
+  //       console.error('Failed to request lock on file open:', error);
+  //     }
+  //   };
+  //   
+  //   requestLockOnOpen();
+  // }, [selectedFile?.path, user?.user_id, canEdit, requestLock]);
+  // 
+  // // Phase 5: Release lock when switching files or closing
+  // useEffect(() => {
+  //   return () => {
+  //     // Cleanup: release lock when component unmounts or file changes
+  //     if (selectedFile?.path && user?.user_id) {
+  //       releaseLock().catch((error) => {
+  //         console.error('Failed to release lock on cleanup:', error);
+  //       });
+  //     }
+  //   };
+  // }, [selectedFile?.path, user?.user_id, releaseLock]);
+  // 
+  // // Phase 5: Release lock on browser unload
+  // useEffect(() => {
+  //   const handleBeforeUnload = () => {
+  //     if (selectedFile?.path && user?.user_id) {
+  //       // Use sendBeacon for reliable unload handling
+  //       navigator.sendBeacon(
+  //         `${API_BASE_URL}/api/v1/locks/${encodeURIComponent(selectedFile.path)}/release?project_id=${encodeURIComponent(projectId || '')}`,
+  //         JSON.stringify({ user_id: user.user_id })
+  //       );
+  //     }
+  //   };
+  //   
+  //   window.addEventListener('beforeunload', handleBeforeUnload);
+  //   return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  // }, [selectedFile?.path, user?.user_id, projectId, API_BASE_URL]);
 
   // Fetch realtime-key metadata when file is selected
   useEffect(() => {
@@ -184,24 +192,33 @@ export function FileEditorContent({
     fetchRealtimeKey();
   }, [selectedFile?.path, projectId, user?.user_id]);
 
-  // Phase 5: Combine permission-based canEdit with lock-based canEdit
+  // COMMENTED OUT: Lock-based canEdit check disabled (CRDT-only mode)
+  // // Phase 5: Combine permission-based canEdit with lock-based canEdit
+  // const effectiveCanEdit = useMemo(() => {
+  //   if (!canEdit) return false; // No permission
+  //   if (!lockState) return false; // No lock state yet
+  //   // Use lockState.canEdit if available, otherwise check if user holds the lock
+  //   if ('canEdit' in lockState) {
+  //     return lockState.canEdit;
+  //   }
+  //   // Fallback: check if user holds the lock
+  //   if (lockState.state === 'LOCKED') {
+  //     const lockedBy = lockState.locked_by || lockState.holder_user_id;
+  //     return lockedBy === user?.user_id;
+  //   }
+  //   return lockState.state === 'UNLOCKED';
+  // }, [canEdit, lockState, user?.user_id]);
+  
+  // CRDT-only mode: ALWAYS allow editing (no permission or lock checks)
+  // Write permissions should never be blocked in CRDT mode
   const effectiveCanEdit = useMemo(() => {
-    if (!canEdit) return false; // No permission
-    if (!lockState) return false; // No lock state yet
-    // Use lockState.canEdit if available, otherwise check if user holds the lock
-    if ('canEdit' in lockState) {
-      return lockState.canEdit;
-    }
-    // Fallback: check if user holds the lock
-    if (lockState.state === 'LOCKED') {
-      const lockedBy = lockState.locked_by || lockState.holder_user_id;
-      return lockedBy === user?.user_id;
-    }
-    return lockState.state === 'UNLOCKED';
-  }, [canEdit, lockState, user?.user_id]);
+    // Always return true - CRDT handles conflict resolution automatically
+    // No need to block writes based on permissions or locks
+    return true;
+  }, []);
 
   const handleEditorChange = (value: string | undefined) => {
-    if (!effectiveCanEdit) return;
+    // CRDT-only mode: Always allow changes - no permission checks
     updateCurrentContent(value || "");
   };
 
@@ -209,11 +226,7 @@ export function FileEditorContent({
   const { canUndo, canRedo, undo, redo, execute } = useCommandManager();
 
   const handleSave = useCallback(async () => {
-    // Phase 5: Use effectiveCanEdit (includes lock check)
-    if (!effectiveCanEdit) {
-      console.warn('Cannot save: user does not have edit permission or lock');
-      return;
-    }
+    // CRDT-only mode: Always allow save - no permission or lock checks
     if (!selectedFile || !projectId || !user?.user_id) return;
     
     try {
@@ -367,10 +380,11 @@ export function FileEditorContent({
       // Show user-friendly error message
       alert(errorMessage);
     }
-  }, [selectedFile, currentFileContent, saveFile, effectiveCanEdit, realtimeKey, projectId, user?.user_id, updateCurrentContent, openFiles]);
+  }, [selectedFile, currentFileContent, saveFile, realtimeKey, projectId, user?.user_id, updateCurrentContent, openFiles]);
 
   const handleUndo = useCallback(async () => {
-    if (!canEdit || !canUndo) return;
+    // CRDT-only mode: Remove permission check - always allow undo
+    if (!canUndo) return;
     try {
       await undo();
       
@@ -400,10 +414,11 @@ export function FileEditorContent({
       
       alert(errorMessage);
     }
-  }, [canEdit, canUndo, undo, selectedFile?.path]);
+  }, [canUndo, undo, selectedFile?.path]);
 
   const handleRedo = useCallback(async () => {
-    if (!canEdit || !canRedo) return;
+    // CRDT-only mode: Remove permission check - always allow redo
+    if (!canRedo) return;
     try {
       await redo();
       
@@ -429,28 +444,31 @@ export function FileEditorContent({
       
       alert(errorMessage);
     }
-  }, [canEdit, canRedo, redo, selectedFile?.path]);
+  }, [canRedo, redo, selectedFile?.path]);
 
   // Handle keyboard shortcuts: Ctrl+S (save), Ctrl+Z (undo), Ctrl+Y/Ctrl+Shift+Z (redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ctrl+S / Cmd+S for save
+      // CRDT-only mode: Always allow save - no permission checks
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        if (canEdit) handleSave();
+        handleSave();
       }
       // Ctrl+Z / Cmd+Z for undo
+      // CRDT-only mode: Always allow undo - no permission checks
       else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
         e.preventDefault();
-        if (canEdit && canUndo) handleUndo();
+        if (canUndo) handleUndo();
       }
       // Ctrl+Y or Ctrl+Shift+Z / Cmd+Shift+Z for redo
+      // CRDT-only mode: Always allow redo - no permission checks
       else if (
         ((e.ctrlKey || e.metaKey) && e.key === "y") ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "z")
       ) {
         e.preventDefault();
-        if (canEdit && canRedo) handleRedo();
+        if (canRedo) handleRedo();
       }
     };
 
@@ -470,68 +488,74 @@ export function FileEditorContent({
     return openFile?.isSaving || false;
   };
 
-  const handleRequestLock = useCallback(async () => {
-    if (!canRequestLock || !lockState || isRequestingLock) return;
-    // Only allow requesting if file is locked by someone else
-    if (lockState.state !== 'LOCKED') return;
-    setIsRequestingLock(true);
-    try {
-      await requestLock();
-    } catch (err) {
-      console.error('Failed to request lock:', err);
-    } finally {
-      setIsRequestingLock(false);
-    }
-  }, [canRequestLock, lockState, requestLock, isRequestingLock]);
+  // COMMENTED OUT: Lock request handler disabled (CRDT-only mode)
+  // const handleRequestLock = useCallback(async () => {
+  //   if (!canRequestLock || !lockState || isRequestingLock) return;
+  //   // Only allow requesting if file is locked by someone else
+  //   if (lockState.state !== 'LOCKED') return;
+  //   setIsRequestingLock(true);
+  //   try {
+  //     await requestLock();
+  //   } catch (err) {
+  //     console.error('Failed to request lock:', err);
+  //   } finally {
+  //     setIsRequestingLock(false);
+  //   }
+  // }, [canRequestLock, lockState, requestLock, isRequestingLock]);
+  const handleRequestLock = useCallback(async () => {}, []);
 
-  // Phase 5: Determine lock status for UI indicators
-  const lockStatus = useMemo(() => {
-    if (!lockState || !user?.user_id) {
-      return { status: 'requesting', message: '🟡 Requesting lock…' };
-    }
-    
-    if (lockState.state === 'LOCKED') {
-      const lockedBy = lockState.locked_by || lockState.holder_user_id;
-      if (lockedBy === user.user_id) {
-        return { status: 'owned', message: '🟢 You are editing (lock active)' };
-      } else {
-        // Try to get user email - for now use user_id, can be enhanced later
-        return { 
-          status: 'locked_by_other', 
-          message: `🔒 Locked by ${lockedBy?.substring(0, 8)}...`,
-          lockedBy 
-        };
-      }
-    }
-    
-    return { status: 'unlocked', message: '🟢 File unlocked' };
-  }, [lockState, user?.user_id]);
+  // COMMENTED OUT: Lock status UI disabled (CRDT-only mode)
+  // // Phase 5: Determine lock status for UI indicators
+  // const lockStatus = useMemo(() => {
+  //   if (!lockState || !user?.user_id) {
+  //     return { status: 'requesting', message: '🟡 Requesting lock…' };
+  //   }
+  //   
+  //   if (lockState.state === 'LOCKED') {
+  //     const lockedBy = lockState.locked_by || lockState.holder_user_id;
+  //     if (lockedBy === user.user_id) {
+  //       return { status: 'owned', message: '🟢 You are editing (lock active)' };
+  //     } else {
+  //       // Try to get user email - for now use user_id, can be enhanced later
+  //       return { 
+  //         status: 'locked_by_other', 
+  //         message: `🔒 Locked by ${lockedBy?.substring(0, 8)}...`,
+  //         lockedBy 
+  //       };
+  //     }
+  //   }
+  //   
+  //   return { status: 'unlocked', message: '🟢 File unlocked' };
+  // }, [lockState, user?.user_id]);
+  const lockStatus = null;
 
-  // Convert lock state to FileInfoBar format with proper narrowing
-  let lockStateForBar:
-    | {
-        state: 'UNLOCKED' | 'LOCKED' | 'QUEUED';
-        holder_user_id?: string;
-        holder_name?: string;
-        queue_position?: number;
-        expires_at?: string;
-      }
-    | undefined;
-
-  if (lockState) {
-    if (lockState.state === 'LOCKED') {
-      lockStateForBar = {
-        state: 'LOCKED',
-        holder_user_id: lockState.locked_by || lockState.holder_user_id,
-        // holder_name not provided by backend yet; UI will fall back gracefully
-        queue_position: lockState.queue_size,
-        expires_at: lockState.expires_at,
-      };
-    } else {
-      // UNLOCKED or any other future state
-      lockStateForBar = { state: 'UNLOCKED' };
-    }
-  }
+  // COMMENTED OUT: Lock state for UI disabled (CRDT-only mode)
+  // // Convert lock state to FileInfoBar format with proper narrowing
+  // let lockStateForBar:
+  //   | {
+  //       state: 'UNLOCKED' | 'LOCKED' | 'QUEUED';
+  //       holder_user_id?: string;
+  //       holder_name?: string;
+  //       queue_position?: number;
+  //       expires_at?: string;
+  //     }
+  //   | undefined;
+  // 
+  // if (lockState) {
+  //   if (lockState.state === 'LOCKED') {
+  //     lockStateForBar = {
+  //       state: 'LOCKED',
+  //       holder_user_id: lockState.locked_by || lockState.holder_user_id,
+  //       // holder_name not provided by backend yet; UI will fall back gracefully
+  //       queue_position: lockState.queue_size,
+  //       expires_at: lockState.expires_at,
+  //     };
+  //   } else {
+  //     // UNLOCKED or any other future state
+  //     lockStateForBar = { state: 'UNLOCKED' };
+  //   }
+  // }
+  const lockStateForBar = undefined;
 
   return (
     <div className="h-full flex flex-col min-w-0 overflow-hidden">
@@ -543,14 +567,15 @@ export function FileEditorContent({
         onSave={handleSave}
         isDark={isDark}
         lockState={lockStateForBar}
-        canRequestLock={canRequestLock && !effectiveCanEdit && lockState?.state === 'LOCKED'}
+        canRequestLock={false}
         canEdit={effectiveCanEdit}
         onRequestLock={handleRequestLock}
         isRequestingLock={isRequestingLock}
       />
 
+      {/* COMMENTED OUT: Lock status indicator disabled (CRDT-only mode) */}
       {/* Phase 5: Lock status indicator */}
-      {lockStatus && (
+      {/* {lockStatus && (
         <div 
           className={`px-3 py-1.5 text-xs border-b flex items-center gap-2 shrink-0 ${
             isDark 
@@ -564,7 +589,7 @@ export function FileEditorContent({
             <span className="opacity-70">(expires in {lockState.expires_in}s)</span>
           )}
         </div>
-      )}
+      )} */}
 
       {/* Phase 7: WebSocket offline warning */}
       {realtimeKey && wsStatus === 'disconnected' && (
@@ -586,11 +611,13 @@ export function FileEditorContent({
         username={user?.username || 'User'}
         userId={user?.user_id || ''}
         docKey={selectedFile.path}
-        forceReadOnly={!effectiveCanEdit}
-        lockState={lockState}
-        lockStatusMessage={lockStatus.message}
+        forceReadOnly={false}
+        lockState={null}
+        lockStatusMessage={undefined}
         collaboration={
-          realtimeKey && realtimeKey.permissions.canView
+          // CRDT-only mode: Enable collaboration regardless of permissions
+          // Always enable CRDT collaboration - no permission checks
+          realtimeKey
             ? {
                 enabled: true,
                 docId: realtimeKey.docId,
@@ -620,10 +647,10 @@ export function FileEditorContent({
         docId={realtimeKey?.docId}
         fileId={realtimeKey?.fileId}
         projectId={realtimeKey?.projectId || projectId}
-        lockState={lockState}
+        lockState={null}
         lastSavedVersionId={lastSavedVersionId}
         lastSavedAt={lastSavedAt}
-        isCollaborative={!!(realtimeKey && realtimeKey.permissions.canView)}
+        isCollaborative={!!realtimeKey}
         wsStatus={wsStatus}
         onReloadVersion={async (versionId: string) => {
           // Phase 7 Step 6: Force reload version (dev tool)

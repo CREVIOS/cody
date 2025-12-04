@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as Y from 'yjs';
+import { Y } from '../lib/collaboration/yjsSingleton';
 import type * as Monaco from 'monaco-editor';
 import { MonacoBinding } from '../lib/collaboration/MonacoBinding';
 import { WebSocketProvider, ConnectionStatus } from '../lib/collaboration/WebSocketProvider';

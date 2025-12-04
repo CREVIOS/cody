@@ -1,4 +1,4 @@
-import * as Y from 'yjs';
+import { Y } from './yjsSingleton';
 import type * as Monaco from 'monaco-editor';
 
 /**
