@@ -15,10 +15,12 @@ import { CommandData } from './Command';
 
 export interface SaveFileService {
   getCurrentVersionId(projectId: string, filePath: string): Promise<{ success: boolean; versionId: string | null; exists: boolean }>;
-  updateFile(projectId: string, filePath: string, content: string): Promise<{ success: boolean }>;
+  updateFile(projectId: string, filePath: string, content: string): Promise<{ success: boolean; versionId?: string; versionNumber?: number }>;
   restoreFileVersion(projectId: string, filePath: string, versionId: string): Promise<{ success: boolean }>;
   getFileVersion(projectId: string, filePath: string, versionId: string): Promise<{ success: boolean; content: string }>;
   readFile(projectId: string, filePath: string): Promise<{ success: boolean; content: string }>;
+  // Phase 6: Optional callback to update Y.Doc when restoring versions
+  updateYDocContent?: (content: string) => void;
 }
 
 export class SaveFileCommand extends BaseCommand {
@@ -65,7 +67,7 @@ export class SaveFileCommand extends BaseCommand {
       // Continue anyway - we'll handle null previousVersionId in undo
     }
 
-    // 1. Save the file (creates new version in MinIO) - THIS IS THE CRITICAL PATH
+    // Phase 6 Step 1: Save the file (creates new version in MinIO and DB) - THIS IS THE CRITICAL PATH
     const saveResponse = await this.saveFileService.updateFile(
       this.projectId,
       this.filePath,
@@ -76,9 +78,23 @@ export class SaveFileCommand extends BaseCommand {
       throw new Error('Failed to save file');
     }
 
-    // 2. Get the new version ID after saving (for tracking)
-    // Wait a bit for MinIO to process the new version
-    await this.trackNewVersionId();
+    // Phase 6 Step 6: Store versionId from response (if available)
+    if (saveResponse.versionId) {
+      this.newVersionId = saveResponse.versionId;
+      
+      // Phase 7: Dev-only logging
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Phase 7] Save succeeded with versionId:', {
+          versionId: this.newVersionId,
+          versionNumber: saveResponse.versionNumber,
+          filePath: this.filePath,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Fallback: Try to get version ID after save (for backward compatibility)
+      await this.trackNewVersionId();
+    }
 
     // 3. Fetch the actual saved content from MinIO to ensure UI matches
     // This is important to handle any edge cases where content might differ
@@ -148,26 +164,14 @@ export class SaveFileCommand extends BaseCommand {
   }
 
   protected async doUndo(): Promise<void> {
-    // Restore to the content that was in the editor BEFORE this save
-    // This is the content that was displayed before the user made their edits
-    if (this.previousContent === null) {
-      throw new Error('Cannot undo: previous content not available');
-    }
-
-    // Restore file to previous content in MinIO (creates new version)
-    if (this.previousVersionId) {
-      // Use version restore for efficiency
-      const restoreResponse = await this.saveFileService.restoreFileVersion(
-        this.projectId,
-        this.filePath,
-        this.previousVersionId
-      );
-
-      if (!restoreResponse.success) {
-        throw new Error('Failed to undo save');
+    // Phase 6 Step 6: Undo - restore previous version from MinIO
+    if (!this.previousVersionId) {
+      // No previous version - restore to previous content
+      if (this.previousContent === null) {
+        throw new Error('Cannot undo: previous content not available');
       }
-    } else {
-      // New file - just update with previous content (which should be empty)
+      
+      // Update with previous content
       const updateResponse = await this.saveFileService.updateFile(
         this.projectId,
         this.filePath,
@@ -177,41 +181,87 @@ export class SaveFileCommand extends BaseCommand {
       if (!updateResponse.success) {
         throw new Error('Failed to undo save');
       }
-    }
-
-    // CRITICAL FIX: Wait for MinIO to process the restore, then fetch actual content
-    // This ensures the UI shows the correct restored content
-    try {
-      // Wait for MinIO to process the restore operation
-      await new Promise(resolve => setTimeout(resolve, 150));
       
-      // Fetch the actual restored content from MinIO
-      const restoredContentResponse = await this.saveFileService.readFile(
-        this.projectId,
-        this.filePath
-      );
-      
-      if (restoredContentResponse.success && this.onContentUpdate) {
-        // Update UI with actual restored content from MinIO
-        this.onContentUpdate(restoredContentResponse.content);
-      } else {
-        // Fallback: use the previous content we stored
-        if (this.onContentUpdate) {
-          this.onContentUpdate(this.previousContent);
-        }
-      }
-    } catch (error) {
-      console.warn('Could not fetch restored content from MinIO, using stored previous content:', error);
-      // Fallback: use the previous content we stored
+      // Update UI and Y.Doc
       if (this.onContentUpdate) {
         this.onContentUpdate(this.previousContent);
       }
+      if (this.saveFileService.updateYDocContent) {
+        this.saveFileService.updateYDocContent(this.previousContent);
+      }
+      return;
     }
 
-    // Track the new version ID after restore (for potential redo)
-    this.trackNewVersionId().catch(error => {
-      console.warn('Background version tracking failed on undo:', error);
-    });
+      // Phase 6 Step 6: Fetch previous version content from API
+      try {
+        const versionContentResponse = await this.saveFileService.getFileVersion(
+          this.projectId,
+          this.filePath,
+          this.previousVersionId
+        );
+
+        if (!versionContentResponse.success) {
+          throw new Error('Failed to fetch previous version content');
+        }
+
+        const restoredContent = versionContentResponse.content;
+        
+        // Phase 7: Dev-only logging
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Phase 7] Undo: Restoring version', {
+            versionId: this.previousVersionId,
+            filePath: this.filePath,
+            contentLength: restoredContent.length,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+      // Restore file to previous version in MinIO (creates new version)
+      const restoreResponse = await this.saveFileService.restoreFileVersion(
+        this.projectId,
+        this.filePath,
+        this.previousVersionId
+      );
+
+      if (!restoreResponse.success) {
+        throw new Error('Failed to restore previous version');
+      }
+
+      // Phase 6 Step 6: Update Y.Doc with restored content
+      if (this.saveFileService.updateYDocContent) {
+        this.saveFileService.updateYDocContent(restoredContent);
+        console.log('[SaveFileCommand] Updated Y.Doc with restored version content');
+      }
+
+      // Update UI with restored content
+      if (this.onContentUpdate) {
+        this.onContentUpdate(restoredContent);
+      }
+
+      // Track the new version ID after restore (for potential redo)
+      this.trackNewVersionId().catch(error => {
+        console.warn('Background version tracking failed on undo:', error);
+      });
+      
+    } catch (error) {
+      console.error('Error during undo:', error);
+      // Fallback: try to restore using previous content
+      if (this.previousContent !== null) {
+        const updateResponse = await this.saveFileService.updateFile(
+          this.projectId,
+          this.filePath,
+          this.previousContent
+        );
+        if (updateResponse.success && this.onContentUpdate) {
+          this.onContentUpdate(this.previousContent);
+        }
+        if (updateResponse.success && this.saveFileService.updateYDocContent) {
+          this.saveFileService.updateYDocContent(this.previousContent);
+        }
+      } else {
+        throw error;
+      }
+    }
   }
 
 
@@ -246,7 +296,7 @@ export class SaveFileCommand extends BaseCommand {
       console.warn('Could not get current version ID before redo:', error);
     }
 
-    // Restore to saved content (the content that was saved in doExecute)
+    // Phase 6 Step 6: Redo - restore to saved content
     const saveResponse = await this.saveFileService.updateFile(
       this.projectId,
       this.filePath,
@@ -257,39 +307,33 @@ export class SaveFileCommand extends BaseCommand {
       throw new Error('Failed to redo save');
     }
 
-    // CRITICAL FIX: Wait for MinIO to process the save, then fetch actual content
-    // This ensures the UI shows the correct saved content
-    try {
-      // Wait for MinIO to process the save operation
-      await new Promise(resolve => setTimeout(resolve, 150));
-      
-      // Fetch the actual saved content from MinIO
-      const savedContentResponse = await this.saveFileService.readFile(
-        this.projectId,
-        this.filePath
-      );
-      
-      if (savedContentResponse.success && this.onContentUpdate) {
-        // Update UI with actual saved content from MinIO
-        this.onContentUpdate(savedContentResponse.content);
-        // Update savedContent to match what's actually in MinIO
-        this.savedContent = savedContentResponse.content;
-      } else {
-        // Fallback: use the saved content we stored
-        if (this.onContentUpdate) {
-          this.onContentUpdate(this.savedContent);
-        }
-      }
-    } catch (error) {
-      console.warn('Could not fetch saved content from MinIO on redo, using stored content:', error);
-      // Fallback: use the saved content we stored
-      if (this.onContentUpdate) {
-        this.onContentUpdate(this.savedContent);
-      }
+    // Phase 6 Step 6: Update Y.Doc with saved content
+    if (this.saveFileService.updateYDocContent) {
+      this.saveFileService.updateYDocContent(this.savedContent);
+      console.log('[SaveFileCommand] Updated Y.Doc with redo content');
+    }
+    
+    // Phase 7: Dev-only logging
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Phase 7] Redo: Restored saved content', {
+        filePath: this.filePath,
+        contentLength: this.savedContent.length,
+        versionId: saveResponse.versionId,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Update UI with saved content
+    if (this.onContentUpdate) {
+      this.onContentUpdate(this.savedContent);
     }
 
     // Track new version ID after redo
-    await this.trackNewVersionId();
+    if (saveResponse.versionId) {
+      this.newVersionId = saveResponse.versionId;
+    } else {
+      await this.trackNewVersionId();
+    }
 
     this.executed = true;
   }

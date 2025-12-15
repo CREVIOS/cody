@@ -167,20 +167,43 @@ class FileSystemService {
     }
   }
 
-  // Update file content
+  // Update file content (Phase 6: Returns version info for versioning)
   async updateFile(projectId, filePath, content) {
     try {
       const objectName = `${projectId}/${filePath}`;
       const buffer = Buffer.from(content, 'utf8');
       
+      // Save to MinIO (creates new version if versioning is enabled)
       await this.minioClient.putObject(this.bucketName, objectName, buffer, buffer.length, {
         'Content-Type': 'text/plain'
       });
 
+      // Get the new version ID after save
+      let versionId = null;
+      let etag = null;
+      let lastModified = null;
+      
+      try {
+        // Wait a small amount for MinIO to process the version
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        const stat = await this.minioClient.statObject(this.bucketName, objectName);
+        versionId = stat.versionId || null;
+        etag = stat.etag || null;
+        lastModified = stat.lastModified || new Date();
+      } catch (statError) {
+        console.warn('Could not get version info after save:', statError.message);
+        // Continue anyway - save was successful
+      }
+
       return {
         success: true,
         message: 'File updated successfully',
-        path: filePath
+        path: filePath,
+        versionId: versionId, // Phase 6: Return MinIO version ID
+        size: buffer.length,
+        etag: etag,
+        lastModified: lastModified
       };
     } catch (error) {
       console.error('Error updating file:', error);

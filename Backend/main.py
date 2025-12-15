@@ -113,18 +113,20 @@ async def lifespan(app: FastAPI):
         logger.error(traceback.format_exc())
         raise
 
-    # Start background lock cleanup task (non-blocking)
-    try:
-        task = await start_lock_cleanup_task()
-        if task:
-            logger.info("✅ Lock cleanup task started")
-        else:
-            logger.warning("⚠️ Lock cleanup task was not started (may already be running)")
-    except Exception as e:
-        logger.error(f"Error starting lock cleanup task: {str(e)}")
-        logger.error(traceback.format_exc())
-        # Don't fail startup if cleanup task fails - it's not critical
-        logger.warning("⚠️ Continuing startup despite lock cleanup task error")
+    # COMMENTED OUT: Lock cleanup task disabled (CRDT-only mode)
+    # # Start background lock cleanup task (non-blocking)
+    # try:
+    #     task = await start_lock_cleanup_task()
+    #     if task:
+    #         logger.info("✅ Lock cleanup task started")
+    #     else:
+    #         logger.warning("⚠️ Lock cleanup task was not started (may already be running)")
+    # except Exception as e:
+    #     logger.error(f"Error starting lock cleanup task: {str(e)}")
+    #     logger.error(traceback.format_exc())
+    #     # Don't fail startup if cleanup task fails - it's not critical
+    #     logger.warning("⚠️ Continuing startup despite lock cleanup task error")
+    logger.info("🧹 Lock cleanup task disabled (CRDT-only mode)")
 
     logger.info("🚀 Application startup complete")
     yield
@@ -132,12 +134,13 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down...")
 
-    # Stop background lock cleanup task
-    try:
-        await stop_lock_cleanup_task()
-        logger.info("✅ Lock cleanup task stopped")
-    except Exception as e:
-        logger.error(f"Error stopping lock cleanup task: {str(e)}")
+    # COMMENTED OUT: Lock cleanup task disabled (CRDT-only mode)
+    # # Stop background lock cleanup task
+    # try:
+    #     await stop_lock_cleanup_task()
+    #     logger.info("✅ Lock cleanup task stopped")
+    # except Exception as e:
+    #     logger.error(f"Error stopping lock cleanup task: {str(e)}")
 
     await engine.dispose()
 
@@ -194,6 +197,17 @@ async def health_check():
 # The factory automatically discovers and registers all routers
 router_factory = create_router_factory(routers_package="routers", api_prefix="/api/v1")
 router_factory.register_all_routers(app)
+
+# MANUAL REGISTRATION: Ensure files router is registered (temporary fix)
+# The factory should handle this, but manually registering to ensure it works
+try:
+    from routers import files
+    app.include_router(files.router, prefix="/api/v1")
+    logger.info("✅ Manually registered files router")
+except Exception as e:
+    logger.error(f"❌ Failed to manually register files router: {e}")
+    import traceback
+    traceback.print_exc()
 
 # OLD APPROACH (Before Factory Pattern):
 # Had to manually register each router - repetitive and error-prone!

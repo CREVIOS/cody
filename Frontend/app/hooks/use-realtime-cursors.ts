@@ -141,30 +141,13 @@ export const useRealtimeCursors = ({
 
   // -------------------------------------------------------
   // Backend Realtime Sync Helpers
+  // NOTE: Lock management is now handled by the proper lock API in locksClient.ts
+  // These notification endpoints have been removed in favor of:
+  // - POST /api/v1/locks/{file_identifier}/request
+  // - POST /api/v1/locks/{file_identifier}/release
+  // - POST /api/v1/locks/{file_identifier}/heartbeat
+  // - GET /api/v1/locks/{file_identifier}/state
   // -------------------------------------------------------
-  async function notifyBackendLock(fileKey: string, leaderId: string | null) {
-    try {
-      await fetch(`http://localhost:8000/api/v1/files/${fileKey}/lock`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leader_id: leaderId }),
-      });
-    } catch (err) {
-      console.warn('Failed to notify backend lock:', err);
-    }
-  }
-
-  async function notifyBackendQueue(fileKey: string, queueList: Array<{ userId: string }>) {
-    try {
-      await fetch(`http://localhost:8000/api/v1/files/${fileKey}/queue`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queue: queueList }),
-      });
-    } catch (err) {
-      console.warn('Failed to notify backend queue:', err);
-    }
-  }
 
   // -------------------------------------------------------
   // Activity & Cursor Handling
@@ -211,8 +194,8 @@ export const useRealtimeCursors = ({
     const state = channelRef.current?.presenceState<PresenceMeta>() ?? {};
     const { leaderId, queue } = computeLeaderAndQueue(state);
     setQueue(queue);
-    notifyBackendQueue(docKeyRef.current, queue);
-    notifyBackendLock(docKeyRef.current, leaderId);
+    // NOTE: Lock management is now handled by the proper lock API in locksClient.ts
+    // Removed calls to notifyBackendQueue and notifyBackendLock
 
     if (leaderId !== activeEditorRef.current) {
       if (enableEditTimerRef.current) {
@@ -265,7 +248,8 @@ export const useRealtimeCursors = ({
       setLockEvent('🔓 Auto-released after 5s inactivity (you are queued again)');
       leaderSinceRef.current = 0;
       lastActivityTimeRef.current = Date.now();
-      notifyBackendLock(docKeyRef.current, null);
+      // NOTE: Lock management is now handled by the proper lock API in locksClient.ts
+      // Removed call to notifyBackendLock
     } catch {
       /* noop */
     }

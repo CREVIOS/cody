@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
+const axios = require('axios');
 
 // Services
 const FileSystemService = require("./services/fileSystemService");
@@ -234,6 +235,75 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 app.get('/api/projects', asyncHandler(async (req, res) => {
   const result = await fileSystemService.listProjects();
   res.json(result);
+}));
+
+// ==================== PROJECT-SPECIFIC API ROUTES (Proxy to FastAPI Backend) ====================
+// These routes proxy to the FastAPI backend (port 8000) for project-specific data
+const FASTAPI_BACKEND_URL = process.env.FASTAPI_BACKEND_URL || 'http://localhost:8000';
+
+// Helper function to proxy requests to FastAPI backend
+const proxyToFastAPI = async (req, res, endpoint) => {
+  try {
+    // Build query string from request query parameters
+    const queryParams = new URLSearchParams();
+    Object.keys(req.query).forEach(key => {
+      if (req.query[key] !== undefined && req.query[key] !== null) {
+        queryParams.append(key, req.query[key]);
+      }
+    });
+    const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    const fullUrl = `${FASTAPI_BACKEND_URL}${endpoint}${queryString}`;
+    
+    const axiosConfig = {
+      method: req.method.toLowerCase(),
+      url: fullUrl,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(req.headers.authorization && { Authorization: req.headers.authorization }),
+      },
+      validateStatus: () => true, // Don't throw on any status code
+    };
+    
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+      axiosConfig.data = req.body;
+    }
+    
+    const response = await axios(axiosConfig);
+    
+    res.status(response.status).json(response.data);
+  } catch (error) {
+    console.error(`Error proxying to FastAPI backend (${endpoint}):`, error);
+    const errorMessage = error.response?.data?.detail || error.message || 'Backend service unavailable';
+    res.status(error.response?.status || 503).json({
+      success: false,
+      error: 'Backend service unavailable',
+      message: errorMessage
+    });
+  }
+};
+
+// GET /projects/:projectId/roles - Get all available roles (not project-specific, but included for convenience)
+app.get('/projects/:projectId/roles', validateProjectId, asyncHandler(async (req, res) => {
+  // Proxy to the general roles endpoint since roles are not project-specific
+  await proxyToFastAPI(req, res, `/api/v1/roles`);
+}));
+
+// GET /projects/:projectId/permissions - Get permissions for a user in a project
+app.get('/projects/:projectId/permissions', validateProjectId, asyncHandler(async (req, res) => {
+  // This endpoint requires user_id query parameter - proxy will handle query params
+  await proxyToFastAPI(req, res, `/api/v1/permissions/projects/${req.params.projectId}`);
+}));
+
+// GET /projects/:projectId/members - Get members for a project
+app.get('/projects/:projectId/members', validateProjectId, asyncHandler(async (req, res) => {
+  await proxyToFastAPI(req, res, `/api/v1/project-members/by-project/${req.params.projectId}`);
+}));
+
+// GET /projects/:projectId/invitations - Get invitations for a project
+app.get('/projects/:projectId/invitations', validateProjectId, asyncHandler(async (req, res) => {
+  // Add project_id to query params and proxy will forward all query params
+  req.query.project_id = req.params.projectId;
+  await proxyToFastAPI(req, res, `/api/v1/project-invitations`);
 }));
 
 app.delete('/api/projects/:projectId', validateProjectId, asyncHandler(async (req, res) => {

@@ -1,4 +1,4 @@
-import * as Y from 'yjs';
+import { Y } from './yjsSingleton';
 
 /**
  * Undo Manager for Yjs

@@ -1,6 +1,6 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
-const Y = require('yjs');
+const { Y } = require('../services/yjsSingleton');
 const { CollaborationRoom, CollaborationService } = require('../services/collaborationService');
 const WebSocket = require('ws');
 const path = require('path');

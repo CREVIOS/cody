@@ -2,11 +2,19 @@
 export type Role = "owner" | "editor" | "viewer" | "admin";
 
 export type LockState =
-  | { state: "UNLOCKED" }
+  | {
+      state: "UNLOCKED";
+      locked_by: null;
+      canEdit: boolean;
+      expires_in: number | null;
+    }
   | {
       state: "LOCKED";
-      holder_user_id: string;
+      locked_by: string;
+      holder_user_id?: string; // Backward compatibility
+      canEdit: boolean;
       expires_at?: string;
+      expires_in: number | null;
       queue_size?: number;
     };
 
@@ -28,7 +36,12 @@ function assertId(name: string, v?: string | null): asserts v is string {
   if (!v) throw new Error(`${name} is required`);
 }
 
-const DEFAULT_UNLOCKED: LockState = { state: "UNLOCKED" };
+const DEFAULT_UNLOCKED: LockState = {
+  state: "UNLOCKED",
+  locked_by: null,
+  canEdit: true,
+  expires_in: null,
+};
 
 async function fx(url: string, init?: RequestInit) {
   return fetch(url, { cache: "no-store", ...init });
@@ -45,14 +58,21 @@ export async function apiHealth(): Promise<{ status: string; timestamp: number }
   return j(r);
 }
 
-export async function apiGetLock(fileId?: string | null, projectId?: string | null) {
+export async function apiGetLock(
+  fileId?: string | null,
+  projectId?: string | null,
+  userId?: string | null
+) {
   if (!fileId) {
     console.warn("apiGetLock: missing fileId — returning UNLOCKED");
     return DEFAULT_UNLOCKED;
   }
-  // Add project_id query parameter if fileId is not a UUID (i.e., it's a file path)
+  // Add project_id and user_id query parameters if fileId is not a UUID (i.e., it's a file path)
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId);
-  const queryParams = !isUUID && projectId ? `?project_id=${projectId}` : '';
+  const params = new URLSearchParams();
+  if (!isUUID && projectId) params.append('project_id', projectId);
+  if (userId) params.append('user_id', userId);
+  const queryParams = params.toString() ? `?${params.toString()}` : '';
   const url = `${BASE}/locks/${encodeURIComponent(fileId)}/state${queryParams}`;
   console.log("🔎 GET", url);
   const r = await fx(url);

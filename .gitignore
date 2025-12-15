@@ -11,10 +11,12 @@ Backend/build/
 Backend/venv/
 Backend/coverage/
 Backend/htmlcov/
-Backend/__pycache__
+Backend/.venv/
+/Backend/__pycache__
 Backend/routers/__pycache__
 Backend/services/__pycache__
 Backend/tests/__pycache__
+Backend/factories/__pycache__
 SBackend/node_modules/
 SBackend/.DS_Store
 

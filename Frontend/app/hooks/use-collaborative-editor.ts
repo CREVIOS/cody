@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as Y from 'yjs';
+import { Y } from '../lib/collaboration/yjsSingleton';
 import type * as Monaco from 'monaco-editor';
 import { MonacoBinding } from '../lib/collaboration/MonacoBinding';
 import { WebSocketProvider, ConnectionStatus } from '../lib/collaboration/WebSocketProvider';
@@ -55,6 +55,11 @@ export interface CollaborativeEditorOptions {
    * Enable logging
    */
   logging?: boolean;
+
+  /**
+   * Initial content to load into Y.Doc (from backend/MinIO)
+   */
+  initialContent?: string;
 
   /**
    * Undo manager options
@@ -124,6 +129,16 @@ export interface CollaborativeEditorActions {
   getText: () => string;
 
   /**
+   * Get Y.Doc snapshot as string (for saving to MinIO)
+   */
+  getSnapshot: () => string;
+
+  /**
+   * Update Y.Doc content directly (for undo/redo version restoration)
+   */
+  setContent: (content: string) => void;
+
+  /**
    * Get awareness states
    */
   getAwarenessStates: () => Map<number, any>;
@@ -165,7 +180,7 @@ export function useCollaborativeEditor(
     }
 
     const editor = options.editor;
-    const { docId, user, wsUrl, offlineSupport, logging, undoOptions } = options;
+    const { docId, user, wsUrl, offlineSupport, logging, undoOptions, initialContent } = options;
 
     // Create Yjs document
     const doc = new Y.Doc();
@@ -176,6 +191,21 @@ export function useCollaborativeEditor(
 
     if (logging) {
       console.log('[Collaboration] Initializing for docId:', docId);
+    }
+
+    // Set initial content from backend if provided and Y.Doc is empty
+    // This ensures the latest version from MinIO is loaded into CRDT
+    if (initialContent !== undefined && initialContent !== null) {
+      const currentYText = yText.toString();
+      if (!currentYText || currentYText.length === 0) {
+        // Only set if Y.Doc is empty (to avoid overwriting synced content)
+        yText.insert(0, initialContent);
+        if (logging) {
+          console.log('[Collaboration] Loaded initial content into Y.Doc:', initialContent.length, 'chars');
+        }
+      } else if (logging) {
+        console.log('[Collaboration] Y.Doc already has content, skipping initial content load');
+      }
     }
 
     // Setup IndexedDB persistence (if enabled)
@@ -221,6 +251,11 @@ export function useCollaborativeEditor(
     const handleStatus = (event: Event) => {
       const status = (event as CustomEvent).detail as ConnectionStatus;
       setState((prev) => ({ ...prev, status }));
+      
+      // Phase 7: Dev-only logging
+      if (logging && process.env.NODE_ENV === 'development') {
+        console.log('[Phase 7] WebSocket status changed:', status);
+      }
     };
 
     wsProvider.addEventListener('status', handleStatus);
@@ -228,6 +263,11 @@ export function useCollaborativeEditor(
     // Listen to sync
     const handleSync = () => {
       setState((prev) => ({ ...prev, synced: true }));
+      
+      // Phase 7: Dev-only logging
+      if (logging && process.env.NODE_ENV === 'development') {
+        console.log('[Phase 7] WebSocket synced');
+      }
     };
 
     wsProvider.addEventListener('sync', handleSync);
@@ -236,6 +276,11 @@ export function useCollaborativeEditor(
     const handleError = (event: Event) => {
       const error = (event as CustomEvent).detail;
       setState((prev) => ({ ...prev, error }));
+      
+      // Phase 7: Dev-only logging
+      if (logging && process.env.NODE_ENV === 'development') {
+        console.error('[Phase 7] WebSocket error:', error);
+      }
     };
 
     wsProvider.addEventListener('error', handleError);
@@ -284,7 +329,7 @@ export function useCollaborativeEditor(
       monacoBindingRef.current = null;
       undoManagerRef.current = null;
     };
-  }, [options.editor, options.docId, options.user.id, options.wsUrl, options.offlineSupport, options.logging]);
+  }, [options.editor, options.docId, options.user.id, options.wsUrl, options.offlineSupport, options.logging, options.initialContent]);
 
   // Actions
   const disconnect = useCallback(() => {
@@ -307,6 +352,35 @@ export function useCollaborativeEditor(
     return yTextRef.current?.toString() || '';
   }, []);
 
+  const getSnapshot = useCallback(() => {
+    // Serialize Y.Doc content to string for saving
+    // This is the canonical snapshot that will be saved to MinIO in Phase 6
+    return yTextRef.current?.toString() || '';
+  }, []);
+
+  const setContent = useCallback((content: string) => {
+    // Phase 6 Step 6: Update Y.Doc content directly (for undo/redo)
+    const yText = yTextRef.current;
+    if (!yText) {
+      console.warn('[Collaboration] Cannot set content: Y.Text not initialized');
+      return;
+    }
+    
+    const currentContent = yText.toString();
+    if (currentContent === content) {
+      // No change needed
+      return;
+    }
+    
+    // Replace entire content
+    yText.doc?.transact(() => {
+      yText.delete(0, currentContent.length);
+      yText.insert(0, content);
+    });
+    
+    console.log('[Collaboration] Updated Y.Doc content:', content.length, 'chars');
+  }, []);
+
   const getAwarenessStates = useCallback(() => {
     return wsProviderRef.current?.awareness.getStates() || new Map();
   }, []);
@@ -321,6 +395,8 @@ export function useCollaborativeEditor(
     undo,
     redo,
     getText,
+    getSnapshot,
+    setContent,
     getAwarenessStates,
     getAwareness,
   };
