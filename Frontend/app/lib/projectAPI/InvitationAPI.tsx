@@ -54,6 +54,7 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
       if (projectId) params.append('project_id', projectId);
       if (status) params.append('status', status);
       
+      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/project-invitations/?${params}`);
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
