@@ -31,7 +31,7 @@ export const getUserInvitationNotifications = async (
     params.append("reference_id", options.reference_id);
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/notifications?${params.toString()}`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/notifications/?${params.toString()}`);
   if (!response.ok) {
     const errorMessage = await getErrorMessage(response);
     throw new Error(errorMessage);

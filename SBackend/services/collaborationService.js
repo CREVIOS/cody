@@ -134,6 +134,25 @@ class CollaborationRoom extends EventEmitter {
 
     this.logger.metric('active_connections', this.connections.size, 'count');
 
+    // Seed awareness so other clients see the user immediately
+    try {
+      this.awareness.states.set(clientId, {
+        user: {
+          id: userInfo.id,
+          name: userInfo.name,
+          color: userInfo.color
+        },
+        cursor: null,
+        selection: null
+      });
+      this.broadcastAwareness([clientId]);
+    } catch (err) {
+      this.logger.warn('Failed to broadcast initial awareness state', {
+        clientId,
+        error: err.message
+      });
+    }
+
     // Send initial sync
     this.sendSyncStep1(ws);
 

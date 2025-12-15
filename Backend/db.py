@@ -5,12 +5,11 @@ from sqlalchemy.pool import NullPool
 from typing import AsyncGenerator
 import asyncio
 import json
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.types import TypeDecorator, TEXT
 from uuid import uuid4
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 
 class JsonEncoded(TypeDecorator):
@@ -36,11 +35,55 @@ class JsonEncoded(TypeDecorator):
         return value
 
 
-# Database URLs - Supabase Postgres (pooled for app, direct for migrations)
-DATABASE_URL = os.getenv(
+# Database URLs - prefer PgBouncer/pooler
+RAW_DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres.igbmvsodtgfmbcxmalha:M6KPIqpWntaF4nAN@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
+    'postgresql://postgres.igbmvsodtgfmbcxmalha:M6KPIqpWntaF4nAN@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true',
 )
+PGBOUNCER_URL = os.getenv("PGBOUNCER_URL") or os.getenv("DATABASE_POOLER_URL")
+
+
+def derive_pooler_url(url: str | None) -> str | None:
+    if not url:
+        return url
+
+    if "supabase.com" in url and ":5432/" in url:
+        return url.replace(":5432/", ":6543/")
+    return url
+
+
+def ensure_async_driver(url: str | None) -> str | None:
+    if not url:
+        return url
+    if url.startswith("postgresql+asyncpg://"):
+        upgraded = url
+    elif url.startswith("postgresql://"):
+        upgraded = "postgresql+asyncpg://" + url[len("postgresql://") :]
+    else:
+        upgraded = url
+    return strip_unsupported_asyncpg_params(upgraded)
+
+
+def strip_unsupported_asyncpg_params(url: str | None) -> str | None:
+    """
+    asyncpg treats URL query params as keyword args; strip ones it doesn't accept (e.g., pgbouncer).
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlsplit(url)
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        filtered = [(k, v) for (k, v) in query_pairs if k.lower() not in {"pgbouncer"}]
+        if len(filtered) == len(query_pairs):
+            return url
+        new_query = urlencode(filtered)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+    except Exception:
+        return url
+
+
+DATABASE_URL = PGBOUNCER_URL or derive_pooler_url(RAW_DATABASE_URL) or RAW_DATABASE_URL
+DATABASE_URL_ASYNC = ensure_async_driver(DATABASE_URL)
 
 # Optional: direct (non-pooled) sync URL for migrations/tools
 DIRECT_URL = os.getenv(
@@ -55,12 +98,13 @@ else:
     from sqlalchemy import JSON as JSONVariant
 
 
-# Create async engine configured for PgBouncer (avoid app-level pooling)
+# Create async engine configured for PgBouncer-friendly pooling
+# - Keep a small capped pool to avoid exhausting PgBouncer client slots
 # - Disable asyncpg statement cache to avoid prepared statements under PgBouncer transaction/statement modes
 # - Provide unique prepared statement names as an additional safeguard when prepared statements are used internally
 # - Relax server-side statement timeout to avoid spurious "canceling statement due to statement timeout"
 connect_args: dict = {}
-if "postgresql+asyncpg" in DATABASE_URL:
+if DATABASE_URL_ASYNC and "postgresql+asyncpg" in DATABASE_URL_ASYNC:
     connect_args = {
         "statement_cache_size": 0,
         "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
@@ -73,10 +117,31 @@ if "postgresql+asyncpg" in DATABASE_URL:
         },
     }
 
+POOLING_MODE = os.getenv("DB_POOLING_MODE", "pool").lower()
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "1"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "0"))
+POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+
+engine_kwargs = {
+    "connect_args": connect_args,
+    "pool_pre_ping": True,
+}
+
+if POOLING_MODE == "null":
+    # Let PgBouncer own pooling; avoid app-level pooling to prevent exhausting slots
+    engine_kwargs["poolclass"] = NullPool
+else:
+    engine_kwargs.update({
+        "pool_size": POOL_SIZE,
+        "max_overflow": MAX_OVERFLOW,
+        "pool_timeout": POOL_TIMEOUT,
+        "pool_recycle": POOL_RECYCLE,
+    })
+
 engine = create_async_engine(
-    DATABASE_URL,
-    poolclass=NullPool,
-    connect_args=connect_args,
+    DATABASE_URL_ASYNC,
+    **engine_kwargs,
 )
 
 # Create async session factory

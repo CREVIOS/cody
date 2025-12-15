@@ -11,6 +11,7 @@ const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const axios = require('axios');
+const crypto = require('crypto');
 
 // Services
 const FileSystemService = require("./services/fileSystemService");
@@ -153,6 +154,11 @@ async function initializeServices() {
     
     // Set up event handlers after services are initialized
     setupEventHandlers();
+
+    // Bring cross-instance pub/sub online once core services are ready
+    await crossInstancePubSub.init().catch(err => {
+      console.error('❌ Failed to initialize cross-instance pub/sub:', err);
+    });
     
     console.log('✅ Services initialized successfully');
   } catch (error) {
@@ -201,6 +207,18 @@ const isStorageUnavailableError = (error) => {
 
   return false;
 };
+
+// Instance/runtime level configuration
+const INSTANCE_ID = process.env.INSTANCE_ID || uuidv4();
+const WS_JWT_SECRET = process.env.WS_JWT_SECRET || process.env.JWT_SECRET;
+const WS_JWT_PUBLIC_KEY = process.env.WS_JWT_PUBLIC_KEY || process.env.JWT_PUBLIC_KEY;
+const WS_ALLOW_ANONYMOUS = process.env.WS_ALLOW_ANONYMOUS === 'true';
+const FILE_PERSIST_DEBOUNCE_MS = parseInt(process.env.FILE_PERSIST_DEBOUNCE_MS || '150', 10);
+
+// In-memory caches for streaming file changes (kept small; persisted to MinIO asynchronously)
+const fileStateCache = new Map(); // key => { version, content }
+const filePersistTimers = new Map(); // key => timeout handle
+const fileOperationQueues = new Map(); // key => promise chain
 
 // Health check with detailed status
 app.get('/api/health', asyncHandler(async (req, res) => {
@@ -991,20 +1009,206 @@ const server = app.listen(PORT, async () => {
   await initializeServices();
 });
 
+// Basic cookie parser for WS authentication
+function parseCookies(cookieHeader = '') {
+  return cookieHeader.split(';').reduce((acc, pair) => {
+    const [key, value] = pair.trim().split('=');
+    if (key && value) {
+      acc[key] = decodeURIComponent(value);
+    }
+    return acc;
+  }, {});
+}
+
+function extractTokenFromRequest(req) {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice('Bearer '.length);
+  }
+
+  const cookies = parseCookies(req.headers.cookie || '');
+  if (cookies.token || cookies.authToken || cookies.access_token) {
+    return cookies.token || cookies.authToken || cookies.access_token;
+  }
+
+  try {
+    const url = new URL(req.url, 'ws://localhost');
+    return url.searchParams.get('token');
+  } catch (_) {
+    return null;
+  }
+}
+
+function verifyJwtToken(token) {
+  if (!token) {
+    throw new Error('Missing token');
+  }
+
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    throw new Error('Malformed JWT');
+  }
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
+  const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
+  const header = JSON.parse(headerJson);
+  const payload = JSON.parse(payloadJson);
+
+  const signingInput = `${headerB64}.${payloadB64}`;
+
+  let valid = false;
+  if (header.alg === 'HS256') {
+    if (!WS_JWT_SECRET) {
+      throw new Error('No HS256 secret configured');
+    }
+    const expected = crypto
+      .createHmac('sha256', WS_JWT_SECRET)
+      .update(signingInput)
+      .digest('base64url');
+    valid = expected === signatureB64;
+  } else if (header.alg && header.alg.startsWith('RS')) {
+    if (!WS_JWT_PUBLIC_KEY) {
+      throw new Error(`No public key configured for ${header.alg}`);
+    }
+    const verify = crypto.createVerify(`RSA-${header.alg.slice(2)}`);
+    verify.update(signingInput);
+    verify.end();
+    valid = verify.verify(WS_JWT_PUBLIC_KEY, Buffer.from(signatureB64, 'base64url'));
+  } else {
+    throw new Error(`Unsupported JWT alg: ${header.alg || 'unknown'}`);
+  }
+
+  if (!valid) {
+    throw new Error('Invalid JWT signature');
+  }
+
+  if (payload.exp && Date.now() >= payload.exp * 1000) {
+    throw new Error('JWT expired');
+  }
+
+  return payload;
+}
+
+function verifyWebSocketClient(info, done) {
+  const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+  const hasJwtMaterial = !!WS_JWT_SECRET || !!WS_JWT_PUBLIC_KEY;
+
+  if (!hasJwtMaterial) {
+    if (isProduction && !WS_ALLOW_ANONYMOUS) {
+      console.error('❌ WS authentication failed: no JWT secret/public key configured');
+      return done(false, 401, 'Unauthorized');
+    }
+
+    console.warn('⚠️  WS authentication bypassed (no JWT material configured)');
+    return done(true);
+  }
+
+  try {
+    const token = extractTokenFromRequest(info.req);
+    const claims = verifyJwtToken(token);
+    info.req.user = claims;
+    return done(true);
+  } catch (err) {
+    console.error('❌ WS authentication error:', err.message);
+    return done(false, 401, 'Unauthorized');
+  }
+}
+
 // Enhanced WebSocket Server
 const wss = new WebSocket.Server({ 
   server,
-  verifyClient: (info) => {
-    // Add WebSocket authentication here if needed
-    return true;
-  }
+  verifyClient: verifyWebSocketClient
 });
 
 // Connection manager for WebSocket connections
+class CrossInstancePubSub {
+  constructor(instanceId) {
+    this.instanceId = instanceId;
+    this.channel = process.env.WS_REDIS_CHANNEL || 'ws:broadcast';
+    this.enabled = false;
+    this.publisher = null;
+    this.subscriber = null;
+    this.onMessage = null;
+  }
+
+  async init() {
+    const redisUrl = process.env.WS_REDIS_URL || process.env.REDIS_URL;
+    if (!redisUrl) {
+      console.log('ℹ️  WS cross-instance pub/sub disabled (no WS_REDIS_URL/REDIS_URL set)');
+      return;
+    }
+
+    let createClient;
+    try {
+      ({ createClient } = require('redis'));
+    } catch (err) {
+      console.warn('⚠️  Redis client not installed; skipping WS pub/sub', err.message);
+      return;
+    }
+
+    this.publisher = createClient({ url: redisUrl });
+    this.subscriber = createClient({ url: redisUrl });
+
+    this.publisher.on('error', (err) => console.error('Redis pub error:', err));
+    this.subscriber.on('error', (err) => console.error('Redis sub error:', err));
+
+    await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
+
+    await this.subscriber.subscribe(this.channel, (raw) => {
+      try {
+        const payload = JSON.parse(raw);
+        if (!payload || payload.originId === this.instanceId) {
+          return;
+        }
+        if (typeof this.onMessage === 'function') {
+          this.onMessage(payload);
+        }
+      } catch (err) {
+        console.error('Failed to process pub/sub WS payload:', err);
+      }
+    });
+
+    this.enabled = true;
+    console.log(`📡 Cross-instance WS pub/sub enabled on channel "${this.channel}"`);
+  }
+
+  async publish(message) {
+    if (!this.enabled || !this.publisher) return;
+    try {
+      await this.publisher.publish(this.channel, JSON.stringify({
+        ...message,
+        originId: this.instanceId
+      }));
+    } catch (err) {
+      console.error('Failed to publish WS message to Redis:', err);
+    }
+  }
+
+  async close() {
+    try {
+      if (this.subscriber) {
+        await this.subscriber.unsubscribe(this.channel);
+        await this.subscriber.quit();
+      }
+      if (this.publisher) {
+        await this.publisher.quit();
+      }
+    } catch (err) {
+      console.error('Error closing pub/sub clients:', err);
+    }
+  }
+}
+
 class ConnectionManager {
-  constructor() {
+  constructor(pubSubBridge = null) {
     this.connections = new Map(); // connectionId -> connection info
     this.projectConnections = new Map(); // projectId -> Set of connectionIds
+    this.pubSubBridge = pubSubBridge;
+
+    if (this.pubSubBridge) {
+      this.pubSubBridge.onMessage = (payload) => this.handleRemoteBroadcast(payload);
+    }
   }
 
   addConnection(ws, type, projectId, metadata = {}) {
@@ -1059,7 +1263,16 @@ class ConnectionManager {
       .filter(conn => conn && (!type || conn.type === type));
   }
 
-  broadcast(projectId, message, excludeConnectionId = null) {
+  broadcast(projectId, message, excludeConnectionId = null, options = {}) {
+    const { skipRemote = false } = options;
+    this.broadcastLocal(projectId, message, excludeConnectionId);
+
+    if (!skipRemote && this.pubSubBridge?.enabled) {
+      this.pubSubBridge.publish({ projectId, message, excludeConnectionId });
+    }
+  }
+
+  broadcastLocal(projectId, message, excludeConnectionId = null) {
     const connections = this.getProjectConnections(projectId);
     
     for (const conn of connections) {
@@ -1075,6 +1288,18 @@ class ConnectionManager {
     }
   }
 
+  handleRemoteBroadcast(payload) {
+    if (!payload || !payload.projectId || !payload.message) {
+      return;
+    }
+
+    applyRemoteFileMessage(payload.projectId, payload.message).catch((err) => {
+      console.error('❌ Failed to apply remote file message:', err);
+    });
+
+    this.broadcastLocal(payload.projectId, payload.message, payload.excludeConnectionId);
+  }
+
   getStats() {
     return {
       totalConnections: this.connections.size,
@@ -1087,7 +1312,8 @@ class ConnectionManager {
   }
 }
 
-const connectionManager = new ConnectionManager();
+const crossInstancePubSub = new CrossInstancePubSub(INSTANCE_ID);
+const connectionManager = new ConnectionManager(crossInstancePubSub);
 
 // Function to set up event handlers after services are initialized
 function setupEventHandlers() {
@@ -1150,6 +1376,7 @@ wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const type = url.searchParams.get('type') || 'terminal';
   const projectId = url.searchParams.get('projectId');
+  const userClaims = req.user || {};
   
   
   console.log(`🔌 New WebSocket connection:`);
@@ -1180,8 +1407,11 @@ wss.on("connection", (ws, req) => {
 
   const connectionId = connectionManager.addConnection(ws, type, projectId, {
     userAgent: req.headers['user-agent'],
-    ip: req.connection.remoteAddress
+    ip: req.connection.remoteAddress,
+    userId: userClaims.sub || userClaims.user_id || userClaims.id,
+    auth: userClaims
   });
+  ws.user = userClaims;
 
   // Set up ping/pong for connection health
   let pingInterval;
@@ -1193,7 +1423,8 @@ wss.on("connection", (ws, req) => {
 
   pingInterval = setInterval(() => {
     if (!isAlive) {
-      console.log(`💀 Connection ${connectionId} appears dead, terminating`);
+      console.log(`Connection ${connectionId} appears dead, terminating`);
+      clearInterval(pingInterval);
       connectionManager.removeConnection(connectionId);
       ws.terminate();
       return;
@@ -1231,7 +1462,6 @@ wss.on("connection", (ws, req) => {
     ws.close(1011, 'Setup failed');
   }
 
-  // Universal cleanup on connection close
   ws.on("close", (code, reason) => {
     console.log(`🔌 WebSocket closed: ${connectionId} (code: ${code})`);
     clearInterval(pingInterval);
@@ -1245,7 +1475,6 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// Terminal connection handler
 async function handleTerminalConnection(ws, projectId, connectionId) {
   try {
     await containerService.handleWebSocketConnection(ws, projectId);
@@ -1259,20 +1488,18 @@ async function handleTerminalConnection(ws, projectId, connectionId) {
   }
 }
 
-// Collaboration connection handler (CRDT-based)
 function handleCollaborationConnection(ws, projectId, connectionId, url) {
-  // Extract parameters
   const docId = url.searchParams.get('docId') || projectId;
-  const userId = url.searchParams.get('userId') || connectionId;
-  const userName = url.searchParams.get('userName') || 'Anonymous';
+  const authenticatedUserId = ws.user?.sub || ws.user?.user_id || ws.user?.id;
+  const authenticatedName = ws.user?.name || ws.user?.preferred_username;
+  const userId = authenticatedUserId || url.searchParams.get('userId') || connectionId;
+  const userName = authenticatedName || url.searchParams.get('userName') || 'Anonymous';
   const userColor = url.searchParams.get('userColor') || generateRandomColor();
 
   console.log(`👥 Collaboration connection - Room: ${docId}, User: ${userName}`);
 
-  // Get or create collaboration room
   const room = collaborationService.getRoom(docId);
 
-  // Add connection with user info
   const userInfo = {
     id: userId,
     name: userName,
@@ -1282,7 +1509,6 @@ function handleCollaborationConnection(ws, projectId, connectionId, url) {
 
   room.addConnection(connectionId, ws, userInfo);
 
-  // Send confirmation
   const confirmMessage = JSON.stringify({
     type: 'collaboration:connected',
     docId,
@@ -1296,7 +1522,6 @@ function handleCollaborationConnection(ws, projectId, connectionId, url) {
   }
 }
 
-// Generate random color for user
 function generateRandomColor() {
   const colors = [
     '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
@@ -1305,7 +1530,167 @@ function generateRandomColor() {
   return colors[Math.floor(Math.random() * colors.length)];
 }
 
-// File watcher connection handler
+function getFileStateKey(projectId, filePath) {
+  return `${projectId}:${filePath}`;
+}
+
+function enqueueFileOperation(key, handler) {
+  const previous = fileOperationQueues.get(key) || Promise.resolve();
+  const next = previous
+    .then(handler)
+    .catch((err) => {
+      console.error(`❌ File operation failed for ${key}:`, err);
+    })
+    .finally(() => {
+      if (fileOperationQueues.get(key) === next) {
+        fileOperationQueues.delete(key);
+      }
+    });
+
+  fileOperationQueues.set(key, next);
+  return next;
+}
+
+function applyTextDelta(baseContent, delta) {
+  if (
+    !delta ||
+    typeof delta.start !== 'number' ||
+    typeof delta.end !== 'number' ||
+    delta.start < 0 ||
+    delta.end < delta.start
+  ) {
+    throw new Error('Invalid delta payload');
+  }
+
+  const replacement = typeof delta.text === 'string' ? delta.text : '';
+  if (delta.end > baseContent.length) {
+    throw new Error('Delta end exceeds document length');
+  }
+
+  return baseContent.slice(0, delta.start) + replacement + baseContent.slice(delta.end);
+}
+
+function diffToSingleRangeDelta(oldText, newText) {
+  if (oldText === newText) {
+    return { start: 0, end: 0, text: '' };
+  }
+
+  let start = 0;
+  const minLength = Math.min(oldText.length, newText.length);
+  while (start < minLength && oldText[start] === newText[start]) {
+    start++;
+  }
+
+  let endOld = oldText.length - 1;
+  let endNew = newText.length - 1;
+  while (endOld >= start && endNew >= start && oldText[endOld] === newText[endNew]) {
+    endOld--;
+    endNew--;
+  }
+
+  return {
+    start,
+    end: endOld + 1,
+    text: newText.slice(start, endNew + 1)
+  };
+}
+
+async function loadFileState(projectId, filePath) {
+  if (!fileSystemService) {
+    throw new Error('File system service not initialized');
+  }
+
+  const cacheKey = getFileStateKey(projectId, filePath);
+
+  if (!fileStateCache.has(cacheKey)) {
+    let content = '';
+    try {
+      const existing = await fileSystemService.readFile(projectId, filePath);
+      if (existing && typeof existing.content === 'string') {
+        content = existing.content;
+      }
+    } catch (err) {
+      console.warn(`⚠️  Could not read ${filePath} for project ${projectId}:`, err.message);
+    }
+    fileStateCache.set(cacheKey, { version: 0, content });
+  }
+
+  return fileStateCache.get(cacheKey);
+}
+
+function schedulePersistToStorage(cacheKey, projectId, filePath, state) {
+  if (filePersistTimers.has(cacheKey)) {
+    clearTimeout(filePersistTimers.get(cacheKey));
+  }
+
+  const timer = setTimeout(async () => {
+    filePersistTimers.delete(cacheKey);
+
+    try {
+      if (fileSystemService) {
+        await fileSystemService.updateFile(projectId, filePath, state.content);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to persist ${filePath} to storage:`, err);
+    }
+
+    try {
+      if (containerService) {
+        await containerService.syncFileToContainer(projectId, filePath, state.content);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to sync ${filePath} to container:`, err);
+    }
+  }, FILE_PERSIST_DEBOUNCE_MS);
+
+  filePersistTimers.set(cacheKey, timer);
+}
+
+async function applyRemoteFileMessage(projectId, message) {
+  if (!message || !message.path) {
+    return;
+  }
+
+  if (message.type !== 'file:delta' && message.type !== 'file:updated') {
+    return;
+  }
+
+  const cacheKey = getFileStateKey(projectId, message.path);
+
+  await enqueueFileOperation(cacheKey, async () => {
+    const state = await loadFileState(projectId, message.path);
+
+    try {
+      if (message.type === 'file:delta' && message.delta) {
+        // Refresh cache if versions diverged before applying delta
+        if (typeof message.baseVersion === 'number' && message.baseVersion !== state.version) {
+          try {
+            const fresh = await fileSystemService.readFile(projectId, message.path);
+            if (fresh && typeof fresh.content === 'string') {
+              state.content = fresh.content;
+              state.version = message.baseVersion;
+            }
+          } catch (err) {
+            console.warn(`⚠️  Could not refresh ${message.path} before applying remote delta:`, err.message);
+          }
+        }
+
+        state.content = applyTextDelta(state.content, message.delta);
+        state.version = message.version || state.version + 1;
+      } else if (message.type === 'file:updated' && typeof message.content === 'string') {
+        state.content = message.content;
+        state.version = message.version || state.version + 1;
+      } else if (message.type === 'file:updated' && typeof message.version === 'number') {
+        // At least keep version in sync for conflict detection
+        state.version = Math.max(state.version, message.version);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to apply remote file message for ${message.path}:`, err);
+      fileStateCache.delete(cacheKey); // force reload on next operation
+    }
+  });
+}
+
 function handleFileWatcherConnection(ws, projectId, connectionId) {
   ws.send(JSON.stringify({
     type: 'watcher:connected',
@@ -1313,31 +1698,114 @@ function handleFileWatcherConnection(ws, projectId, connectionId) {
     connectionId
   }));
 
-  ws.on('message', async (message) => {
+  ws.on('message', (message) => {
     try {
-      const msg = JSON.parse(message);
+      const msg = JSON.parse(typeof message === 'string' ? message : message.toString());
+      if (!msg || !msg.type) {
+        return;
+      }
       
       switch (msg.type) {
+        case 'file:delta': {
+          if (!msg.path || !msg.delta) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Invalid delta payload',
+              code: 'INVALID_DELTA'
+            }));
+            return;
+          }
+
+          const cacheKey = getFileStateKey(projectId, msg.path);
+          enqueueFileOperation(cacheKey, async () => {
+            const state = await loadFileState(projectId, msg.path);
+            const expectedVersion = typeof msg.baseVersion === 'number' ? msg.baseVersion : state.version;
+
+            if (typeof msg.baseVersion === 'number' && msg.baseVersion !== state.version) {
+              ws.send(JSON.stringify({
+                type: 'file:resync-required',
+                path: msg.path,
+                serverVersion: state.version,
+                receivedVersion: msg.baseVersion
+              }));
+              return;
+            }
+
+            try {
+              const nextContent = applyTextDelta(state.content, msg.delta);
+              state.content = nextContent;
+              state.version = state.version + 1;
+
+              const broadcastPayload = {
+                type: 'file:delta',
+                path: msg.path,
+                delta: msg.delta,
+                version: state.version,
+                baseVersion: expectedVersion,
+                updatedBy: connectionId,
+                timestamp: Date.now()
+              };
+
+              // Optimistic broadcast (do not wait for disk/container)
+              connectionManager.broadcast(projectId, broadcastPayload, connectionId);
+              connectionManager.broadcast(projectId, {
+                type: 'file:updated',
+                path: msg.path,
+                version: state.version,
+                updatedBy: connectionId,
+                timestamp: Date.now()
+              }, connectionId);
+              schedulePersistToStorage(cacheKey, projectId, msg.path, state);
+            } catch (err) {
+              console.error(`❌ Failed to apply delta for ${msg.path}:`, err);
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Failed to apply delta',
+                code: 'DELTA_APPLY_FAILED'
+              }));
+            }
+          });
+          break;
+        }
+
         case 'file:changed':
           if (msg.path && msg.content !== undefined) {
-            // Update file in filesystem
-            await fileSystemService.updateFile(projectId, msg.path, msg.content);
-            
-            // Sync to container
-            await containerService.syncFileToContainer(projectId, msg.path, msg.content);
-            
-            // Broadcast to other watchers
-            connectionManager.broadcast(projectId, {
-              type: 'file:updated',
-              path: msg.path,
-              updatedBy: connectionId,
-              timestamp: Date.now()
-            }, connectionId);
+            const cacheKey = getFileStateKey(projectId, msg.path);
+            const incomingContent = typeof msg.content === 'string' ? msg.content : String(msg.content);
+
+            enqueueFileOperation(cacheKey, async () => {
+              const state = await loadFileState(projectId, msg.path);
+              const delta = diffToSingleRangeDelta(state.content, incomingContent);
+              state.content = incomingContent;
+              state.version = state.version + 1;
+
+              const deltaMessage = {
+                type: 'file:delta',
+                path: msg.path,
+                delta,
+                version: state.version,
+                baseVersion: state.version - 1,
+                legacy: true,
+                updatedBy: connectionId,
+                timestamp: Date.now()
+              };
+
+              // Broadcast minimal payload; persistence happens asynchronously
+              connectionManager.broadcast(projectId, deltaMessage, connectionId);
+              connectionManager.broadcast(projectId, {
+                type: 'file:updated',
+                path: msg.path,
+                version: state.version,
+                updatedBy: connectionId,
+                timestamp: Date.now()
+              }, connectionId);
+
+              schedulePersistToStorage(cacheKey, projectId, msg.path, state);
+            });
           }
           break;
           
         case 'file:watch':
-          // Add file to watch list
           ws.send(JSON.stringify({
             type: 'file:watching',
             path: msg.path
@@ -1374,6 +1842,9 @@ const gracefulShutdown = async (signal) => {
   wss.close(() => {
     console.log('✅ WebSocket server closed');
   });
+  if (crossInstancePubSub) {
+    await crossInstancePubSub.close();
+  }
   
   // Close all WebSocket connections
   wss.clients.forEach((ws) => {
