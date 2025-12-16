@@ -134,14 +134,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down...")
 
-    # COMMENTED OUT: Lock cleanup task disabled (CRDT-only mode)
-    # # Stop background lock cleanup task
-    # try:
-    #     await stop_lock_cleanup_task()
-    #     logger.info("✅ Lock cleanup task stopped")
-    # except Exception as e:
-    #     logger.error(f"Error stopping lock cleanup task: {str(e)}")
-
     await engine.dispose()
 
 # Create FastAPI app
@@ -193,13 +185,9 @@ async def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
 
-# DESIGN PATTERN: Factory Pattern Implementation
-# The factory automatically discovers and registers all routers
 router_factory = create_router_factory(routers_package="routers", api_prefix="/api/v1")
 router_factory.register_all_routers(app)
 
-# MANUAL REGISTRATION: Ensure files router is registered (temporary fix)
-# The factory should handle this, but manually registering to ensure it works
 try:
     from routers import files
     app.include_router(files.router, prefix="/api/v1")
@@ -208,22 +196,6 @@ except Exception as e:
     logger.error(f"❌ Failed to manually register files router: {e}")
     import traceback
     traceback.print_exc()
-
-# OLD APPROACH (Before Factory Pattern):
-# Had to manually register each router - repetitive and error-prone!
-# app.include_router(users.router, prefix="/api/v1")
-# app.include_router(projects.router, prefix="/api/v1")
-# app.include_router(roles.router, prefix="/api/v1")
-# app.include_router(project_members.router, prefix="/api/v1")
-# app.include_router(project_invitations.router, prefix="/api/v1")
-# app.include_router(directories.router, prefix="/api/v1")
-# app.include_router(file_types.router, prefix="/api/v1")
-# app.include_router(files.router, prefix="/api/v1")
-# app.include_router(file_versions.router, prefix="/api/v1")
-# app.include_router(notifications.router, prefix="/api/v1")
-# app.include_router(permissions.router, prefix="/api/v1")
-# app.include_router(locks.router, prefix="/api/v1")
-# app.include_router(websocket_connections.router, prefix="/api/v1")
 
 logger.info(f"Registered {len(router_factory.get_registered_routers())} routers using Factory Pattern")
 
@@ -245,6 +217,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        workers=4
     )
 

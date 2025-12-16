@@ -27,6 +27,8 @@ interface MonacoEditorWrapperProps {
   collaboration?: {
     enabled: boolean;
     docId: string;
+    projectId?: string;
+    filePath?: string;
     user: {
       id: string;
       name: string;
@@ -176,6 +178,8 @@ export function MonacoEditorWrapper({
       ? {
           editor: editorRef.current,
           docId: collaboration.docId,
+          projectId: collaboration.projectId,
+          filePath: collaboration.filePath,
           user: collaboration.user,
           wsUrl: collaboration.wsUrl,
           offlineSupport: collaboration.offlineSupport,

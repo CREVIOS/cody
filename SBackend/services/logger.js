@@ -12,6 +12,7 @@ class Logger {
   constructor(context = {}) {
     this.context = context;
     this.metrics = new Map();
+    this.silent = process.env.NODE_ENV === 'test';
   }
 
   /**
@@ -31,6 +32,7 @@ class Logger {
    * Debug log
    */
   debug(message, data = {}) {
+    if (this.silent) return;
     if (process.env.LOG_LEVEL === 'debug') {
       console.log(this.format('debug', message, data));
     }
@@ -40,6 +42,7 @@ class Logger {
    * Info log
    */
   info(message, data = {}) {
+    if (this.silent) return;
     console.log(this.format('info', message, data));
   }
 
@@ -47,6 +50,7 @@ class Logger {
    * Warning log
    */
   warn(message, data = {}) {
+    if (this.silent) return;
     console.warn(this.format('warn', message, data));
   }
 
@@ -54,6 +58,7 @@ class Logger {
    * Error log
    */
   error(message, error, data = {}) {
+    if (this.silent) return;
     console.error(
       this.format('error', message, {
         ...data,
@@ -70,6 +75,7 @@ class Logger {
    * Log metric
    */
   metric(name, value, unit = '', tags = {}) {
+    if (this.silent) return;
     const metric = {
       timestamp: new Date().toISOString(),
       name,

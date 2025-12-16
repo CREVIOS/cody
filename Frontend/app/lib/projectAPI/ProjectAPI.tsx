@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry, invalidateCache } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { Project, PaginatedResponse } from "./TypeDefinitions";
 
@@ -18,7 +18,7 @@ export const getProjects = async (
       
       if (ownerId) params.append('owner_id', ownerId);
       
-      const response = await fetch(`${API_BASE_URL}/api/v1/projects?${params}`);
+      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects?${params}`);
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
@@ -38,7 +38,7 @@ export const getProjects = async (
    */
   export const getProjectById = async (projectId: string): Promise<Project> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/projects/${projectId}`);
+      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/${projectId}`);
       
       if (!response.ok) {
         const errorMessage = await getErrorMessage(response);
@@ -57,7 +57,7 @@ export const getProjects = async (
    */
   export const deleteProject = async (projectId: string): Promise<void> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/projects/${projectId}`, {
+      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/${projectId}`, {
         method: 'DELETE'
       });
       
@@ -65,6 +65,9 @@ export const getProjects = async (
         const errorMessage = await getErrorMessage(response);
         throw new Error(errorMessage);
       }
+      
+      // Invalidate projects cache after deletion
+      invalidateCache('/projects');
     } catch (error) {
       console.error('Error deleting project:', error);
       throw error;
@@ -82,7 +85,7 @@ export const createProject = async (projectData: {
   owner_id: string;
 }): Promise<Project> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/projects/`, {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -95,6 +98,9 @@ export const createProject = async (projectData: {
       throw new Error(errorMessage);
     }
 
+    // Invalidate projects cache after creation
+    invalidateCache('/projects');
+    
     return await response.json();
   } catch (error) {
     console.error('Error creating project:', error);

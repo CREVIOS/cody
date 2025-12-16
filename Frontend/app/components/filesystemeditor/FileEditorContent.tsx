@@ -609,7 +609,7 @@ export function FileEditorContent({
         isDark={isDark}
         roomName={projectId || 'default'}
         username={user?.username || 'User'}
-        userId={user?.user_id || ''}
+        userId={user?.id || user?.user_id || ''}
         docKey={selectedFile.path}
         forceReadOnly={false}
         lockState={null}
@@ -620,12 +620,12 @@ export function FileEditorContent({
           realtimeKey
             ? {
                 enabled: true,
-                docId: realtimeKey.docId,
+                docId: `file:${realtimeKey.projectId}:${realtimeKey.fileId}`,
                 projectId: realtimeKey.projectId,
-                fileId: realtimeKey.fileId,
+                filePath: realtimeKey.fileId,
                 user: {
-                  id: user?.user_id || '',
-                  name: user?.username || 'User',
+                  id: user?.id || user?.user_id || '',
+                  name: user?.username || user?.email || 'User',
                 },
                 wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
                 offlineSupport: true,

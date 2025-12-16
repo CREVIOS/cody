@@ -27,6 +27,21 @@ export interface WebSocketProviderOptions {
   docId: string;
 
   /**
+   * Project ID (used for server routing)
+   */
+  projectId?: string;
+
+  /**
+   * File path (for file-collab channel)
+   */
+  filePath?: string;
+
+  /**
+   * Channel type: 'collaboration' (project doc) or 'file-collab' (per-file doc)
+   */
+  channelType?: 'collaboration' | 'file-collab';
+
+  /**
    * User information for awareness
    */
   user: {
@@ -59,6 +74,16 @@ export interface WebSocketProviderOptions {
    * Enable structured logging
    */
   logging?: boolean;
+
+  /**
+   * Batch interval for Yjs updates (ms)
+   */
+  updateBatchMs?: number;
+
+  /**
+   * Debounce for awareness updates (ms)
+   */
+  awarenessDebounceMs?: number;
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -68,6 +93,9 @@ export class WebSocketProvider extends EventTarget {
   public readonly awareness: awarenessProtocol.Awareness;
   public readonly docId: string;
   public readonly user: { id: string; name: string; color: string };
+  private readonly projectId?: string;
+  private readonly filePath?: string;
+  private readonly channelType: 'collaboration' | 'file-collab';
 
   private ws: WebSocket | null = null;
   private url: string;
@@ -94,15 +122,25 @@ export class WebSocketProvider extends EventTarget {
 
   // Message queue for offline messages
   private messageQueue: Uint8Array[] = [];
+  private pendingUpdates: Uint8Array[] = [];
+  private updateFlushTimer: NodeJS.Timeout | null = null;
+  private updateBatchMs: number;
+
+  private pendingAwareness: Uint8Array[] = [];
+  private awarenessFlushTimer: NodeJS.Timeout | null = null;
+  private awarenessDebounceMs: number;
 
   constructor(doc: Y.Doc, options: WebSocketProviderOptions) {
     super();
 
     this.doc = doc;
     this.docId = options.docId;
+    this.projectId = options.projectId;
+    this.filePath = options.filePath;
+    this.channelType = options.channelType || (this.filePath ? 'file-collab' : 'collaboration');
     this.user = {
       id: options.user.id,
-      name: options.user.name,
+      name: options.user.name || 'Anonymous',
       color: options.user.color || this.generateRandomColor(),
     };
 
@@ -118,6 +156,8 @@ export class WebSocketProvider extends EventTarget {
     this.maxReconnectAttempts = options.reconnect?.maxRetries || 10;
     this.reconnectBaseDelay = options.reconnect?.baseDelay || 1000;
     this.reconnectMaxDelay = options.reconnect?.maxDelay || 30000;
+    this.updateBatchMs = options.updateBatchMs ?? 15;
+    this.awarenessDebounceMs = options.awarenessDebounceMs ?? 16;
 
     // Awareness handlers
     this.awarenessUpdateHandler = (changes, origin) => {
@@ -129,7 +169,7 @@ export class WebSocketProvider extends EventTarget {
       const changedClients = [...changes.added, ...changes.updated, ...changes.removed];
 
       const update = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients);
-      this.sendMessage(this.createAwarenessMessage(update));
+      this.queueAwarenessUpdate(update);
     };
 
     this.awareness.on('change', this.awarenessUpdateHandler);
@@ -204,9 +244,12 @@ export class WebSocketProvider extends EventTarget {
     this.setConnectionStatus('connecting');
 
     const wsUrl = new URL(this.url);
-    wsUrl.searchParams.set('type', 'collaboration');
-    wsUrl.searchParams.set('projectId', this.docId);
+    wsUrl.searchParams.set('type', this.channelType);
+    wsUrl.searchParams.set('projectId', this.projectId || this.docId);
     wsUrl.searchParams.set('docId', this.docId);
+    if (this.filePath) {
+      wsUrl.searchParams.set('path', this.filePath);
+    }
     wsUrl.searchParams.set('userId', this.user.id);
     wsUrl.searchParams.set('userName', this.user.name);
     wsUrl.searchParams.set('userColor', this.user.color);
@@ -331,13 +374,28 @@ export class WebSocketProvider extends EventTarget {
    */
   private handleDocUpdate = (update: Uint8Array, origin: any) => {
     if (origin !== this) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-
-      this.sendMessage(encoding.toUint8Array(encoder));
+      this.pendingUpdates.push(update);
+      if (!this.updateFlushTimer) {
+        this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
+      }
     }
   };
+
+  private flushPendingUpdates() {
+    this.updateFlushTimer = null;
+    if (this.pendingUpdates.length === 0) return;
+
+    const merged = this.pendingUpdates.length === 1
+      ? this.pendingUpdates[0]
+      : Y.mergeUpdates(this.pendingUpdates);
+
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+    encoding.writeVarUint8Array(encoder, merged);
+    this.sendMessage(encoding.toUint8Array(encoder));
+
+    this.pendingUpdates = [];
+  }
 
   /**
    * Send sync step 1 to server
@@ -358,6 +416,29 @@ export class WebSocketProvider extends EventTarget {
     encoding.writeVarUint(encoder, messageAwareness);
     encoding.writeVarUint8Array(encoder, update);
     return encoding.toUint8Array(encoder);
+  }
+
+  /**
+   * Queue awareness update with debounce (reduces cursor spam)
+   */
+  private queueAwarenessUpdate(update: Uint8Array) {
+    this.pendingAwareness.push(update);
+    if (this.awarenessFlushTimer) return;
+
+    this.awarenessFlushTimer = setTimeout(() => {
+      this.awarenessFlushTimer = null;
+      if (this.pendingAwareness.length === 0) return;
+
+      const merged = this.pendingAwareness.length === 1
+        ? this.pendingAwareness[0]
+        : awarenessProtocol.encodeAwarenessUpdate(
+            this.awareness,
+            Array.from(this.awareness.getStates().keys())
+          );
+
+      this.pendingAwareness = [];
+      this.sendMessage(this.createAwarenessMessage(merged));
+    }, this.awarenessDebounceMs);
   }
 
   /**
@@ -468,6 +549,18 @@ export class WebSocketProvider extends EventTarget {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
+    }
+
+    if (this.updateFlushTimer) {
+      clearTimeout(this.updateFlushTimer);
+      this.updateFlushTimer = null;
+      this.pendingUpdates = [];
+    }
+
+    if (this.awarenessFlushTimer) {
+      clearTimeout(this.awarenessFlushTimer);
+      this.awarenessFlushTimer = null;
+      this.pendingAwareness = [];
     }
 
     if (this.ws) {

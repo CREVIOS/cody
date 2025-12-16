@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const EventEmitter = require('events');
 const { SandboxContainerBuilder, ContainerDirector } = require('./containerBuilder');
-const { ContainerWrapper, StoppedState, RunningState, RemovedState, ErrorState } = require('./containerStates');
+const { ContainerWrapper } = require('./containerStates');
 
 class ContainerService extends EventEmitter {
   constructor(fileSystemService) {

@@ -33,6 +33,16 @@ export interface CollaborativeEditorOptions {
   docId: string;
 
   /**
+   * Project ID (for server routing)
+   */
+  projectId?: string;
+
+  /**
+   * File path (for file-collab channel)
+   */
+  filePath?: string;
+
+  /**
    * User information
    */
   user: {
@@ -179,8 +189,13 @@ export function useCollaborativeEditor(
       return;
     }
 
+    // Require user identity before bootstrapping
+    if (!options.user || !options.user.id) {
+      return;
+    }
+
     const editor = options.editor;
-    const { docId, user, wsUrl, offlineSupport, logging, undoOptions, initialContent } = options;
+    const { docId, user, wsUrl, offlineSupport, logging, undoOptions, initialContent, projectId, filePath } = options;
 
     // Create Yjs document
     const doc = new Y.Doc();
@@ -223,9 +238,13 @@ export function useCollaborativeEditor(
     // Setup WebSocket provider
     const wsProvider = new WebSocketProvider(doc, {
       docId,
-      user,
+      projectId,
+      filePath,
+      channelType: 'file-collab',
       url: wsUrl || process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
       logging,
+      updateBatchMs: 15,
+      awarenessDebounceMs: 16,
     });
 
     wsProviderRef.current = wsProvider;

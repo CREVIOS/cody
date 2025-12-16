@@ -1,4 +1,3 @@
-const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const { Y } = require('../services/yjsSingleton');
 const { CollaborationRoom, CollaborationService } = require('../services/collaborationService');
@@ -277,11 +276,11 @@ describe('CRDT Collaboration', () => {
     let room;
     const testDir = path.join(__dirname, '../data/collaboration-test');
 
-    before(async () => {
+    beforeAll(async () => {
       await fs.mkdir(testDir, { recursive: true });
     });
 
-    after(async () => {
+    afterAll(async () => {
       if (room) {
         await room.close();
       }
