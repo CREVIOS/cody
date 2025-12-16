@@ -104,8 +104,14 @@ export default function Collaborators({
       <div className="mt-2 max-h-[240px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-rounded-full scrollbar-track-transparent">
         {members.length > 0 ? (
           members.map((member, idx) => {
+            // Try multiple fields to get display name, handling empty strings
+            const user = member.user || {};
             const displayName =
-              member.user.full_name || member.user.username || "Unknown User";
+              (user.full_name && user.full_name.trim()) ||
+              (user.username && user.username.trim()) ||
+              (user.email && user.email.trim()) ||
+              (user.name && user.name.trim()) ||
+              `User ${idx + 1}`; // Fallback to numbered user instead of "Unknown User"
             const uid = getUserId(member);
             const online = isOnline(uid);
             const isLast = idx === members.length - 1;

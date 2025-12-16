@@ -306,6 +306,18 @@ export class WebSocketProvider extends EventTarget {
     // Send queued messages
     this.flushMessageQueue();
 
+    // CRITICAL: Send initial awareness state when connected
+    // This ensures other clients see this user immediately
+    try {
+      this.setLocalAwareness();
+      // Flush any pending awareness updates
+      if (this.pendingAwareness.length > 0) {
+        this.flushAwarenessQueue();
+      }
+    } catch (err) {
+      this.log('Error sending initial awareness:', err);
+    }
+
     this.dispatchEvent(new Event('connect'));
   }
 
@@ -580,23 +592,38 @@ export class WebSocketProvider extends EventTarget {
    * Queue awareness update with debounce (reduces cursor spam)
    */
   private queueAwarenessUpdate(update: Uint8Array) {
+    // Only queue if WebSocket is connected
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.log('WebSocket not connected, queuing awareness update');
+      this.pendingAwareness.push(update);
+      return;
+    }
+
     this.pendingAwareness.push(update);
     if (this.awarenessFlushTimer) return;
 
     this.awarenessFlushTimer = setTimeout(() => {
-      this.awarenessFlushTimer = null;
-      if (this.pendingAwareness.length === 0) return;
-
-      const merged = this.pendingAwareness.length === 1
-        ? this.pendingAwareness[0]
-        : awarenessProtocol.encodeAwarenessUpdate(
-            this.awareness,
-            Array.from(this.awareness.getStates().keys())
-          );
-
-      this.pendingAwareness = [];
-      this.sendMessage(this.createAwarenessMessage(merged));
+      this.flushAwarenessQueue();
     }, this.awarenessDebounceMs);
+  }
+
+  /**
+   * Flush pending awareness updates
+   */
+  private flushAwarenessQueue() {
+    this.awarenessFlushTimer = null;
+    if (this.pendingAwareness.length === 0) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    const merged = this.pendingAwareness.length === 1
+      ? this.pendingAwareness[0]
+      : awarenessProtocol.encodeAwarenessUpdate(
+          this.awareness,
+          Array.from(this.awareness.getStates().keys())
+        );
+
+    this.pendingAwareness = [];
+    this.sendMessage(this.createAwarenessMessage(merged));
   }
 
   /**

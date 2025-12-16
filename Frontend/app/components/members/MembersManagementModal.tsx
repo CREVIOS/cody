@@ -189,11 +189,14 @@ export default function MembersManagementModal({
           ) : (
             <div className="space-y-3">
               {members.map((member) => {
+                // Try multiple fields to get display name, handling empty strings
+                const user = member.user || {};
                 const displayName =
-                  member.user?.full_name ||
-                  member.user?.username ||
-                  member.user?.email ||
-                  "Unknown User";
+                  (user.full_name && user.full_name.trim()) ||
+                  (user.username && user.username.trim()) ||
+                  (user.email && user.email.trim()) ||
+                  (user.name && user.name.trim()) ||
+                  `User ${member.project_member_id || member.user_id || 'unknown'}`;
                 const currentRoleId = selectedRoleId[member.project_member_id || member.user_id] || member.role_id;
                 const isUpdating = updatingMemberId === (member.project_member_id || member.user_id);
                 // CRITICAL: Check is_owner flag first - owner status is determined by project.owner_id, not role_id
