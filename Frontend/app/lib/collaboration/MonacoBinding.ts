@@ -182,10 +182,9 @@ export class MonacoBinding extends EventTarget {
       }
 
       try {
-        // Use transact with 'this' as origin to mark these changes as coming from Monaco
-        // This ensures the Yjs observer can skip them
-        // CRITICAL: Use a unique origin object to prevent WebSocket from sending these back
-        const monacoOrigin = { _monacoBinding: this, _isLocalEdit: true };
+        // Use 'this' as origin to mark these changes as coming from Monaco
+        // The Yjs observer will skip changes where origin === this
+        // This prevents feedback loops (Monaco -> Yjs -> Monaco)
         this.yText.doc?.transact(() => {
           // Apply changes in reverse order (end to start) to maintain correct offsets
           const sortedChanges = [...event.changes].sort((a, b) => b.rangeOffset - a.rangeOffset);
@@ -214,7 +213,7 @@ export class MonacoBinding extends EventTarget {
               this.yText.insert(offset, insertText);
             }
           }
-        }, monacoOrigin); // Unique origin marks these as local Monaco edits
+        }, this); // Use 'this' as origin so Yjs observer can skip these changes
       } catch (error) {
         console.error('[MonacoBinding] Error applying Monaco changes to Yjs:', error);
       }
@@ -231,267 +230,20 @@ export class MonacoBinding extends EventTarget {
         return;
       }
 
-      // CRITICAL: ONLY process updates that came from local user edits
-      // Skip ALL other origins to prevent echo loops
-      
-      // Skip if change originated from this binding (we already applied it)
+      // CRITICAL: Skip ALL changes that originated from this binding
+      // This is the PRIMARY guard to prevent feedback loops
       if (transaction.origin === this) {
         return;
       }
 
-      // Skip if origin is null/undefined (happens during sync or unknown sources)
-      if (!transaction.origin) {
-        return;
-      }
-
-      // ONLY process updates that have the _isLocalEdit flag
-      // This ensures we ONLY apply local user edits, NOT server echoes
-      if (typeof transaction.origin === 'object' && (transaction.origin as any)._isLocalEdit) {
-        // This is a local edit - process it
-        // Continue below
-      } else {
-        // This is from server/WebSocket - IGNORE IT completely
-        return;
-      }
-
-      // Increment counter to prevent feedback loop
-      this._muxCounter++;
-
-      // Temporarily disable Monaco listener to prevent feedback loop
-      const wasListenerActive = this._modelContentChangedListener !== null;
-      if (wasListenerActive) {
-        this._modelContentChangedListener?.dispose();
-        this._modelContentChangedListener = null;
-      }
-
-      // Save cursor/selection position
-      const selections = this.editor.getSelections();
-      const viewState = this.editor.saveViewState();
-
-      try {
-        // Safety check: Validate Yjs document size before processing
-        let yContentLength: number;
-        try {
-          yContentLength = this.yText.length;
-        } catch (e) {
-          console.error('[MonacoBinding] Cannot get Yjs text length - document may be corrupted:', e);
-          // Restore listener before returning
-          if (wasListenerActive && !this._isCorrupted) {
-            this._setupMonacoToYjs();
-          }
-          this._muxCounter--;
-          return;
-        }
-        
-        // Prevent processing if document is too large (safety limit: ~10MB for safety)
-        const MAX_DOC_LENGTH = 10 * 1024 * 1024; // 10MB (reduced from 100MB for safety)
-        if (yContentLength > MAX_DOC_LENGTH) {
-          console.error('[MonacoBinding] Yjs document too large:', yContentLength, 'bytes. Document corrupted - DESTROYING binding.');
-          
-          // Mark as corrupted to stop ALL future processing
-          this._isCorrupted = true;
-          
-          // Remove all listeners immediately
-          this._modelContentChangedListener?.dispose();
-          this._modelContentChangedListener = null;
-          
-          if (this._textObserver) {
-            this.yText.unobserve(this._textObserver);
-            this._textObserver = null;
-          }
-          
-          // Emit corruption event so parent can recreate everything
-          this.dispatchEvent(new CustomEvent('corruption-detected', { 
-            detail: { 
-              size: yContentLength,
-              message: 'Document exceeded size limit and was corrupted'
-            } 
-          }));
-          
-          this._muxCounter--;
-          return;
-        }
-        
-        // Get current document length to validate offsets
-        const docLength = this.model.getValueLength();
-        
-        // Validate delta array exists and is reasonable
-        if (!event.delta || !Array.isArray(event.delta)) {
-          console.warn('[MonacoBinding] Invalid delta array:', event.delta);
-          // Restore listener before returning
-          if (wasListenerActive && !this._isCorrupted) {
-            this._setupMonacoToYjs();
-          }
-          this._muxCounter--;
-          return;
-        }
-        
-        // Limit delta operations to prevent processing huge deltas
-        if (event.delta.length > 10000) {
-          console.warn('[MonacoBinding] Delta array too large:', event.delta.length, 'operations. Skipping.');
-          // Restore listener before returning
-          if (wasListenerActive && !this._isCorrupted) {
-            this._setupMonacoToYjs();
-          }
-          this._muxCounter--;
-          return;
-        }
-        
-        // Collect ALL edits first, then apply them in a SINGLE batch operation
-        // This prevents multiple change events from triggering feedback loops
-        const edits: Array<{
-          range: {
-            startLineNumber: number;
-            startColumn: number;
-            endLineNumber: number;
-            endColumn: number;
-          };
-          text: string;
-        }> = [];
-
-        // Track cumulative offset as we process deltas
-        let currentOffset = 0;
-
-        // First pass: collect all edits
-        for (const delta of event.delta) {
-          if (delta.retain !== undefined) {
-            // Skip forward in the document
-            currentOffset += delta.retain;
-            // Validate offset doesn't exceed document length
-            if (currentOffset > docLength) {
-              console.warn('[MonacoBinding] Retain offset exceeds document length:', currentOffset, '>', docLength);
-              currentOffset = docLength;
-            }
-          } else if (delta.insert !== undefined) {
-            const insertText = delta.insert as string;
-            
-            // Validate offset before getting position
-            if (currentOffset > docLength) {
-              console.warn('[MonacoBinding] Insert offset exceeds document length, clamping:', currentOffset, '>', docLength);
-              currentOffset = docLength;
-            }
-            
-            const position = this.model.getPositionAt(currentOffset);
-            edits.push({
-              range: {
-                startLineNumber: position.lineNumber,
-                startColumn: position.column,
-                endLineNumber: position.lineNumber,
-                endColumn: position.column,
-              },
-              text: insertText,
-            });
-
-            // Update offset to account for the insertion
-            currentOffset += insertText.length;
-          } else if (delta.delete !== undefined) {
-            const deleteLength = delta.delete as number;
-            
-            // Validate offset before getting position
-            if (currentOffset > docLength) {
-              console.warn('[MonacoBinding] Delete offset exceeds document length, clamping:', currentOffset, '>', docLength);
-              currentOffset = docLength;
-            }
-            
-            // Clamp delete length to available content
-            const maxDelete = docLength - currentOffset;
-            const actualDeleteLength = Math.min(deleteLength, maxDelete);
-            
-            if (actualDeleteLength > 0) {
-              const start = this.model.getPositionAt(currentOffset);
-              const end = this.model.getPositionAt(currentOffset + actualDeleteLength);
-              
-              edits.push({
-                range: {
-                  startLineNumber: start.lineNumber,
-                  startColumn: start.column,
-                  endLineNumber: end.lineNumber,
-                  endColumn: end.column,
-                },
-                text: '',
-              });
-            }
-            // Don't update offset for deletes - the content is removed
-          }
-        }
-
-        // Apply ALL edits in a SINGLE batch operation
-        if (edits.length > 0) {
-          try {
-            // Use pushEditOperations to apply all edits at once
-            // This ensures only ONE change event is fired
-            this.model.pushEditOperations(
-              [],
-              edits,
-              () => null // No undo/redo support needed for remote changes
-            );
-          } catch (editError) {
-            console.error('[MonacoBinding] Error applying batch edits:', editError);
-            // Fallback: apply edits one by one if batch fails
-            // But this should rarely happen
-            for (const edit of edits) {
-              try {
-                this.model.applyEdits([edit]);
-              } catch (singleEditError) {
-                console.error('[MonacoBinding] Error applying single edit:', singleEditError);
-              }
-            }
-          }
-        }
-
-        // Restore cursor/selection if possible
-        if (viewState) {
-          this.editor.restoreViewState(viewState);
-        }
-        if (selections) {
-          this.editor.setSelections(selections);
-        }
-      } catch (error) {
-        console.error('[MonacoBinding] Error applying Yjs delta:', error);
-        // If there's a sync error, try to resync by setting Monaco to match Yjs
-        // But only if Yjs document is not corrupted
-        try {
-          // Check Yjs document size first
-          const yLength = this.yText.length;
-          const MAX_DOC_LENGTH = 100 * 1024 * 1024; // 100MB
-          
-          if (yLength > MAX_DOC_LENGTH) {
-            console.error('[MonacoBinding] Cannot resync - Yjs document too large:', yLength);
-            return;
-          }
-          
-          // Safely get Yjs content
-          let yContent: string;
-          try {
-            yContent = this.yText.toString();
-          } catch (toStringError) {
-            console.error('[MonacoBinding] Cannot convert Yjs to string - document corrupted:', toStringError);
-            return;
-          }
-          
-          // Validate content length
-          if (yContent.length > MAX_DOC_LENGTH) {
-            console.error('[MonacoBinding] Cannot resync - content too large:', yContent.length);
-            return;
-          }
-          
-          const monacoContent = this.model.getValue();
-          if (yContent !== monacoContent) {
-            console.warn('[MonacoBinding] Resyncing Monaco model with Yjs content due to error');
-            this._muxCounter++;
-            this.model.setValue(yContent);
-            this._muxCounter--;
-          }
-        } catch (resyncError) {
-          console.error('[MonacoBinding] Failed to resync after error:', resyncError);
-        }
-      } finally {
-        // Always restore listener and decrement counter
-        if (wasListenerActive && !this._isCorrupted) {
-          this._setupMonacoToYjs();
-        }
-        this._muxCounter--;
-      }
+      // CRITICAL: Skip ALL changes - we don't want Yjs changes to go back to Monaco
+      // The only changes that should be in Yjs are from Monaco (which we skip above)
+      // All other changes (WebSocket, server, etc.) should NOT be applied to Monaco
+      // to prevent echo loops and double-typing
+      // 
+      // DISABLED: Yjs→Monaco sync to prevent all feedback loops
+      // Only Monaco→Yjs sync is active (one-way only)
+      return;
     };
 
     this.yText.observe(this._textObserver);
