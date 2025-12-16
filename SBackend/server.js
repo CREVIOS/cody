@@ -1,3 +1,6 @@
+// Load environment variables first
+require('dotenv').config();
+
 // server.js - Enhanced Production Server
 const express = require("express");
 const WebSocket = require("ws");
@@ -18,6 +21,7 @@ const FileSystemService = require("./services/fileSystemService");
 const ContainerService = require("./services/containerService");
 const OutputManager = require("./services/outputManager");
 const { CollaborationService } = require("./services/collaborationService");
+const { CollabPubSub } = require("./services/collabPubSub");
 const {
   KeepRecentVersionsStrategy,
   TimeBasedRetentionStrategy,
@@ -129,7 +133,8 @@ async function initializeServices() {
       maxUpdatesBeforeSnapshot: 100,
       gcEnabled: true,
       roomCleanupInterval: 60 * 1000, // 1 minute
-      roomIdleTimeout: 5 * 60 * 1000 // 5 minutes
+      roomIdleTimeout: 5 * 60 * 1000, // 5 minutes
+      pubSubBridge: collabPubSub
     });
 
     // Initialize version retention manager with default strategy
@@ -158,6 +163,9 @@ async function initializeServices() {
     // Bring cross-instance pub/sub online once core services are ready
     await crossInstancePubSub.init().catch(err => {
       console.error('❌ Failed to initialize cross-instance pub/sub:', err);
+    });
+    await collabPubSub.init().catch(err => {
+      console.error('❌ Failed to initialize collaboration pub/sub:', err);
     });
     
     console.log('✅ Services initialized successfully');
@@ -950,7 +958,9 @@ app.get('/api/collaboration/metrics', asyncHandler(async (req, res) => {
   const metrics = collaborationService.getAllMetrics();
   res.json({
     success: true,
-    metrics
+    metrics,
+    pubsub: collabPubSub ? collabPubSub.stats : null,
+    websocket: connectionManager.getStats()
   });
 }));
 
@@ -1313,6 +1323,7 @@ class ConnectionManager {
 }
 
 const crossInstancePubSub = new CrossInstancePubSub(INSTANCE_ID);
+const collabPubSub = new CollabPubSub(INSTANCE_ID);
 const connectionManager = new ConnectionManager(crossInstancePubSub);
 
 // Function to set up event handlers after services are initialized
@@ -1405,6 +1416,19 @@ wss.on("connection", (ws, req) => {
     return;
   }
 
+  if (!WS_ALLOW_ANONYMOUS) {
+    const hasAuth = userClaims && (userClaims.sub || userClaims.user_id || userClaims.id);
+    if (!hasAuth) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Authentication required',
+        code: 'AUTH_REQUIRED'
+      }));
+      ws.close(1008, 'Authentication required');
+      return;
+    }
+  }
+
   const connectionId = connectionManager.addConnection(ws, type, projectId, {
     userAgent: req.headers['user-agent'],
     ip: req.connection.remoteAddress,
@@ -1443,6 +1467,10 @@ wss.on("connection", (ws, req) => {
 
       case 'watcher':
         handleFileWatcherConnection(ws, projectId, connectionId);
+        break;
+
+      case 'file-collab':
+        handleFileCollabConnection(ws, projectId, connectionId, url);
         break;
 
       case 'collaboration':
@@ -1522,6 +1550,53 @@ function handleCollaborationConnection(ws, projectId, connectionId, url) {
   }
 }
 
+function handleFileCollabConnection(ws, projectId, connectionId, url) {
+  const filePath = url.searchParams.get('path');
+  if (!filePath) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'File path is required for file-collab',
+      code: 'MISSING_FILE_PATH'
+    }));
+    ws.close(1008, 'File path required');
+    return;
+  }
+
+  const docId = getFileDocId(projectId, filePath);
+  const authenticatedUserId = ws.user?.sub || ws.user?.user_id || ws.user?.id;
+  const authenticatedName = ws.user?.name || ws.user?.preferred_username;
+  const userId = authenticatedUserId || url.searchParams.get('userId') || connectionId;
+  const userName = authenticatedName || url.searchParams.get('userName') || 'Anonymous';
+  const userColor = url.searchParams.get('userColor') || generateRandomColor();
+
+  console.log(`👥 File collaboration - Doc: ${docId}, File: ${filePath}, User: ${userName}`);
+
+  const room = collaborationService.getRoom(docId);
+
+  const userInfo = {
+    id: userId,
+    name: userName,
+    color: userColor,
+    connectionId,
+    filePath
+  };
+
+  room.addConnection(connectionId, ws, userInfo);
+
+  const confirmMessage = JSON.stringify({
+    type: 'file-collab:connected',
+    docId,
+    filePath,
+    userId,
+    connectionId,
+    timestamp: Date.now()
+  });
+
+  if (ws.readyState === ws.OPEN) {
+    ws.send(confirmMessage);
+  }
+}
+
 function generateRandomColor() {
   const colors = [
     '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
@@ -1532,6 +1607,10 @@ function generateRandomColor() {
 
 function getFileStateKey(projectId, filePath) {
   return `${projectId}:${filePath}`;
+}
+
+function getFileDocId(projectId, filePath) {
+  return `file:${projectId}:${filePath}`;
 }
 
 function enqueueFileOperation(key, handler) {
@@ -1568,6 +1647,35 @@ function applyTextDelta(baseContent, delta) {
   }
 
   return baseContent.slice(0, delta.start) + replacement + baseContent.slice(delta.end);
+}
+
+/**
+ * Best-effort delta application when versions diverge.
+ * Tries to apply using provided offsets if still valid; otherwise returns null.
+ */
+function tryApplyDeltaOnDivergedContent(currentContent, delta) {
+  if (
+    !delta ||
+    typeof delta.start !== 'number' ||
+    typeof delta.end !== 'number' ||
+    delta.start < 0 ||
+    delta.start > currentContent.length ||
+    delta.end < delta.start ||
+    delta.end > currentContent.length
+  ) {
+    return null;
+  }
+
+  const replacement = typeof delta.text === 'string' ? delta.text : '';
+  try {
+    return (
+      currentContent.slice(0, delta.start) +
+      replacement +
+      currentContent.slice(delta.end)
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 function diffToSingleRangeDelta(oldText, newText) {
@@ -1721,19 +1829,30 @@ function handleFileWatcherConnection(ws, projectId, connectionId) {
             const state = await loadFileState(projectId, msg.path);
             const expectedVersion = typeof msg.baseVersion === 'number' ? msg.baseVersion : state.version;
 
+            let deltaAlreadyApplied = false;
+
             if (typeof msg.baseVersion === 'number' && msg.baseVersion !== state.version) {
-              ws.send(JSON.stringify({
-                type: 'file:resync-required',
-                path: msg.path,
-                serverVersion: state.version,
-                receivedVersion: msg.baseVersion
-              }));
-              return;
+              // Attempt best-effort application on current content
+              const maybeContent = tryApplyDeltaOnDivergedContent(state.content, msg.delta);
+              if (maybeContent === null) {
+                ws.send(JSON.stringify({
+                  type: 'file:resync-required',
+                  path: msg.path,
+                  serverVersion: state.version,
+                  receivedVersion: msg.baseVersion
+                }));
+                return;
+              }
+              state.content = maybeContent;
+              deltaAlreadyApplied = true;
+              // keep expectedVersion as the client base to broadcast
             }
 
             try {
-              const nextContent = applyTextDelta(state.content, msg.delta);
-              state.content = nextContent;
+              if (!deltaAlreadyApplied) {
+                const nextContent = applyTextDelta(state.content, msg.delta);
+                state.content = nextContent;
+              }
               state.version = state.version + 1;
 
               const broadcastPayload = {
@@ -1844,6 +1963,9 @@ const gracefulShutdown = async (signal) => {
   });
   if (crossInstancePubSub) {
     await crossInstancePubSub.close();
+  }
+  if (collabPubSub) {
+    await collabPubSub.close();
   }
   
   // Close all WebSocket connections

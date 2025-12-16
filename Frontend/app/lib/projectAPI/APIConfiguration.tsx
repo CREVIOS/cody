@@ -27,8 +27,12 @@ export class NetworkError extends Error {
   }
 }
 
+// Simple in-memory cache for GET requests
+const requestCache = new Map<string, { data: Response; timestamp: number }>();
+const CACHE_TTL = 5000; // 5 seconds cache for GET requests
+
 /**
- * Enhanced fetch with timeout and retry logic
+ * Enhanced fetch with timeout, retry logic, keep-alive, and caching
  * @param url The URL to fetch
  * @param options Fetch options
  * @param retries Number of retries
@@ -38,21 +42,44 @@ export class NetworkError extends Error {
 export const fetchWithRetry = async (
   url: string,
   options: RequestInit = {},
-  retries: number = 3,
-  timeout: number = 5000
+  retries: number = 2,  // Reduced retries for faster failure
+  timeout: number = 10000  // Increased timeout for slow connections
 ): Promise<Response> => {
+  const method = options.method?.toUpperCase() || 'GET';
+  const cacheKey = `${method}:${url}`;
+  
+  // Check cache for GET requests
+  if (method === 'GET') {
+    const cached = requestCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.data.clone();
+    }
+  }
+  
   // Add timeout to the fetch
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   
   const fetchOptions: RequestInit = {
     ...options,
-    signal: controller.signal
+    signal: controller.signal,
+    // Enable keep-alive for connection reuse
+    keepalive: true,
+    headers: {
+      ...options.headers,
+      'Connection': 'keep-alive',
+    },
   };
   
   try {
     const response = await fetch(url, fetchOptions);
     clearTimeout(timeoutId);
+    
+    // Cache successful GET responses
+    if (method === 'GET' && response.ok) {
+      requestCache.set(cacheKey, { data: response.clone(), timestamp: Date.now() });
+    }
+    
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
@@ -69,14 +96,32 @@ export const fetchWithRetry = async (
     
     if (retries > 0) {
       console.log(`Retrying fetch to ${url}, ${retries} retries left`);
-      // Wait before retry (exponential backoff)
-      const delay = 1000 * (Math.pow(2, 4 - retries));
+      // Wait before retry (shorter delays)
+      const delay = 500 * (3 - retries);  // 500ms, 1000ms
       await new Promise(resolve => setTimeout(resolve, delay));
       return fetchWithRetry(url, options, retries - 1, timeout);
     }
     
     // Create a custom network error with more context
     throw new NetworkError(`Failed to fetch: ${errorMessage} (${url})`, error);
+  }
+};
+
+/**
+ * Clear the request cache (call after mutations)
+ */
+export const clearRequestCache = () => {
+  requestCache.clear();
+};
+
+/**
+ * Invalidate specific cache entries by URL pattern
+ */
+export const invalidateCache = (urlPattern: string) => {
+  for (const key of requestCache.keys()) {
+    if (key.includes(urlPattern)) {
+      requestCache.delete(key);
+    }
   }
 };
 

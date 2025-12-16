@@ -2,35 +2,18 @@ const { Y } = require('./yjsSingleton');
 const { encoding, decoding } = require('lib0');
 const syncProtocol = require('y-protocols/sync');
 const awarenessProtocol = require('y-protocols/awareness');
-// Local message type for awareness envelope (sync uses 0-2 in y-protocols/sync)
 const messageAwareness = 3;
 const fs = require('fs').promises;
 const path = require('path');
 const { EventEmitter } = require('events');
 const { createLogger } = require('./logger');
-const axios = require('axios');
 
-// Backend API configuration
-const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://localhost:8000/api/v1';
-const LOCK_CHECK_ENABLED = process.env.LOCK_CHECK_ENABLED !== 'false'; // Default: enabled
-
-// Rate limiting configuration
-const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
-const RATE_LIMIT_MAX_MESSAGES = 50; // Max 50 messages per second per client
-
-// Update batching configuration
-const UPDATE_BATCH_INTERVAL_MS = 50; // Batch updates every 50ms
-
-/**
- * CRDT Collaboration Service
- *
- * Implements Yjs-based collaborative editing with:
- * - Room-based document isolation (one room per docId)
- * - Awareness protocol for presence (cursors, selections)
- * - Persistent storage with snapshots and update logs
- * - Efficient sync protocol with late-join support
- * - Automatic garbage collection and snapshots
- */
+const RATE_LIMIT_WINDOW_MS = 1000;
+const RATE_LIMIT_MAX_MESSAGES = 50;
+const UPDATE_BATCH_INTERVAL_MS = 50;
+const AWARENESS_THROTTLE_MS = 50;
+const WS_BACKPRESSURE_THRESHOLD = 1_000_000; // 1 MB buffered
+const WS_MAX_QUEUE = 500; // Max queued messages per client
 
 class CollaborationRoom extends EventEmitter {
   constructor(docId, persistencePath, options = {}) {
@@ -38,7 +21,9 @@ class CollaborationRoom extends EventEmitter {
     this.docId = docId;
     this.persistencePath = persistencePath;
     this.doc = new Y.Doc();
+    this.textName = options.textName || 'monaco';
     this.awareness = new awarenessProtocol.Awareness(this.doc);
+    this.pubSubBridge = options.pubSubBridge || null;
     this.connections = new Map(); // clientId -> { ws, user, rateLimitTracker }
     this.updateLog = []; // Array of Uint8Array updates
     this.lastSnapshot = Date.now();
@@ -59,6 +44,8 @@ class CollaborationRoom extends EventEmitter {
     // Update batching
     this.pendingUpdates = []; // Array of { update, excludeClientIds }
     this.batchTimer = null;
+    this.pendingAwarenessClients = new Set();
+    this.awarenessTimer = null;
 
     // Setup listeners
     this.setupDocumentListeners();
@@ -83,28 +70,22 @@ class CollaborationRoom extends EventEmitter {
   }
 
   setupDocumentListeners() {
-    // Track document updates for persistence
-    this.doc.on('update', (update, origin, doc, transaction) => {
+    this.doc.on('update', (update, origin) => {
       if (origin !== 'persistence') {
         this.updateLog.push(update);
         this.metrics.totalUpdates++;
         this.metrics.lastActivity = Date.now();
-
-        // Check if snapshot is needed
         this.checkSnapshot();
-
-        // Persist update asynchronously
         this.persistUpdate(update).catch(err => {
-          console.error(`[Room ${this.docId}] Persist error:`, err);
+          this.logger.error('Persist error', err);
         });
       }
     });
 
-    // Track awareness changes
     this.awareness.on('change', ({ added, updated, removed }) => {
       const changedClients = added.concat(updated, removed);
       if (changedClients.length > 0) {
-        this.broadcastAwareness(changedClients);
+        this.scheduleAwarenessBroadcast(changedClients);
       }
     });
   }
@@ -122,7 +103,8 @@ class CollaborationRoom extends EventEmitter {
     this.connections.set(clientId, {
       ws,
       user: userInfo,
-      rateLimitTracker
+      rateLimitTracker,
+      sendQueue: []
     });
     this.metrics.totalConnections++;
 
@@ -181,21 +163,26 @@ class CollaborationRoom extends EventEmitter {
     const conn = this.connections.get(clientId);
     if (!conn) return;
 
+    if (conn.flushTimer) {
+      clearInterval(conn.flushTimer);
+    }
+
     this.connections.delete(clientId);
 
-    // Remove awareness state
-    this.awareness.setLocalState(null);
+    // Remove awareness state for the disconnecting client
     awarenessProtocol.removeAwarenessStates(
       this.awareness,
       [clientId],
       'client disconnected'
     );
 
-    console.log(`[Room ${this.docId}] Client ${clientId} left. Active: ${this.connections.size}`);
+    this.logger.event('client_left', {
+      clientId,
+      activeConnections: this.connections.size
+    });
 
     this.emit('disconnection', { clientId });
 
-    // Cleanup room if empty
     if (this.connections.size === 0) {
       this.emit('empty');
     }
@@ -282,10 +269,10 @@ class CollaborationRoom extends EventEmitter {
           break;
 
         default:
-          console.warn(`[Room ${this.docId}] Unknown message type: ${messageType}`);
+          this.logger.warn('Unknown message type', { messageType });
       }
     } catch (err) {
-      console.error(`[Room ${this.docId}] Error handling message from ${clientId}:`, err);
+      this.logger.error('Error handling message', err, { clientId });
     }
   }
 
@@ -311,94 +298,6 @@ class CollaborationRoom extends EventEmitter {
     syncProtocol.readSyncStep2(decoder, this.doc, 'sync');
   }
 
-  /**
-   * Check if a user has permission to edit (via file lock)
-   *
-   * Integration improvement: This connects CRDT and file locking systems.
-   * - When lock checking is enabled, CRDT respects file locks
-   * - Users without locks cannot make CRDT updates
-   * - This prevents the "philosophical conflict" between the two systems
-   * 
-   * COMMENTED OUT: Lock checking disabled - always allow edits (CRDT-only mode)
-   */
-  async checkEditPermission(userId, fileId) {
-    // COMMENTED OUT: Lock mechanism disabled - always allow edits for CRDT
-    // if (!LOCK_CHECK_ENABLED) {
-    //   this.logger.debug('Lock checking disabled - allowing edit', { userId, fileId });
-    //   return true; // Lock checking disabled
-    // }
-    // 
-    // try {
-    //   // Query the Backend lock service to verify user has the lock
-    //   const response = await axios.get(`${BACKEND_API_URL}/locks/${fileId}/state`, {
-    //     timeout: 3000, // 3 second timeout (increased from 2s for reliability)
-    //     validateStatus: (status) => status < 500 // Don't throw on 4xx errors
-    //   });
-    // 
-    //   if (response.status === 200 && response.data) {
-    //     // Fix: Backend returns { state: { ... } }, so we need to read response.data.state
-    //     const lockState = response.data.state || response.data;
-    // 
-    //     // Check if locked and if this user is the holder
-    //     if (lockState.state === 'LOCKED') {
-    //       const isHolder = lockState.holder_user_id === userId;
-    //       if (!isHolder) {
-    //         this.logger.warn('Edit rejected: user does not hold lock', {
-    //           userId,
-    //           fileId,
-    //           actualHolder: lockState.holder_user_id
-    //         });
-    //       } else {
-    //         this.logger.debug('Edit allowed: user holds lock', { userId, fileId });
-    //       }
-    //       return isHolder;
-    //     }
-    // 
-    //     // If unlocked, allow (graceful degradation - multiple users can edit)
-    //     this.logger.debug('Edit allowed: file is unlocked', { userId, fileId });
-    //     return true;
-    //   }
-    // 
-    //   // If lock service is unavailable, allow edit (fail-open for availability)
-    //   // Alternative: fail-closed would reject edits if lock service is down
-    //   this.logger.warn('Lock check failed, allowing edit (fail-open)', {
-    //     userId,
-    //     fileId,
-    //     status: response.status,
-    //     message: 'Consider setting LOCK_CHECK_ENABLED=false if lock service is not available'
-    //   });
-    //   return true;
-    // } catch (error) {
-    //   // Network error or timeout
-    //   if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-    //     this.logger.error('Lock service unreachable, allowing edit (fail-open)', {
-    //       userId,
-    //       fileId,
-    //       error: error.message,
-    //       code: error.code
-    //     });
-    //   } else {
-    //     this.logger.error('Lock verification error, allowing edit (fail-open)', {
-    //       userId,
-    //       fileId,
-    //       error: error.message
-    //     });
-    //   }
-    //   return true;
-    // }
-    
-    // Always allow edits (CRDT-only mode)
-    this.logger.debug('Lock checking disabled - allowing edit (CRDT-only mode)', { userId, fileId });
-    return true;
-  }
-
-  /**
-   * Handle document update with lock verification
-   *
-   * Integration improvement: Enhanced error messaging and logging
-   * 
-   * COMMENTED OUT: Lock verification disabled - always allow updates (CRDT-only mode)
-   */
   async handleUpdate(clientId, decoder) {
     const conn = this.connections.get(clientId);
     if (!conn) {
@@ -406,58 +305,26 @@ class CollaborationRoom extends EventEmitter {
       return;
     }
 
-    // Extract file ID from docId (assuming format: projectId/fileId or just fileId)
-    const fileId = this.docId.includes('/') ? this.docId.split('/').pop() : this.docId;
-    const userId = conn.user.id;
-    const userName = conn.user.name;
+    // Read the update bytes from the decoder BEFORE applying
+    const update = decoding.readVarUint8Array(decoder);
+    // Apply the update to the server's doc with origin to prevent re-broadcast
+    Y.applyUpdate(this.doc, update, clientId);
 
-    // COMMENTED OUT: Lock verification disabled (CRDT-only mode)
-    // // Verify user has permission to edit
-    // const hasPermission = await this.checkEditPermission(userId, fileId);
-    // 
-    // if (!hasPermission) {
-    //   this.logger.warn('Update rejected: no edit permission', {
-    //     clientId,
-    //     userId,
-    //     userName,
-    //     fileId,
-    //     docId: this.docId
-    //   });
-    // 
-    //   // Send detailed error message back to client
-    //   const errorMessage = JSON.stringify({
-    //     type: 'error',
-    //     code: 'EDIT_PERMISSION_DENIED',
-    //     message: 'You do not have permission to edit this file. Another user holds the lock.',
-    //     details: {
-    //       fileId,
-    //       userId,
-    //       timestamp: Date.now(),
-    //       action: 'Request lock or wait for current editor to release'
-    //     }
-    //   });
-    // 
-    //   if (conn.ws.readyState === conn.ws.OPEN) {
-    //     conn.ws.send(errorMessage);
-    //   }
-    // 
-    //   return; // Reject the update
-    // }
+    this.emit('doc-update', { docId: this.docId, origin: clientId, update });
 
-    // Permission granted - apply update (CRDT-only mode: always allow)
-    this.logger.debug('Update accepted (CRDT-only mode)', { clientId, userId, userName, fileId });
-    const update = syncProtocol.readUpdate(decoder, this.doc, 'client');
+    // Publish to cross-instance bridge (if enabled)
+    if (this.pubSubBridge?.enabled) {
+      this.publishUpdate(update);
+    }
 
-    // Broadcast with batching if enabled
+    // Broadcast to all OTHER clients (exclude the sender)
     if (this.config.batchUpdatesEnabled) {
       this.queueUpdateForBroadcast(update, [clientId]);
     } else {
-      // Immediate broadcast
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
       encoding.writeVarUint8Array(encoder, update);
-      const message = encoding.toUint8Array(encoder);
-      this.broadcast(message, [clientId]);
+      this.broadcast(encoding.toUint8Array(encoder), [clientId]);
     }
   }
 
@@ -485,28 +352,17 @@ class CollaborationRoom extends EventEmitter {
       return;
     }
 
-    // Merge all updates if possible (Yjs updates can be merged)
-    const updates = this.pendingUpdates.map(p => p.update);
-    const allExcludedClients = new Set(
-      this.pendingUpdates.flatMap(p => p.excludeClientIds)
-    );
+    const count = this.pendingUpdates.length;
 
-    // For simplicity, send each update separately
-    // (A more advanced implementation would merge compatible updates)
     for (const { update, excludeClientIds } of this.pendingUpdates) {
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
       encoding.writeVarUint8Array(encoder, update);
-      const message = encoding.toUint8Array(encoder);
-      this.broadcast(message, excludeClientIds);
+      this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
     }
 
-    this.logger.debug('Flushed update batch', {
-      count: this.pendingUpdates.length,
-      excludedClients: Array.from(allExcludedClients)
-    });
+    this.logger.debug('Flushed update batch', { count });
 
-    // Clear pending updates
     this.pendingUpdates = [];
     this.batchTimer = null;
   }
@@ -515,11 +371,17 @@ class CollaborationRoom extends EventEmitter {
    * Handle awareness update (presence)
    */
   handleAwareness(clientId, decoder) {
+    const update = decoding.readVarUint8Array(decoder);
+
     awarenessProtocol.applyAwarenessUpdate(
       this.awareness,
-      decoding.readVarUint8Array(decoder),
+      update,
       clientId
     );
+
+    if (this.pubSubBridge?.enabled) {
+      this.publishAwareness(update, clientId);
+    }
   }
 
   /**
@@ -564,15 +426,29 @@ class CollaborationRoom extends EventEmitter {
     this.broadcast(encoding.toUint8Array(encoder));
   }
 
+  scheduleAwarenessBroadcast(changedClients) {
+    changedClients.forEach((id) => this.pendingAwarenessClients.add(id));
+    if (this.awarenessTimer) return;
+
+    this.awarenessTimer = setTimeout(() => {
+      const toSend = Array.from(this.pendingAwarenessClients);
+      this.pendingAwarenessClients.clear();
+      this.awarenessTimer = null;
+      if (toSend.length > 0) {
+        this.broadcastAwareness(toSend);
+      }
+    }, AWARENESS_THROTTLE_MS);
+  }
+
   /**
    * Broadcast message to all or some clients
    */
   broadcast(message, excludeClientIds = []) {
     const excludeSet = new Set(excludeClientIds);
 
-    for (const [clientId, { ws }] of this.connections) {
-      if (!excludeSet.has(clientId) && ws.readyState === ws.OPEN) {
-        this.sendMessage(ws, message);
+    for (const [clientId, conn] of this.connections) {
+      if (!excludeSet.has(clientId)) {
+        this.enqueueSend(conn, message);
       }
     }
   }
@@ -588,6 +464,132 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
+   * Enqueue message with backpressure guard
+   */
+  enqueueSend(conn, message) {
+    const { ws, sendQueue } = conn;
+
+    if (ws.readyState !== ws.OPEN) return;
+
+    // If bufferedAmount is low and queue empty, try immediate send
+    if (ws.bufferedAmount < WS_BACKPRESSURE_THRESHOLD && sendQueue.length === 0) {
+      try {
+        ws.send(message);
+        this.metrics.bytesOut += message.byteLength;
+        return;
+      } catch (err) {
+        this.logger.warn('Immediate send failed, queueing', { error: err.message });
+      }
+    }
+
+    // Queue with cap
+    if (sendQueue.length >= WS_MAX_QUEUE) {
+      sendQueue.shift(); // drop oldest to keep queue bounded
+      this.logger.warn('Dropping oldest queued message due to backpressure', {
+        clientId: conn.user?.id || 'unknown'
+      });
+    }
+
+    sendQueue.push(message);
+    this.scheduleFlush(conn);
+  }
+
+  scheduleFlush(conn) {
+    if (conn.flushTimer) return;
+
+    conn.flushTimer = setInterval(() => {
+      const { ws, sendQueue } = conn;
+      if (ws.readyState !== ws.OPEN) {
+        clearInterval(conn.flushTimer);
+        conn.flushTimer = null;
+        return;
+      }
+
+      // Flush while buffered under threshold
+      while (sendQueue.length > 0 && ws.bufferedAmount < WS_BACKPRESSURE_THRESHOLD) {
+        const msg = sendQueue.shift();
+        try {
+          ws.send(msg);
+          this.metrics.bytesOut += msg.byteLength;
+        } catch (err) {
+          this.logger.warn('Failed to flush queued message', { error: err.message });
+          break;
+        }
+      }
+
+      if (sendQueue.length === 0) {
+        clearInterval(conn.flushTimer);
+        conn.flushTimer = null;
+      }
+    }, 10); // small tick to drain
+  }
+
+  /**
+   * Publish Yjs document update to cross-instance bridge
+   */
+  publishUpdate(update) {
+    if (!this.pubSubBridge?.enabled) return;
+
+    // Base64 encode to transport safely
+    const payload = {
+      type: 'update',
+      docId: this.docId,
+      update: Buffer.from(update).toString('base64'),
+      timestamp: Date.now(),
+    };
+
+    this.pubSubBridge.publish(payload);
+  }
+
+  /**
+   * Publish awareness update to cross-instance bridge
+   */
+  publishAwareness(update, clientId) {
+    if (!this.pubSubBridge?.enabled) return;
+
+    const payload = {
+      type: 'awareness',
+      docId: this.docId,
+      update: Buffer.from(update).toString('base64'),
+      clientId,
+      timestamp: Date.now(),
+    };
+
+    this.pubSubBridge.publish(payload);
+  }
+
+  /**
+   * Apply remote Yjs update received via pub/sub
+   */
+  applyRemoteUpdate(update) {
+    // Apply with a fixed origin to avoid echo logic
+    Y.applyUpdate(this.doc, update, 'remote');
+
+    this.emit('doc-update', { docId: this.docId, origin: 'remote', update });
+
+    // Broadcast to all local clients
+    if (this.config.batchUpdatesEnabled) {
+      this.queueUpdateForBroadcast(update, []);
+    } else {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+      encoding.writeVarUint8Array(encoder, update);
+      this.broadcast(encoding.toUint8Array(encoder), []);
+    }
+  }
+
+  /**
+   * Apply remote awareness update received via pub/sub
+   */
+  applyRemoteAwareness(update) {
+    awarenessProtocol.applyAwarenessUpdate(
+      this.awareness,
+      update,
+      'remote'
+    );
+  }
+
+  /**
    * Check if snapshot is needed
    */
   checkSnapshot() {
@@ -598,7 +600,7 @@ class CollaborationRoom extends EventEmitter {
 
     if (shouldSnapshot) {
       this.createSnapshot().catch(err => {
-        console.error(`[Room ${this.docId}] Snapshot error:`, err);
+        this.logger.error('Snapshot error', err);
       });
     }
   }
@@ -646,18 +648,15 @@ class CollaborationRoom extends EventEmitter {
       JSON.stringify(metadata, null, 2)
     );
 
-    console.log(`[Room ${this.docId}] Snapshot created: ${filename} (${snapshot.byteLength} bytes)`);
+    this.logger.info('Snapshot created', { filename, size: snapshot.byteLength });
 
-    // Clear old updates
     this.updateLog = [];
     this.lastSnapshot = timestamp;
 
-    // Run garbage collection if enabled
     if (this.config.gcEnabled) {
       this.doc.gc = true;
     }
 
-    // Clean up old snapshots (keep last 10)
     await this.cleanupOldSnapshots(10);
   }
 
@@ -668,7 +667,6 @@ class CollaborationRoom extends EventEmitter {
     const docPath = path.join(this.persistencePath, this.docId);
 
     try {
-      // Try to load latest snapshot
       const snapshotPath = path.join(docPath, 'snapshots');
       const snapshots = await fs.readdir(snapshotPath);
       const snapshotFiles = snapshots
@@ -681,23 +679,20 @@ class CollaborationRoom extends EventEmitter {
         const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
         Y.applyUpdate(this.doc, snapshotData, 'persistence');
 
-        console.log(`[Room ${this.docId}] Loaded snapshot: ${latestSnapshot}`);
+        this.logger.info('Loaded snapshot', { snapshot: latestSnapshot });
 
-        // Extract timestamp from filename
         const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
         this.lastSnapshot = snapshotTimestamp;
 
-        // Load any updates after the snapshot
         await this.loadUpdatesAfter(snapshotTimestamp);
       } else {
-        // No snapshot, load all updates
         await this.loadUpdatesAfter(0);
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
         throw err;
       }
-      console.log(`[Room ${this.docId}] No persisted state found, starting fresh`);
+      this.logger.info('No persisted state found, starting fresh');
     }
   }
 
@@ -721,7 +716,7 @@ class CollaborationRoom extends EventEmitter {
       }
 
       if (relevantUpdates.length > 0) {
-        console.log(`[Room ${this.docId}] Loaded ${relevantUpdates.length} updates`);
+        this.logger.info('Loaded updates', { count: relevantUpdates.length });
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
@@ -752,10 +747,10 @@ class CollaborationRoom extends EventEmitter {
           await fs.unlink(path.join(snapshotPath, `${baseName}.meta.json`)).catch(() => {});
         }
 
-        console.log(`[Room ${this.docId}] Cleaned up ${toDelete.length} old snapshots`);
+        this.logger.info(`Cleaned up ${toDelete.length} old snapshots`);
       }
     } catch (err) {
-      console.error(`[Room ${this.docId}] Error cleaning snapshots:`, err);
+      this.logger.error('Error cleaning snapshots', err);
     }
   }
 
@@ -763,12 +758,22 @@ class CollaborationRoom extends EventEmitter {
    * Get room metrics
    */
   getMetrics() {
+    let totalQueue = 0;
+    let maxQueue = 0;
+
+    for (const { sendQueue = [] } of this.connections.values()) {
+      totalQueue += sendQueue.length;
+      if (sendQueue.length > maxQueue) maxQueue = sendQueue.length;
+    }
+
     return {
       ...this.metrics,
       activeConnections: this.connections.size,
       documentSize: Y.encodeStateAsUpdate(this.doc).byteLength,
       updateLogSize: this.updateLog.length,
-      awarenessSize: this.awareness.getStates().size
+      awarenessSize: this.awareness.getStates().size,
+      pendingQueueMessages: totalQueue,
+      maxQueueMessages: maxQueue
     };
   }
 
@@ -776,7 +781,7 @@ class CollaborationRoom extends EventEmitter {
    * Get current document content as text (for debugging)
    */
   getText() {
-    const text = this.doc.getText('monaco');
+    const text = this.doc.getText(this.textName || 'monaco');
     return text.toString();
   }
 
@@ -806,7 +811,7 @@ class CollaborationRoom extends EventEmitter {
     // Destroy document
     this.doc.destroy();
 
-    console.log(`[Room ${this.docId}] Closed`);
+    this.logger.info('Room closed');
   }
 }
 
@@ -820,13 +825,20 @@ class CollaborationService {
     this.persistencePath = persistencePath || path.join(__dirname, '../data/collaboration');
     this.rooms = new Map();
     this.options = options;
+    this.pubSubBridge = options.pubSubBridge || null;
+    this.logger = createLogger('CollaborationService');
+
+    if (this.pubSubBridge) {
+      // Wire incoming cross-instance updates
+      this.pubSubBridge.onUpdate = (msg) => this.handlePubSubUpdate(msg);
+    }
 
     // Cleanup interval for idle rooms
     this.cleanupInterval = setInterval(() => {
       this.cleanupIdleRooms();
     }, options.roomCleanupInterval || 60 * 1000); // 1 minute
 
-    console.log('[CollaborationService] Initialized');
+    this.logger.info('Initialized');
   }
 
   /**
@@ -834,7 +846,10 @@ class CollaborationService {
    */
   getRoom(docId) {
     if (!this.rooms.has(docId)) {
-      const room = new CollaborationRoom(docId, this.persistencePath, this.options);
+      const room = new CollaborationRoom(docId, this.persistencePath, {
+        ...this.options,
+        pubSubBridge: this.pubSubBridge
+      });
 
       // Handle room becoming empty
       room.on('empty', () => {
@@ -869,7 +884,7 @@ class CollaborationService {
 
     for (const [docId, room] of this.rooms) {
       if (room._emptyTimestamp && (now - room._emptyTimestamp) > idleTimeout) {
-        console.log(`[CollaborationService] Closing idle room: ${docId}`);
+        this.logger.info(`Closing idle room: ${docId}`);
         room.close().then(() => {
           this.rooms.delete(docId);
         });
@@ -907,7 +922,40 @@ class CollaborationService {
     await Promise.all(closePromises);
     this.rooms.clear();
 
-    console.log('[CollaborationService] Shut down');
+    this.logger.info('Shut down');
+  }
+
+  /**
+   * Handle updates received from other instances via pub/sub
+   */
+  handlePubSubUpdate(msg) {
+    if (!msg || !msg.docId || !msg.type) {
+      return;
+    }
+
+    const room = this.getRoom(msg.docId);
+    if (!room) return;
+
+    try {
+      const update = msg.update ? Buffer.from(msg.update, 'base64') : null;
+
+      switch (msg.type) {
+        case 'update':
+          if (update) {
+            room.applyRemoteUpdate(update);
+          }
+          break;
+        case 'awareness':
+          if (update) {
+            room.applyRemoteAwareness(update);
+          }
+          break;
+        default:
+          this.logger.warn('Unknown pub/sub message type', { type: msg.type });
+      }
+    } catch (err) {
+      this.logger.error('Failed to process pub/sub update', err);
+    }
   }
 }
 
