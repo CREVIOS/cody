@@ -6,9 +6,14 @@ import Layout from "@/components/layout/Layout";
 import AppWrapper from "@/components/AppWrapper";
 import { User, Project } from '@/lib/projectAPI/TypeDefinitions';
 import { getProjects } from "@/lib/projectAPI/ProjectAPI";
+import { getUserWithRetry } from "@/lib/projectAPI/UserAPI";
+import { useAuth } from "@/context/AuthContext";
+import { useActiveUserId, clearDemoMode } from "@/hooks/useActiveUserId";
 
 // This is the navigation controller component that handles the routing
 export default function Home() {
+  const { isAuthenticated, userId: authUserId, loading: authLoading, signOut, user: authUser } = useAuth();
+  const activeUserId = useActiveUserId();
   const [currentView, setCurrentView] = useState("userSelection");
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -21,39 +26,88 @@ export default function Home() {
   const CURRENT_PROJECT_ID_KEY = "app-current-project-id";
   const CURRENT_PROJECT_NAME_KEY = "app-current-project-name";
 
-  // Rehydrate state from localStorage on first load
+  // Rehydrate state from localStorage and handle auth/demo mode
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem(SELECTED_USER_KEY);
-      const storedView = localStorage.getItem(CURRENT_VIEW_KEY);
-      const storedProjectId = localStorage.getItem(CURRENT_PROJECT_ID_KEY);
-      const storedProjectName = localStorage.getItem(CURRENT_PROJECT_NAME_KEY);
+    const initializeApp = async () => {
+      // Wait for auth to initialize before proceeding
+      if (authLoading) return;
 
-      if (storedUser) {
-        const parsedUser: User = JSON.parse(storedUser);
-        setSelectedUser(parsedUser);
-      }
+      try {
+        const storedUser = localStorage.getItem(SELECTED_USER_KEY);
+        const storedView = localStorage.getItem(CURRENT_VIEW_KEY);
+        const storedProjectId = localStorage.getItem(CURRENT_PROJECT_ID_KEY);
+        const storedProjectName = localStorage.getItem(CURRENT_PROJECT_NAME_KEY);
 
-      if (storedView) {
-        setCurrentView(storedView);
-      }
+        // AUTH MODE: If authenticated, fetch user from public.users using auth userId
+        // Frontend calls backend sync endpoint after signup/login
+        if (isAuthenticated && authUserId) {
+          try {
+            // getUserWithRetry handles sync timing - retries if user not synced yet
+            const user = await getUserWithRetry(authUserId);
+            setSelectedUser(user);
+            // Clear demo mode when auth is active
+            clearDemoMode();
+            // Clear stored view for authenticated users - always go to entry page
+            localStorage.removeItem(CURRENT_VIEW_KEY);
+            // Automatically go to entry page after loading user (same as demo mode)
+            setCurrentView("entry");
+          } catch (error) {
+            console.error("Error fetching authenticated user after retry:", error);
+            // If user still doesn't exist, sync might be in progress
+            // Wait a bit more and try once more
+            try {
+              await new Promise(resolve => setTimeout(resolve, 1500));
+              const user = await getUserWithRetry(authUserId);
+              setSelectedUser(user);
+              clearDemoMode();
+              // Clear stored view and go to entry page
+              localStorage.removeItem(CURRENT_VIEW_KEY);
+              setCurrentView("entry");
+            } catch (retryError) {
+              console.error("User still not found after retry:", retryError);
+              // Fall back to stored user or show user selection
+              if (storedUser) {
+                const parsedUser: User = JSON.parse(storedUser);
+                setSelectedUser(parsedUser);
+                setCurrentView("entry");
+              }
+            }
+          }
+        } else if (storedUser) {
+          // Use stored user (demo mode)
+          const parsedUser: User = JSON.parse(storedUser);
+          setSelectedUser(parsedUser);
+          // For demo mode, use stored view if available
+          if (storedView) {
+            setCurrentView(storedView);
+          } else {
+            // If no stored view, go to entry page (same as when selecting a user)
+            setCurrentView("entry");
+          }
+        } else if (storedView) {
+          // If no user but there's a stored view, use it (shouldn't happen normally)
+          setCurrentView(storedView);
+        }
 
-      if (storedProjectId) {
-        setProjectId(storedProjectId);
+        if (storedProjectId) {
+          setProjectId(storedProjectId);
+        }
+        if (storedProjectName) {
+          setProjectName(storedProjectName);
+        }
+      } catch (e) {
+        // If parsing fails, clear invalid data
+        localStorage.removeItem(SELECTED_USER_KEY);
+        localStorage.removeItem(CURRENT_VIEW_KEY);
+        localStorage.removeItem(CURRENT_PROJECT_ID_KEY);
+        localStorage.removeItem(CURRENT_PROJECT_NAME_KEY);
+      } finally {
+        setHydrated(true);
       }
-      if (storedProjectName) {
-        setProjectName(storedProjectName);
-      }
-    } catch (e) {
-      // If parsing fails, clear invalid data
-      localStorage.removeItem(SELECTED_USER_KEY);
-      localStorage.removeItem(CURRENT_VIEW_KEY);
-      localStorage.removeItem(CURRENT_PROJECT_ID_KEY);
-      localStorage.removeItem(CURRENT_PROJECT_NAME_KEY);
-    } finally {
-      setHydrated(true);
-    }
-  }, []);
+    };
+
+    initializeApp();
+  }, [isAuthenticated, authUserId, authLoading]);
 
   // Persist selected user
   useEffect(() => {
@@ -149,7 +203,19 @@ export default function Home() {
   };
 
   // Handler for logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Sign out from Supabase if authenticated
+    if (isAuthenticated) {
+      try {
+        await signOut();
+      } catch (error) {
+        console.error("Error signing out:", error);
+      }
+    }
+    
+    // Clear demo mode
+    clearDemoMode();
+    
     setSelectedUser(null);
     setCurrentView("userSelection");
     // Clear persisted state

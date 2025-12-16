@@ -1,4 +1,4 @@
-import { API_BASE_URL, fetchWithRetry, invalidateCache } from "./APIConfiguration";
+import { API_BASE_URL, fetchWithRetry, fetchWithUserId, invalidateCache } from "./APIConfiguration";
 import { getErrorMessage } from "./ErrorHandling";
 import { Project, PaginatedResponse } from "./TypeDefinitions";
 
@@ -76,22 +76,36 @@ export const getProjects = async (
 
 /**
  * Create a new project
+ * Example of using fetchWithUserId to automatically include user_id in requests
+ * 
+ * Usage:
+ *   import { useActiveUserId } from "@/hooks/useActiveUserId";
+ *   const activeUserId = useActiveUserId();
+ *   await createProject(projectData, activeUserId);
  */
-export const createProject = async (projectData: {
-  project_name: string;
-  description?: string;
-  visibility?: string;
-  project_settings?: Record<string, any>;
-  owner_id: string;
-}): Promise<Project> => {
+export const createProject = async (
+  projectData: {
+    project_name: string;
+    description?: string;
+    visibility?: string;
+    project_settings?: Record<string, any>;
+    owner_id: string;
+  },
+  userId: string | null
+): Promise<Project> => {
   try {
-    const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    // fetchWithUserId automatically adds { user_id: userId } to the request body
+    const response = await fetchWithUserId(
+      `${API_BASE_URL}/api/v1/projects/`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData),
       },
-      body: JSON.stringify(projectData),
-    });
+      userId
+    );
 
     if (!response.ok) {
       const errorMessage = await getErrorMessage(response);

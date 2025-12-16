@@ -125,4 +125,59 @@ export const invalidateCache = (urlPattern: string) => {
   }
 };
 
+/**
+ * Enhanced fetch that automatically includes user_id in requests
+ * For POST/PUT/PATCH: adds user_id to request body
+ * For GET: adds user_id to query params (or body if specified)
+ * 
+ * @param url The URL to fetch
+ * @param options Fetch options
+ * @param userId The active user ID (from useActiveUserId hook)
+ * @param addToQuery For GET requests, whether to add user_id to query params (default: false, adds to body)
+ * @returns Promise with the fetch response
+ */
+export const fetchWithUserId = async (
+  url: string,
+  options: RequestInit = {},
+  userId: string | null,
+  addToQuery: boolean = false
+): Promise<Response> => {
+  const method = options.method?.toUpperCase() || 'GET';
+  const isGetRequest = method === 'GET';
+  
+  let finalUrl = url;
+  let finalOptions = { ...options };
+  
+  if (userId) {
+    if (isGetRequest && addToQuery) {
+      // Add user_id to query params for GET requests
+      const urlObj = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+      urlObj.searchParams.append('user_id', userId);
+      finalUrl = urlObj.toString();
+    } else {
+      // Add user_id to request body for all requests
+      const body = options.body 
+        ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body)
+        : {};
+      
+      // Merge user_id into body
+      const bodyWithUserId = {
+        ...body,
+        user_id: userId
+      };
+      
+      finalOptions = {
+        ...options,
+        body: JSON.stringify(bodyWithUserId),
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      };
+    }
+  }
+  
+  return fetchWithRetry(finalUrl, finalOptions);
+};
+
 export { API_BASE_URL };

@@ -6,6 +6,7 @@ import { useRoles } from "@/context/RolesContext";
 import { createProject } from "@/lib/projectAPI/ProjectAPI";
 import { createProjectMember } from "@/lib/projectAPI/ProjectMembersAPI";
 import { Project, User } from "@/lib/projectAPI/TypeDefinitions";
+import { useActiveUserId } from "@/hooks/useActiveUserId";
 import { Loader2, X } from "lucide-react";
 
 interface ProjectCreateModalProps {
@@ -23,6 +24,7 @@ export default function ProjectCreateModal({
 }: ProjectCreateModalProps) {
   const { theme } = useTheme();
   const { roles } = useRoles();
+  const activeUserId = useActiveUserId();
   
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
@@ -81,7 +83,8 @@ export default function ProjectCreateModal({
         owner_id: user.user_id,
       };
 
-      const createdProject = await createProject(projectData);
+      // createProject now requires activeUserId to automatically include user_id in the request
+      const createdProject = await createProject(projectData, activeUserId);
 
       // Create project member entry (owner)
       const memberData = {

@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from uuid import UUID
+from pydantic import BaseModel
 import schema as schemas
 import crud
 from db import get_db
 import models
+from sqlalchemy import text
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -106,6 +108,92 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
+        )
+
+@router.post("/sync-from-auth")
+async def sync_user_from_auth(
+    request: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sync an auth user to public.users
+    Called from frontend after Supabase Auth signup
+    """
+    user_id = request.get("user_id")
+    email = request.get("email")
+    provided_username = request.get("username")
+    full_name = request.get("full_name")
+    avatar_url = request.get("avatar_url")
+    
+    if not user_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id and email are required"
+        )
+    
+    try:
+        user_uuid = UUID(user_id)
+        
+        # Check if user already exists
+        existing = await crud.crud_user.get(db, id=user_uuid)
+        if existing:
+            return {"message": "User already exists", "user_id": str(user_uuid)}
+        
+        # Use provided username or extract from email
+        username = provided_username.strip() if provided_username and provided_username.strip() else email.split('@')[0]
+        
+        # Handle username conflicts by appending number
+        base_username = username
+        counter = 0
+        while True:
+            try:
+                # Create user using crud - pass as dict with user_id
+                user_data = {
+                    "user_id": user_uuid,
+                    "username": username if counter == 0 else f"{base_username}{counter}",
+                    "email": email,
+                    "password_hash": "SUPABASE_AUTH_MANAGED",
+                    "status": "active"
+                }
+                # Add optional fields if provided
+                if full_name:
+                    user_data["full_name"] = full_name.strip()
+                if avatar_url:
+                    user_data["avatar_url"] = avatar_url.strip()
+                user = await crud.crud_user.create(db, obj_in=user_data)
+                return {"message": "User synced successfully", "user_id": str(user.user_id)}
+            except Exception as e:
+                error_str = str(e).lower()
+                if "username" in error_str or "unique" in error_str or "duplicate" in error_str:
+                    counter += 1
+                    if counter > 100:  # Safety limit
+                        # Use email as username as last resort
+                        user_data = {
+                            "user_id": user_uuid,
+                            "username": email,
+                            "email": email,
+                            "password_hash": "SUPABASE_AUTH_MANAGED",
+                            "status": "active"
+                        }
+                        # Add optional fields if provided
+                        if full_name:
+                            user_data["full_name"] = full_name.strip()
+                        if avatar_url:
+                            user_data["avatar_url"] = avatar_url.strip()
+                        user = await crud.crud_user.create(db, obj_in=user_data)
+                        return {"message": "User synced with email as username", "user_id": str(user.user_id)}
+                    continue
+                raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid user_id format: {str(e)}"
+        )
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync user: {str(e)}"
         )
         
 
