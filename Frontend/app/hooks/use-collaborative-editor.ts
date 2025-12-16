@@ -169,6 +169,7 @@ export function useCollaborativeEditor(
   const indexedDBProviderRef = useRef<IndexedDBProvider | null>(null);
   const monacoBindingRef = useRef<MonacoBinding | null>(null);
   const undoManagerRef = useRef<CollaborativeUndoManager | null>(null);
+  const currentDocIdRef = useRef<string | null>(null);
 
   // State
   const [state, setState] = useState<CollaborativeEditorState>({
@@ -196,10 +197,55 @@ export function useCollaborativeEditor(
 
     const editor = options.editor;
     const { docId, user, wsUrl, offlineSupport, logging, undoOptions, initialContent, projectId, filePath } = options;
+    
+    // Check if we already have a provider for this docId - prevent duplicate initialization
+    if (wsProviderRef.current && currentDocIdRef.current === docId) {
+      if (logging) {
+        console.log('[Collaboration] Provider already exists for docId:', docId, '- skipping reinit');
+      }
+      return;
+    }
+    
+    // Update current docId
+    currentDocIdRef.current = docId;
+
+    // Cleanup any existing providers first
+    if (wsProviderRef.current) {
+      if (logging) {
+        console.log('[Collaboration] Cleaning up existing WebSocket provider');
+      }
+      wsProviderRef.current.destroy();
+      wsProviderRef.current = null;
+    }
+    if (monacoBindingRef.current) {
+      monacoBindingRef.current.destroy();
+      monacoBindingRef.current = null;
+    }
+    if (indexedDBProviderRef.current) {
+      indexedDBProviderRef.current.destroy();
+      indexedDBProviderRef.current = null;
+    }
+    if (docRef.current) {
+      docRef.current.destroy();
+      docRef.current = null;
+    }
 
     // Create Yjs document
     const doc = new Y.Doc();
     const yText = doc.getText('monaco');
+    
+    // Safety check: If Yjs document already has content, validate it's not corrupted
+    try {
+      const existingLength = yText.length;
+      const MAX_DOC_LENGTH = 100 * 1024 * 1024; // 100MB
+      if (existingLength > MAX_DOC_LENGTH) {
+        console.error('[Collaboration] Yjs document too large on creation:', existingLength, 'bytes. Resetting.');
+        yText.delete(0, yText.length);
+      }
+    } catch (e) {
+      console.error('[Collaboration] Error checking Yjs document on creation:', e);
+      // Document might be corrupted, but we'll continue and let MonacoBinding handle it
+    }
 
     docRef.current = doc;
     yTextRef.current = yText;
@@ -229,8 +275,30 @@ export function useCollaborativeEditor(
       indexedDBProvider = new IndexedDBProvider(doc, { docId });
       indexedDBProviderRef.current = indexedDBProvider;
 
-      // Wait for offline data to load
-      indexedDBProvider.whenSynced().then(() => {
+      // Wait for offline data to load, but validate it's not corrupted
+      indexedDBProvider.whenSynced().then(async () => {
+        // Validate document size after loading from IndexedDB
+        try {
+          const docLength = yText.length;
+          const MAX_DOC_LENGTH = 10 * 1024 * 1024; // 10MB
+          if (docLength > MAX_DOC_LENGTH) {
+            console.error('[Collaboration] Document from IndexedDB is corrupted:', docLength, 'bytes. Clearing IndexedDB and document.');
+            // Clear corrupted document
+            yText.delete(0, yText.length);
+            // Clear IndexedDB to prevent reloading corrupted data
+            try {
+              await indexedDBProvider.clearData();
+              console.warn('[Collaboration] Cleared corrupted data from IndexedDB');
+            } catch (clearError) {
+              console.error('[Collaboration] Failed to clear IndexedDB:', clearError);
+            }
+          }
+        } catch (e) {
+          console.error('[Collaboration] Error validating document after IndexedDB load:', e);
+        }
+        setState((prev) => ({ ...prev, offlineReady: true }));
+      }).catch((error) => {
+        console.error('[Collaboration] Error loading from IndexedDB:', error);
         setState((prev) => ({ ...prev, offlineReady: true }));
       });
     }
@@ -242,6 +310,11 @@ export function useCollaborativeEditor(
       filePath,
       channelType: 'file-collab',
       url: wsUrl || process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
+      user: {
+        id: user.id,
+        name: user.name,
+        color: user.color,
+      },
       logging,
       updateBatchMs: 15,
       awarenessDebounceMs: 16,
@@ -257,6 +330,59 @@ export function useCollaborativeEditor(
     });
 
     monacoBindingRef.current = monacoBinding;
+    
+    // Handle corruption detection - destroy everything and recreate
+    const handleCorruption = async (event: CustomEvent) => {
+      // Prevent multiple corruption handlers from running
+      if (currentDocIdRef.current === null || currentDocIdRef.current !== docId) {
+        return; // Already handling corruption or docId changed
+      }
+      
+      // Log only once
+      if (!(handleCorruption as any)._logged) {
+        console.error('[Collaboration] Document corruption detected:', event.detail);
+        (handleCorruption as any)._logged = true;
+      }
+      
+      // Mark as corrupted to prevent re-initialization
+      const corruptedDocId = currentDocIdRef.current;
+      currentDocIdRef.current = null;
+      
+      // Destroy all providers and bindings
+      if (wsProviderRef.current) {
+        wsProviderRef.current.destroy();
+        wsProviderRef.current = null;
+      }
+      if (indexedDBProviderRef.current) {
+        try {
+          await indexedDBProviderRef.current.clearData();
+        } catch (e) {
+          console.error('[Collaboration] Failed to clear IndexedDB:', e);
+        }
+        indexedDBProviderRef.current.destroy();
+        indexedDBProviderRef.current = null;
+      }
+      if (monacoBindingRef.current) {
+        monacoBindingRef.current.destroy();
+        monacoBindingRef.current = null;
+      }
+      if (undoManagerRef.current) {
+        undoManagerRef.current.destroy();
+        undoManagerRef.current = null;
+      }
+      if (docRef.current) {
+        docRef.current.destroy();
+        docRef.current = null;
+      }
+      yTextRef.current = null;
+      
+      console.warn('[Collaboration] Cleared corrupted document:', corruptedDocId);
+      setState((prev) => ({ ...prev, status: 'disconnected', offlineReady: false, synced: false }));
+      
+      // The useEffect will detect currentDocIdRef.current === null and recreate everything
+    };
+    
+    monacoBinding.addEventListener('corruption-detected', handleCorruption as EventListener);
 
     // Setup undo manager
     const undoManager = new CollaborativeUndoManager(yText, {
@@ -334,6 +460,7 @@ export function useCollaborativeEditor(
       wsProvider.removeEventListener('error', handleError);
       wsProvider.awareness.off('change', handleAwarenessChange);
       undoManager.off('state-change', handleUndoStateChange);
+      monacoBinding.removeEventListener('corruption-detected', handleCorruption as EventListener);
 
       monacoBinding.destroy();
       undoManager.destroy();
@@ -347,8 +474,9 @@ export function useCollaborativeEditor(
       indexedDBProviderRef.current = null;
       monacoBindingRef.current = null;
       undoManagerRef.current = null;
+      currentDocIdRef.current = null;
     };
-  }, [options.editor, options.docId, options.user.id, options.wsUrl, options.offlineSupport, options.logging, options.initialContent]);
+  }, [options.editor, options.docId, options.user?.id, options.wsUrl, options.offlineSupport, options.logging, options.initialContent]);
 
   // Actions
   const disconnect = useCallback(() => {

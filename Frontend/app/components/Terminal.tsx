@@ -18,6 +18,7 @@ import {
   Activity,
   AlertCircle
 } from "lucide-react";
+import { useActiveUserId } from "@/hooks/useActiveUserId";
 
 // Terminal session interface
 interface TerminalSession {
@@ -47,6 +48,9 @@ export default function EnhancedTerminal({
   theme = 'dark',
   className = '' 
 }: EnhancedTerminalProps) {
+  // Get active user ID for authentication
+  const activeUserId = useActiveUserId();
+  
   // Single terminal instance - no multiple sessions
   const [terminal, setTerminal] = useState<any>(null);
   const [fitAddon, setFitAddon] = useState<any>(null);
@@ -55,6 +59,9 @@ export default function EnhancedTerminal({
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [isTerminalMounted, setIsTerminalMounted] = useState(false);
   const [pendingOutput, setPendingOutput] = useState('');
+  const connectionAttemptsRef = useRef<number>(0);
+  const lastConnectionErrorRef = useRef<string | null>(null);
+  const isConnectingRef = useRef<boolean>(false);
   
   // Other state
   const [isMaximized, setIsMaximized] = useState(false);
@@ -85,14 +92,20 @@ export default function EnhancedTerminal({
   const wsConfig = useMemo(() => {
     const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
     const cleanBase = baseUrl.replace(/\/$/, '');
-    const fullUrl = `${cleanBase}/?type=terminal&projectId=${encodeURIComponent(projectId)}`;
+    const url = new URL(`${cleanBase}/`);
+    url.searchParams.set('type', 'terminal');
+    url.searchParams.set('projectId', projectId);
+    if (activeUserId) {
+      url.searchParams.set('userId', activeUserId);
+    }
+    const fullUrl = url.toString();
     
     return {
       baseUrl: cleanBase,
       fullUrl,
       httpUrl: cleanBase.replace('ws://', 'http://').replace('wss://', 'https://')
     };
-  }, [projectId]);
+  }, [projectId, activeUserId]);
 
   const addDebugLog = useCallback((message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
@@ -251,8 +264,10 @@ export default function EnhancedTerminal({
           });
         }
         
-        // Connect WebSocket
-        connectWebSocket(terminalInstance, fitAddonInstance);
+        // Don't connect here - let the reconnect useEffect handle it when activeUserId is available
+        if (!activeUserId) {
+          addDebugLog('Terminal initialized but waiting for user ID...', 'warning');
+        }
         
       } catch (error) {
         addDebugLog(`Failed to initialize terminal: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
@@ -270,23 +285,76 @@ export default function EnhancedTerminal({
         ws.close();
       }
     };
-  }, [projectId]); // Only depend on projectId
+  }, [projectId]); // Initialize terminal when projectId changes
 
   // WebSocket connection
   const connectWebSocket = useCallback((term: any, fit: any) => {
-    if (ws) {
-      ws.close();
+    // Don't connect if no user ID (for authentication)
+    if (!activeUserId) {
+      addDebugLog('Cannot connect: user ID not available', 'warning');
+      return;
     }
     
-    addDebugLog(`Connecting to WebSocket: ${wsConfig.fullUrl}`, 'info');
+    // Prevent duplicate connections
+    if (isConnectingRef.current) {
+      addDebugLog('WebSocket connection already in progress, skipping...', 'info');
+      return;
+    }
+    
+    // Prevent infinite retry loop on auth errors
+    if (lastConnectionErrorRef.current === 'AUTH_REQUIRED' && connectionAttemptsRef.current >= 3) {
+      addDebugLog('Too many auth failures, stopping connection attempts', 'error');
+      setError('Authentication failed. Please check your user session.');
+      return;
+    }
+    
+    // Prevent duplicate connections
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      addDebugLog('WebSocket already connecting/connected, skipping...', 'info');
+      return;
+    }
+    
+    // Close existing connection if any (but not connecting/open)
+    if (ws) {
+      ws.close();
+      setWs(null);
+    }
+    
+    isConnectingRef.current = true;
+    connectionAttemptsRef.current += 1;
+    
+    // Build URL with userId
+    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+    const cleanBase = baseUrl.replace(/\/$/, '');
+    
+    // Ensure we have a valid base URL
+    let wsBaseUrl: string;
+    if (cleanBase.startsWith('ws://') || cleanBase.startsWith('wss://')) {
+      wsBaseUrl = cleanBase;
+    } else {
+      wsBaseUrl = `ws://${cleanBase}`;
+    }
+    
+    const url = new URL(wsBaseUrl);
+    url.searchParams.set('type', 'terminal');
+    url.searchParams.set('projectId', projectId);
+    url.searchParams.set('userId', activeUserId);
+    const fullUrl = url.toString();
+    
+    addDebugLog(`Connecting to WebSocket: ${fullUrl}`, 'info');
+    addDebugLog(`User ID: ${activeUserId}`, 'info');
+    addDebugLog(`Base URL: ${wsBaseUrl}`, 'info');
     setConnectionStatus('connecting');
     
-    const websocket = new WebSocket(wsConfig.fullUrl);
+    const websocket = new WebSocket(fullUrl);
     
     websocket.onopen = () => {
       addDebugLog('WebSocket connected', 'success');
       setConnectionStatus('connected');
       setWs(websocket);
+      isConnectingRef.current = false;
+      connectionAttemptsRef.current = 0; // Reset on successful connection
+      lastConnectionErrorRef.current = null;
         };
 
     websocket.onmessage = (event) => {
@@ -411,6 +479,10 @@ export default function EnhancedTerminal({
             
           case 'error':
             addDebugLog(`Server error: ${message.message}`, 'error');
+            if (message.code === 'AUTH_REQUIRED') {
+              lastConnectionErrorRef.current = 'AUTH_REQUIRED';
+              addDebugLog('Authentication error - stopping reconnection attempts', 'error');
+            }
             if (term) {
               term.write(`\r\n\x1b[31m❌ Error: ${message.message}\x1b[0m\r\n`);
             }
@@ -426,14 +498,50 @@ export default function EnhancedTerminal({
       setConnectionStatus('error');
     };
     
-    websocket.onclose = () => {
-      addDebugLog('WebSocket closed', 'warning');
+    websocket.onclose = (event) => {
+      addDebugLog(`WebSocket closed: code=${event.code}, reason=${event.reason}`, 'warning');
       setConnectionStatus('disconnected');
       setWs(null);
       sessionIdRef.current = null;
+      isConnectingRef.current = false;
+      
+      // Don't auto-reconnect on auth errors (code 1008)
+      if (event.code === 1008 && event.reason === 'Authentication required') {
+        lastConnectionErrorRef.current = 'AUTH_REQUIRED';
+        addDebugLog('Authentication failed - not reconnecting', 'error');
+        return;
+      }
     };
     
-  }, [wsConfig.fullUrl, isTerminalMounted, addDebugLog]);
+  }, [activeUserId, projectId, ws, addDebugLog]);
+
+  // Reconnect WebSocket when activeUserId becomes available (only if not already connected and no auth error)
+  useEffect(() => {
+    // Don't reconnect if we have an auth error
+    if (lastConnectionErrorRef.current === 'AUTH_REQUIRED') {
+      return;
+    }
+    
+    // Don't reconnect if already connecting
+    if (isConnectingRef.current) {
+      return;
+    }
+    
+    if (activeUserId && terminal && (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)) {
+      // Limit connection attempts
+      if (connectionAttemptsRef.current >= 3) {
+        addDebugLog('Max connection attempts reached, stopping...', 'error');
+        return;
+      }
+      
+      addDebugLog('User ID now available, connecting WebSocket...', 'info');
+      // Small delay to prevent rapid reconnections
+      const timeoutId = setTimeout(() => {
+        connectWebSocket(terminal, fitAddon);
+      }, 500); // Increased delay to prevent rapid reconnections
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeUserId, terminal, ws, fitAddon, connectWebSocket]);
 
   // Fetch SSH info
   const fetchSshInfo = useCallback(async () => {

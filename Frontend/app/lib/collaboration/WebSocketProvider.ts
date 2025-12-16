@@ -129,6 +129,10 @@ export class WebSocketProvider extends EventTarget {
   private pendingAwareness: Uint8Array[] = [];
   private awarenessFlushTimer: NodeJS.Timeout | null = null;
   private awarenessDebounceMs: number;
+  
+  // Error tracking to prevent spam
+  private _errorLogged = false;
+  private _errorDispatched = false;
 
   constructor(doc: Y.Doc, options: WebSocketProviderOptions) {
     super();
@@ -138,10 +142,12 @@ export class WebSocketProvider extends EventTarget {
     this.projectId = options.projectId;
     this.filePath = options.filePath;
     this.channelType = options.channelType || (this.filePath ? 'file-collab' : 'collaboration');
+    // Handle undefined user gracefully (fallback for demo users or edge cases)
+    const user = options.user || { id: 'anonymous', name: 'Anonymous' };
     this.user = {
-      id: options.user.id,
-      name: options.user.name || 'Anonymous',
-      color: options.user.color || this.generateRandomColor(),
+      id: user.id || 'anonymous',
+      name: user.name || 'Anonymous',
+      color: user.color || this.generateRandomColor(),
     };
 
     this.url = options.url || 'ws://localhost:3001';
@@ -237,13 +243,27 @@ export class WebSocketProvider extends EventTarget {
    * Connect to WebSocket server
    */
   private connect() {
-    if (this.ws !== null) {
+    // Prevent duplicate connections
+    if (this.ws !== null && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      this.log('WebSocket already connecting/connected, skipping...');
       return;
+    }
+    
+    // Clear any existing connection
+    if (this.ws !== null) {
+      this.ws.close();
+      this.ws = null;
     }
 
     this.setConnectionStatus('connecting');
 
-    const wsUrl = new URL(this.url);
+    // Ensure we have a valid base URL
+    let baseUrl = this.url;
+    if (!baseUrl.startsWith('ws://') && !baseUrl.startsWith('wss://')) {
+      baseUrl = `ws://${baseUrl}`;
+    }
+    
+    const wsUrl = new URL(baseUrl);
     wsUrl.searchParams.set('type', this.channelType);
     wsUrl.searchParams.set('projectId', this.projectId || this.docId);
     wsUrl.searchParams.set('docId', this.docId);
@@ -255,6 +275,7 @@ export class WebSocketProvider extends EventTarget {
     wsUrl.searchParams.set('userColor', this.user.color);
 
     this.log('Connecting to', wsUrl.toString());
+    this.log('User ID:', this.user.id);
 
     this.ws = new WebSocket(wsUrl.toString());
     this.ws.binaryType = 'arraybuffer';
@@ -271,7 +292,13 @@ export class WebSocketProvider extends EventTarget {
   private handleOpen() {
     this.log('Connected');
     this.setConnectionStatus('connected');
-    this.reconnectAttempts = 0;
+    this.reconnectAttempts = 0; // Reset on successful connection
+    
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
 
     // Send sync step 1
     this.sendSyncStep1();
@@ -286,14 +313,72 @@ export class WebSocketProvider extends EventTarget {
    * Handle WebSocket message
    */
   private handleMessage(event: MessageEvent) {
+    // Check for error messages from server
+    if (typeof event.data === 'string') {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'error' && message.code === 'AUTH_REQUIRED') {
+          this.log('Authentication error received - disabling reconnection');
+          this.reconnectEnabled = false;
+          this.dispatchEvent(new CustomEvent('error', { detail: new Error(message.message) }));
+          return;
+        }
+      } catch {
+        // Not JSON, continue with normal processing
+      }
+    }
+    
+    // Validate we have binary data
+    if (!(event.data instanceof ArrayBuffer) && !(event.data instanceof Uint8Array)) {
+      if (typeof event.data === 'string') {
+        // Handle JSON messages (like connection confirmation)
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'collaboration:connected') {
+            this.log('Collaboration confirmed:', message);
+          }
+        } catch {
+          // Not JSON, ignore
+        }
+      }
+      return;
+    }
+
     try {
-      const data = new Uint8Array(event.data);
+      const data = event.data instanceof ArrayBuffer 
+        ? new Uint8Array(event.data)
+        : event.data;
 
-      // Check if it's JSON (connection confirmation)
-      if (event.data instanceof ArrayBuffer) {
-        const decoder = decoding.createDecoder(data);
-        const messageType = decoding.readVarUint(decoder);
+      // Validate data is not empty
+      if (!data || data.length === 0) {
+        this.log('Received empty message, ignoring');
+        return;
+      }
 
+      // Create decoder with error handling
+      let decoder: decoding.Decoder;
+      try {
+        decoder = decoding.createDecoder(data);
+      } catch (decoderError) {
+        this.log('Error creating decoder:', decoderError);
+        return;
+      }
+
+      // Validate we can read the message type
+      let messageType: number;
+      try {
+        messageType = decoding.readVarUint(decoder);
+      } catch (readError) {
+        this.log('Error reading message type (corrupted data):', readError);
+        // Close connection on corrupted data to prevent further issues
+        if (this.ws) {
+          this.ws.close(1003, 'Corrupted message received');
+        }
+        return;
+      }
+
+      // Handle message based on type
+      try {
         switch (messageType) {
           case syncProtocol.messageYjsSyncStep1:
             this.handleSyncStep1(decoder);
@@ -314,15 +399,20 @@ export class WebSocketProvider extends EventTarget {
           default:
             this.log('Unknown message type:', messageType);
         }
-      } else if (typeof event.data === 'string') {
-        // Handle JSON messages (like connection confirmation)
-        const message = JSON.parse(event.data);
-        if (message.type === 'collaboration:connected') {
-          this.log('Collaboration confirmed:', message);
-        }
+      } catch (handleError) {
+        this.log('Error handling message type', messageType, ':', handleError);
+        // Don't close connection for handling errors, just log them
       }
     } catch (err) {
-      console.error('[WSProvider] Error handling message:', err);
+      this.log('Error processing message:', err);
+      // Only close connection for critical decoding errors
+      if (err instanceof Error && err.message.includes('Unexpected end')) {
+        // This is a decoding error - close connection to prevent further corruption
+        if (this.ws) {
+          this.ws.close(1003, 'Message decoding error');
+        }
+      }
+      this.dispatchEvent(new CustomEvent('error', { detail: err }));
     }
   }
 
@@ -330,24 +420,34 @@ export class WebSocketProvider extends EventTarget {
    * Handle sync step 1 from server
    */
   private handleSyncStep1(decoder: decoding.Decoder) {
-    // Build response for SyncStep2
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
-    // readSyncStep1 writes the reply content into the provided encoder
-    syncProtocol.readSyncStep1(decoder, encoder, this.doc);
-    this.sendMessage(encoding.toUint8Array(encoder));
+    try {
+      // Build response for SyncStep2
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+      // readSyncStep1 writes the reply content into the provided encoder
+      syncProtocol.readSyncStep1(decoder, encoder, this.doc);
+      this.sendMessage(encoding.toUint8Array(encoder));
+    } catch (error) {
+      this.log('Error handling sync step 1:', error);
+      // Don't throw - allow connection to continue
+    }
   }
 
   /**
    * Handle sync step 2 from server
    */
   private handleSyncStep2(decoder: decoding.Decoder) {
-    syncProtocol.readSyncStep2(decoder, this.doc, this);
+    try {
+      syncProtocol.readSyncStep2(decoder, this.doc, this);
 
-    if (!this.synced) {
-      this.synced = true;
-      this.log('Synced');
-      this.dispatchEvent(new Event('sync'));
+      if (!this.synced) {
+        this.synced = true;
+        this.log('Synced');
+        this.dispatchEvent(new Event('sync'));
+      }
+    } catch (error) {
+      this.log('Error handling sync step 2:', error);
+      // Don't throw - allow connection to continue
     }
   }
 
@@ -355,30 +455,88 @@ export class WebSocketProvider extends EventTarget {
    * Handle document update from server
    */
   private handleUpdate(decoder: decoding.Decoder) {
-    syncProtocol.readUpdate(decoder, this.doc, this);
+    try {
+      // Validate decoder has data remaining
+      if (decoder.pos >= decoder.arr.length) {
+        this.log('Decoder exhausted before reading update');
+        return;
+      }
+      // Read update with 'this' as origin so handleDocUpdate knows it's from server
+      // This prevents echo loops
+      syncProtocol.readUpdate(decoder, this.doc, this);
+    } catch (error) {
+      this.log('Error reading update:', error);
+      // Close connection on update errors to prevent corruption
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close(1003, 'Update decode error');
+      }
+    }
   }
 
   /**
    * Handle awareness update from server
    */
   private handleAwarenessUpdate(decoder: decoding.Decoder) {
-    awarenessProtocol.applyAwarenessUpdate(
-      this.awareness,
-      decoding.readVarUint8Array(decoder),
-      this
-    );
+    try {
+      // Validate decoder has data remaining
+      if (decoder.pos >= decoder.arr.length) {
+        this.log('Decoder exhausted before reading awareness update');
+        return;
+      }
+      awarenessProtocol.applyAwarenessUpdate(
+        this.awareness,
+        decoding.readVarUint8Array(decoder),
+        this
+      );
+    } catch (error) {
+      this.log('Error handling awareness update:', error);
+      // Don't throw - awareness updates are not critical
+    }
   }
 
   /**
    * Handle document updates (send to server)
    */
   private handleDocUpdate = (update: Uint8Array, origin: any) => {
-    if (origin !== this) {
-      this.pendingUpdates.push(update);
-      if (!this.updateFlushTimer) {
-        this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
+    // CRITICAL: Only send updates from LOCAL user edits
+    // Skip ALL updates that came from:
+    // 1. This WebSocket provider (server echoes)
+    // 2. Any WebSocket provider (server updates)
+    // 3. Updates applied via readUpdate (server sync)
+    
+    // Skip if origin is this provider (we sent it to server, server echoed it back)
+    if (origin === this) {
+      return;
+    }
+    
+    // Skip if origin is null (happens during initial sync or server updates)
+    if (origin === null || origin === undefined) {
+      return;
+    }
+    
+    // Skip if origin is a WebSocket provider object
+    if (origin && typeof origin === 'object') {
+      // Check for WebSocket provider indicators
+      if ((origin as any).ws !== undefined || 
+          (origin as any).docId !== undefined ||
+          (origin as any).doc === this.doc) {
+        // This is from WebSocket - don't send it back
+        return;
+      }
+      
+      // Check if it's a Monaco binding origin (we want to send these)
+      if ((origin as any)._monacoBinding && (origin as any)._isLocalEdit) {
+        // This is a local Monaco edit - SEND IT
+        this.pendingUpdates.push(update);
+        if (!this.updateFlushTimer) {
+          this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
+        }
+        return;
       }
     }
+    
+    // For any other origin, be conservative and don't send
+    // This prevents unknown origins from causing echo loops
   };
 
   private flushPendingUpdates() {
@@ -469,8 +627,59 @@ export class WebSocketProvider extends EventTarget {
    * Handle WebSocket error
    */
   private handleError(error: Event) {
-    console.error('[WSProvider] WebSocket error:', error);
-    this.dispatchEvent(new CustomEvent('error', { detail: error }));
+    // Extract more information from the error event
+    const errorInfo: any = {
+      type: error.type,
+      target: error.target,
+      timeStamp: error.timeStamp,
+    };
+    
+    // Try to get WebSocket state and URL
+    if (this.ws) {
+      errorInfo.readyState = this.ws.readyState;
+      errorInfo.url = this.ws.url;
+      errorInfo.protocol = this.ws.protocol;
+      errorInfo.extensions = this.ws.extensions;
+    }
+    
+    // Log with more context (only once per connection to avoid spam)
+    if (!this._errorLogged) {
+      console.error('[WSProvider] WebSocket error:', {
+        ...errorInfo,
+        docId: this.docId,
+        projectId: this.projectId,
+        filePath: this.filePath,
+        connectionStatus: this.connectionStatus,
+        reconnectAttempts: this.reconnectAttempts,
+      });
+      this._errorLogged = true;
+    }
+    
+    // PERMANENTLY stop reconnection on any error to prevent infinite loops
+    this.reconnectEnabled = false;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
+    // Close the connection if it's still open
+    if (this.ws) {
+      try {
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+          this.ws.close(1006, 'WebSocket error');
+        }
+      } catch (closeError) {
+        // Ignore close errors
+      }
+      this.ws = null;
+    }
+    
+    this.setConnectionStatus('disconnected');
+    // Don't dispatch error event repeatedly - only once
+    if (!this._errorDispatched) {
+      this.dispatchEvent(new CustomEvent('error', { detail: errorInfo }));
+      this._errorDispatched = true;
+    }
   }
 
   /**
@@ -484,7 +693,15 @@ export class WebSocketProvider extends EventTarget {
 
     this.dispatchEvent(new Event('disconnect'));
 
-    // Attempt reconnection
+    // Don't reconnect on authentication errors (code 1008) or intentional closes (code 1000)
+    if (event.code === 1008 || event.code === 1000) {
+      this.log('Connection closed due to auth error or intentional close - not reconnecting');
+      this.reconnectEnabled = false;
+      this.dispatchEvent(new Event('reconnect-failed'));
+      return;
+    }
+
+    // Attempt reconnection only for unexpected disconnects
     if (this.reconnectEnabled && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.scheduleReconnect();
     } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {

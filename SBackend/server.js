@@ -1384,17 +1384,41 @@ wss.on("connection", (ws, req) => {
 
   
   // Parse connection parameters
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  // Handle both absolute URLs and relative paths
+  let url;
+  try {
+    if (req.url && (req.url.startsWith('http://') || req.url.startsWith('https://') || req.url.startsWith('ws://') || req.url.startsWith('wss://'))) {
+      url = new URL(req.url);
+    } else {
+      url = new URL(req.url || '/', `http://${req.headers.host || 'localhost:3001'}`);
+    }
+  } catch (e) {
+    console.error('Error parsing URL:', req.url, e);
+    url = new URL(req.url || '/', `http://${req.headers.host || 'localhost:3001'}`);
+  }
+  
+  // Debug: Log the full URL and search params
+  console.log('  Full parsed URL:', url.toString());
+  console.log('  Search params:', Object.fromEntries(url.searchParams.entries()));
+  
   const type = url.searchParams.get('type') || 'terminal';
   const projectId = url.searchParams.get('projectId');
+  const userIdFromUrl = url.searchParams.get('userId');
   const userClaims = req.user || {};
   
+  // If userId is provided in URL but not in userClaims, use it as fallback
+  if (userIdFromUrl && !userClaims.sub && !userClaims.user_id && !userClaims.id) {
+    userClaims.user_id = userIdFromUrl;
+    userClaims.id = userIdFromUrl;
+  }
   
   console.log(`🔌 New WebSocket connection:`);
   console.log(`  Type: ${type}`);
   console.log(`  Project ID: ${projectId}`);
+  console.log(`  User ID from URL: ${userIdFromUrl || 'none'}`);
+  console.log(`  User Claims:`, userClaims);
+  console.log(`  WS_ALLOW_ANONYMOUS: ${WS_ALLOW_ANONYMOUS}`);
   console.log(`  URL: ${req.url}`);
-  console.log(`  Headers:`, req.headers);
   // Validate required parameters
   if (!projectId) {
     ws.send(JSON.stringify({ 
@@ -1417,8 +1441,15 @@ wss.on("connection", (ws, req) => {
   }
 
   if (!WS_ALLOW_ANONYMOUS) {
-    const hasAuth = userClaims && (userClaims.sub || userClaims.user_id || userClaims.id);
+    // Check for auth in userClaims OR userIdFromUrl (for demo mode and auth users)
+    const hasAuthFromClaims = userClaims && (userClaims.sub || userClaims.user_id || userClaims.id);
+    const hasAuthFromUrl = !!userIdFromUrl;
+    const hasAuth = hasAuthFromClaims || hasAuthFromUrl;
+    
+    console.log(`  Auth check: hasAuthFromClaims=${hasAuthFromClaims}, hasAuthFromUrl=${hasAuthFromUrl}, hasAuth=${hasAuth}`);
+    
     if (!hasAuth) {
+      console.log(`  ❌ Authentication failed - no user ID found`);
       ws.send(JSON.stringify({
         type: 'error',
         message: 'Authentication required',
@@ -1427,6 +1458,14 @@ wss.on("connection", (ws, req) => {
       ws.close(1008, 'Authentication required');
       return;
     }
+    // Ensure userClaims has the userId for later use
+    if (userIdFromUrl && !userClaims.sub && !userClaims.user_id && !userClaims.id) {
+      userClaims.user_id = userIdFromUrl;
+      userClaims.id = userIdFromUrl;
+      console.log(`  ✅ Using userId from URL: ${userIdFromUrl}`);
+    }
+  } else {
+    console.log(`  ⚠️  WS_ALLOW_ANONYMOUS is true - skipping auth check`);
   }
 
   const connectionId = connectionManager.addConnection(ws, type, projectId, {
