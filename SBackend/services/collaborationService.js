@@ -117,8 +117,17 @@ class CollaborationRoom extends EventEmitter {
     this.logger.metric('active_connections', this.connections.size, 'count');
 
     // Seed awareness so other clients see the user immediately
+    // CRITICAL: Use setLocalState to properly initialize awareness.meta
     try {
-      this.awareness.states.set(clientId, {
+      // Ensure awareness is initialized before setting state
+      if (!this.awareness || !this.awareness.meta) {
+        this.logger.warn('Awareness not initialized, reinitializing', { clientId });
+        this.awareness = new awarenessProtocol.Awareness(this.doc);
+      }
+      
+      // Use setLocalState instead of directly manipulating states
+      // This ensures meta.clock is properly initialized
+      this.awareness.setLocalState(clientId, {
         user: {
           id: userInfo.id,
           name: userInfo.name,
@@ -127,7 +136,11 @@ class CollaborationRoom extends EventEmitter {
         cursor: null,
         selection: null
       });
-      this.broadcastAwareness([clientId]);
+      
+      // Broadcast only if awareness is properly initialized
+      if (this.awareness.meta && this.awareness.meta.clock !== undefined) {
+        this.broadcastAwareness([clientId]);
+      }
     } catch (err) {
       this.logger.warn('Failed to broadcast initial awareness state', {
         clientId,
@@ -138,7 +151,7 @@ class CollaborationRoom extends EventEmitter {
     // Send initial sync
     this.sendSyncStep1(ws);
 
-    // Send current awareness state
+    // Send current awareness state (only if properly initialized)
     this.sendAwarenessToClient(ws);
 
     // Setup message handler
@@ -399,16 +412,34 @@ class CollaborationRoom extends EventEmitter {
    * Send awareness state to a specific client
    */
   sendAwarenessToClient(ws) {
+    // CRITICAL: Guard against uninitialized awareness
+    if (!this.awareness || !this.awareness.meta || this.awareness.meta.clock === undefined) {
+      this.logger.warn('Cannot send awareness: awareness not initialized', {
+        hasAwareness: !!this.awareness,
+        hasMeta: !!(this.awareness && this.awareness.meta),
+        hasClock: !!(this.awareness && this.awareness.meta && this.awareness.meta.clock !== undefined)
+      });
+      return;
+    }
+
     const states = this.awareness.getStates();
     if (states.size > 0) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, messageAwareness);
-      encoding.writeVarUint8Array(
-        encoder,
-        awarenessProtocol.encodeAwarenessUpdate(this.awareness, Array.from(states.keys()))
-      );
+      try {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, messageAwareness);
+        encoding.writeVarUint8Array(
+          encoder,
+          awarenessProtocol.encodeAwarenessUpdate(this.awareness, Array.from(states.keys()))
+        );
 
-      this.sendMessage(ws, encoding.toUint8Array(encoder));
+        this.sendMessage(ws, encoding.toUint8Array(encoder));
+      } catch (err) {
+        this.logger.error('Failed to encode/send awareness update', err, {
+          statesSize: states.size,
+          hasMeta: !!this.awareness.meta,
+          hasClock: this.awareness.meta ? this.awareness.meta.clock !== undefined : false
+        });
+      }
     }
   }
 
@@ -416,14 +447,38 @@ class CollaborationRoom extends EventEmitter {
    * Broadcast awareness changes
    */
   broadcastAwareness(changedClients) {
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, messageAwareness);
-    encoding.writeVarUint8Array(
-      encoder,
-      awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
-    );
+    // CRITICAL: Guard against uninitialized awareness
+    if (!this.awareness || !this.awareness.meta || this.awareness.meta.clock === undefined) {
+      this.logger.warn('Cannot broadcast awareness: awareness not initialized', {
+        hasAwareness: !!this.awareness,
+        hasMeta: !!(this.awareness && this.awareness.meta),
+        hasClock: !!(this.awareness && this.awareness.meta && this.awareness.meta.clock !== undefined),
+        changedClients
+      });
+      return;
+    }
 
-    this.broadcast(encoding.toUint8Array(encoder));
+    // Skip if no clients to broadcast to
+    if (!changedClients || changedClients.length === 0) {
+      return;
+    }
+
+    try {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, messageAwareness);
+      encoding.writeVarUint8Array(
+        encoder,
+        awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
+      );
+
+      this.broadcast(encoding.toUint8Array(encoder));
+    } catch (err) {
+      this.logger.error('Failed to encode/broadcast awareness update', err, {
+        changedClients,
+        hasMeta: !!this.awareness.meta,
+        hasClock: this.awareness.meta ? this.awareness.meta.clock !== undefined : false
+      });
+    }
   }
 
   scheduleAwarenessBroadcast(changedClients) {
