@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import EntryPage from "@/components/welcomepage/EntryPage";
 import Layout from "@/components/layout/Layout";
 import AppWrapper from "@/components/AppWrapper";
@@ -14,17 +15,47 @@ import { useActiveUserId, clearDemoMode } from "@/hooks/useActiveUserId";
 export default function Home() {
   const { isAuthenticated, userId: authUserId, loading: authLoading, signOut, user: authUser } = useAuth();
   const activeUserId = useActiveUserId();
+  const router = useRouter();
   const [currentView, setCurrentView] = useState("userSelection");
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState("");
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Local storage keys
   const SELECTED_USER_KEY = "app-selected-user";
   const CURRENT_VIEW_KEY = "app-current-view";
   const CURRENT_PROJECT_ID_KEY = "app-current-project-id";
   const CURRENT_PROJECT_NAME_KEY = "app-current-project-name";
+
+  // Handle Supabase Auth errors from URL parameters
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const error = urlParams.get("error");
+    const errorDescription = urlParams.get("error_description");
+    
+    if (error) {
+      let errorMessage = "Authentication error occurred.";
+      
+      if (error === "otp_expired") {
+        errorMessage = "The email verification link has expired. Please request a new one or sign in with your password.";
+      } else if (errorDescription) {
+        errorMessage = decodeURIComponent(errorDescription.replace(/\+/g, " "));
+      }
+      
+      setAuthError(errorMessage);
+      
+      // Clear error from URL after displaying
+      urlParams.delete("error");
+      urlParams.delete("error_code");
+      urlParams.delete("error_description");
+      const newUrl = urlParams.toString() ? `/?${urlParams.toString()}` : "/";
+      router.replace(newUrl);
+    }
+  }, [router]);
 
   // Rehydrate state from localStorage and handle auth/demo mode
   useEffect(() => {
@@ -228,6 +259,38 @@ export default function Home() {
   // Avoid flicker/mismatch before hydration
   if (!hydrated) {
     return null;
+  }
+
+  // Show auth error if present
+  if (authError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-8 bg-[#212124] text-[#E0E0E0]">
+        <div className="w-full max-w-md p-8 rounded-xl border shadow-lg bg-[#2A2A2E] border-[#3A3A3E]">
+          <h2 className="text-2xl font-bold mb-4 text-red-400">Authentication Error</h2>
+          <p className="mb-6 text-gray-300">{authError}</p>
+          <div className="flex gap-4">
+            <button
+              onClick={() => {
+                setAuthError(null);
+                router.push("/auth/login");
+              }}
+              className="flex-1 py-2 px-4 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors font-semibold"
+            >
+              Go to Login
+            </button>
+            <button
+              onClick={() => {
+                setAuthError(null);
+                router.push("/");
+              }}
+              className="flex-1 py-2 px-4 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors font-semibold"
+            >
+              Go to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Render the appropriate component based on currentView
