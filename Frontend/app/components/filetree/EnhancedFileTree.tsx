@@ -58,7 +58,12 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
   const canView = hasPermission('canView');
 
   useEffect(() => {
-    loadFileTree();
+    // Debounce loadFileTree to prevent rapid calls
+    const timeoutId = setTimeout(() => {
+      loadFileTree();
+    }, 100);
+    
+    return () => clearTimeout(timeoutId);
   }, [loadFileTree]);
 
   // Enhanced search with debouncing

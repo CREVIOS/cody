@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useRef, useEff
 import { FileSystemItem, FileSystemContextType, SearchResult } from '@/types/fileSystem';
 import { ProjectPersistenceService, ProjectSession } from '@/lib/projectPersistence';
 import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand, SaveFileCommand, CreateFileCommand, CreateFolderCommand, DuplicateFileCommand } from '@/lib/commands';
+import { useAuth } from './AuthContext';
 
 const FileSystemContext = createContext<FileSystemContextType | undefined>(undefined);
 
@@ -22,12 +23,15 @@ interface FileSystemProviderProps {
 }
 
 export function FileSystemProvider({ children, projectId, projectName = '' }: FileSystemProviderProps) {
+  const { userId, user } = useAuth();
   const [fileTree, setFileTree] = useState<FileSystemItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileSystemItem | null>(null);
   const [openFiles, setOpenFiles] = useState<Map<string, { item: FileSystemItem; content: string; savedContent: string; isDirty: boolean; isSaving?: boolean }>>(new Map());
   const [currentFileContent, setCurrentFileContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const isLoadingRef = useRef<boolean>(false);
+  const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   // Store the current project name in state to ensure it's available in context
   const [currentProjectName, setCurrentProjectName] = useState<string>(projectName);
@@ -142,18 +146,29 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   // Project-level watcher WebSocket: listen for file change broadcasts
   useEffect(() => {
     if (!projectId) return;
+    // Don't connect if user is not authenticated
+    if (!userId) {
+      console.warn('[FileSystem] Skipping watcher WebSocket - user not authenticated');
+      return;
+    }
 
     try {
       const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
       const url = new URL(wsBase);
       url.searchParams.set('type', 'watcher');
       url.searchParams.set('projectId', projectId);
+      url.searchParams.set('userId', userId);
+      // Include user name if available for better debugging
+      if (user?.email) {
+        url.searchParams.set('userName', user.email.split('@')[0]);
+      }
 
       const ws = new WebSocket(url.toString());
       watcherWsRef.current = ws;
 
       ws.onopen = () => {
         // Connected to watcher channel
+        console.log('[FileSystem] Watcher WebSocket connected');
       };
 
       ws.onmessage = (event) => {
@@ -194,7 +209,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     } catch (e) {
       console.warn('Watcher WebSocket setup failed:', e);
     }
-  }, [projectId, handleExternalChanges]);
+  }, [projectId, userId, user?.email, handleExternalChanges]);
 
   const saveProjectState = useCallback(() => {
     if (projectId) {
@@ -224,6 +239,19 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   const loadFileTree = useCallback(async () => {
     if (!projectId) return;
     
+    // Prevent multiple simultaneous calls
+    if (isLoadingRef.current) {
+      console.log('[FileSystem] loadFileTree already in progress, skipping...');
+      return;
+    }
+    
+    // Clear any pending debounced calls
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+    
+    isLoadingRef.current = true;
     setIsLoading(true);
     setError(null);
     
@@ -232,6 +260,22 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       
       // Check if response is OK before parsing JSON
       if (!response.ok) {
+        // Handle rate limiting (429) with retry
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          const delay = retryAfter ? parseInt(retryAfter) * 1000 : 2000; // Default 2 seconds
+          
+          console.warn(`[FileSystem] Rate limited (429), retrying after ${delay}ms...`);
+          isLoadingRef.current = false;
+          setIsLoading(false);
+          
+          // Retry after delay
+          loadTimeoutRef.current = setTimeout(() => {
+            loadFileTree();
+          }, delay);
+          return;
+        }
+        
         let errorMessage = `Server returned ${response.status}: ${response.statusText}`;
         try {
           const errorData = await response.json();
@@ -308,8 +352,13 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       } else {
         handleError(error, 'load file tree');
       }
+      isLoadingRef.current = false;
     } finally {
-      setIsLoading(false);
+      if (!loadTimeoutRef.current) {
+        // Only reset loading if we're not retrying
+        isLoadingRef.current = false;
+        setIsLoading(false);
+      }
     }
   }, [projectId, baseUrl]);
 
@@ -529,23 +578,57 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         getCurrentVersionId: async (projId: string, filePath: string) => {
           const response = await fetch(`${baseUrl}/api/projects/${projId}/files/current-version?path=${encodeURIComponent(filePath)}`);
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: Failed to get current version`);
+            let errorMessage = `HTTP ${response.status}: Failed to get current version`;
+            try {
+              const errorData = await response.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } catch {
+              errorMessage = `${errorMessage} - ${response.statusText}`;
+            }
+            throw new Error(errorMessage);
           }
           const data = await response.json();
-          if (!data.success) throw new Error(data.error || 'Failed to get current version');
+          if (!data.success) {
+            throw new Error(data.error || 'Failed to get current version');
+          }
           return data;
         },
         updateFile: async (projId: string, filePath: string, fileContent: string) => {
-          const response = await fetch(`${baseUrl}/api/projects/${projId}/files/update`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath, content: fileContent })
-          });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: Failed to update file`);
+          const makeRequest = async (): Promise<Response> => {
+            return await fetch(`${baseUrl}/api/projects/${projId}/files/update`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: filePath, content: fileContent })
+            });
+          };
+          
+          let response = await makeRequest();
+          
+          // Handle rate limiting (429) with retry
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After');
+            const delay = retryAfter ? parseInt(retryAfter) * 1000 : 2000;
+            console.warn(`[FileSystem] Rate limited (429) when saving file, retrying after ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            response = await makeRequest();
           }
+          
+          if (!response.ok) {
+            let errorMessage = `HTTP ${response.status}: Failed to update file`;
+            try {
+              const errorData = await response.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } catch {
+              // If response is not JSON, use status text
+              errorMessage = `${errorMessage} - ${response.statusText}`;
+            }
+            throw new Error(errorMessage);
+          }
+          
           const data = await response.json();
-          if (!data.success) throw new Error(data.error || 'Failed to update file');
+          if (!data.success) {
+            throw new Error(data.error || 'Failed to update file');
+          }
           return data;
         },
         restoreFileVersion: async (projId: string, filePath: string, versionId: string) => {
@@ -555,10 +638,19 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
             body: JSON.stringify({ path: filePath, versionId })
           });
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: Failed to restore version`);
+            let errorMessage = `HTTP ${response.status}: Failed to restore version`;
+            try {
+              const errorData = await response.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } catch {
+              errorMessage = `${errorMessage} - ${response.statusText}`;
+            }
+            throw new Error(errorMessage);
           }
           const data = await response.json();
-          if (!data.success) throw new Error(data.error || 'Failed to restore version');
+          if (!data.success) {
+            throw new Error(data.error || 'Failed to restore version');
+          }
           return data;
         },
         getFileVersion: async (projId: string, filePath: string, versionId: string) => {

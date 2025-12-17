@@ -3,6 +3,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { User } from "@/lib/projectAPI/TypeDefinitions";
 import { listUsers, createUser } from "@/lib/projectAPI/UserAPI";
 import { Skeleton } from "@/components/ui/skeleton";
+import { setDemoUserId } from "@/hooks/useActiveUserId";
+import { FaEye, FaEyeSlash } from "react-icons/fa";
 
 interface UserSelectionProps {
   onSelectUser: (user: User) => void;
@@ -22,6 +24,8 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [showDemoUsers, setShowDemoUsers] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [form, setForm] = useState<NewUserForm>({
     username: '',
     email: '',
@@ -105,20 +109,62 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
     }
   };
 
+  const handleSelectUserDemo = (user: User) => {
+    // Set demo mode with selected user
+    setDemoUserId(user.user_id);
+    onSelectUser(user);
+  };
+
   return (
     <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${backgroundClass}`}>
       <h1 
-        className="text-5xl font-bold mb-12"
+        className="text-5xl font-bold mb-8"
         style={{ textShadow: titleShadow }}
       >
         Select a User
       </h1>
-      <button
-        onClick={handleOpenModal}
-        className="mb-8 px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
-      >
-        + Create New User
-      </button>
+      
+      {/* Auth Links */}
+      <div className="mb-6 flex gap-4">
+        <a
+          href="/auth/login"
+          className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
+        >
+          Log In
+        </a>
+        <a
+          href="/auth/signup"
+          className="px-6 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors font-semibold"
+        >
+          Sign Up
+        </a>
+      </div>
+
+      {/* Demo Mode Section */}
+      <div className="mb-6 flex items-center justify-center gap-4">
+        <button
+          onClick={() => setShowDemoUsers(!showDemoUsers)}
+          className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold flex items-center gap-2"
+        >
+          {showDemoUsers ? (
+            <>
+              <FaEyeSlash className="w-4 h-4" />
+              Hide Demo Users
+            </>
+          ) : (
+            <>
+              <FaEye className="w-4 h-4" />
+              Show Demo Users
+            </>
+          )}
+        </button>
+        <button
+          onClick={handleOpenModal}
+          className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
+        >
+          + Create New User
+        </button>
+      </div>
       <div className="w-full max-w-4xl">
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -142,10 +188,10 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {users.map((user) => (
+            {showDemoUsers && users.slice(0, 9).map((user) => (
               <button
                 key={user.user_id}
-                onClick={() => onSelectUser(user)}
+                onClick={() => handleSelectUserDemo(user)}
                 className={`p-6 rounded-xl border ${cardClass} transition-all duration-300 hover:shadow-lg hover:scale-105 text-left group cursor-pointer`}
               >
                 <div className="flex items-center mb-4">
@@ -181,6 +227,11 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
                 </div>
               </button>
             ))}
+            {!showDemoUsers && (
+              <div className={`col-span-full text-center py-8 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                <p>Click "Show Demo Users" to view available demo users</p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -212,14 +263,28 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
                 onChange={(e) => handleFormChange('email', e.target.value)}
                 required
               />
-              <input
-                className={inputClass}
-                type="password"
-                placeholder="Password"
-                value={form.password}
-                onChange={(e) => handleFormChange('password', e.target.value)}
-                required
-              />
+              <div className="relative">
+                <input
+                  className={inputClass}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Password"
+                  value={form.password}
+                  onChange={(e) => handleFormChange('password', e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <FaEyeSlash className="w-5 h-5" />
+                  ) : (
+                    <FaEye className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
               <input
                 className={inputClass}
                 type="text"

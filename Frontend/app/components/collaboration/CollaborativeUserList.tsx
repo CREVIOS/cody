@@ -46,7 +46,7 @@ export function CollaborativeUserList({
 
     const updateUsers = () => {
       const states = awareness.getStates();
-      const newUsers: User[] = [];
+      const userMap = new Map<string, User>(); // Deduplicate by user ID
       const now = Date.now();
 
       states.forEach((state, clientId) => {
@@ -56,13 +56,21 @@ export function CollaborativeUserList({
         const lastUpdate = lastCursorUpdate.get(userId) || 0;
         const isTyping = state.cursor && now - lastUpdate < 2000; // Typing if cursor moved in last 2s
 
-        newUsers.push({
-          id: userId,
-          name: state.user.name,
-          color: state.user.color,
-          isTyping,
-          lastActivity: state.cursor?.timestamp || 0,
-        });
+        // If user already exists, merge the typing state (any connection typing = user is typing)
+        const existingUser = userMap.get(userId);
+        if (existingUser) {
+          // Keep the most recent activity and merge typing status
+          existingUser.isTyping = existingUser.isTyping || isTyping;
+          existingUser.lastActivity = Math.max(existingUser.lastActivity, state.cursor?.timestamp || 0);
+        } else {
+          userMap.set(userId, {
+            id: userId,
+            name: state.user.name,
+            color: state.user.color,
+            isTyping,
+            lastActivity: state.cursor?.timestamp || 0,
+          });
+        }
 
         // Track cursor updates for typing indicator
         if (state.cursor) {
@@ -70,7 +78,8 @@ export function CollaborativeUserList({
         }
       });
 
-      // Sort by name
+      // Convert map to array and sort by name
+      const newUsers = Array.from(userMap.values());
       newUsers.sort((a, b) => a.name.localeCompare(b.name));
 
       setUsers(newUsers);
@@ -212,11 +221,11 @@ export function CollaborativeUserAvatars({
 
     const updateUsers = () => {
       const states = awareness.getStates();
-      const newUsers: User[] = [];
+      const userMap = new Map<string, User>(); // Deduplicate by user ID
 
       states.forEach((state) => {
-        if (state.user) {
-          newUsers.push({
+        if (state.user && !userMap.has(state.user.id)) {
+          userMap.set(state.user.id, {
             id: state.user.id,
             name: state.user.name,
             color: state.user.color,
@@ -226,7 +235,7 @@ export function CollaborativeUserAvatars({
         }
       });
 
-      setUsers(newUsers);
+      setUsers(Array.from(userMap.values()));
     };
 
     awareness.on('change', updateUsers);

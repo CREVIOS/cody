@@ -155,6 +155,46 @@ export const listUsers = async (): Promise<User[]> => {
   };
 
   /**
+   * Get user by ID with retry logic for auth mode
+   * Retries multiple times with increasing delays if user is not found (handles trigger timing)
+   * This should ONLY be used for authenticated users (auth mode)
+   * DO NOT use this for demo mode
+   */
+  export const getUserWithRetry = async (
+    userId: string,
+    maxRetries: number = 3,
+    initialDelayMs: number = 500
+  ): Promise<User> => {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await getUser(userId);
+      } catch (error: any) {
+        lastError = error;
+        
+        // Only retry on 404 (user not found) - likely trigger timing issue
+        const isNotFound = error.message?.includes('not found') || 
+                          error.message?.includes('404') ||
+                          error.message?.includes('User not found');
+        
+        if (isNotFound && attempt < maxRetries) {
+          const delay = initialDelayMs * Math.pow(2, attempt); // Exponential backoff: 500ms, 1000ms, 2000ms
+          console.log(`User not found (attempt ${attempt + 1}/${maxRetries + 1}), retrying after ${delay}ms (trigger timing)...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        // If not 404 or out of retries, throw immediately
+        throw error;
+      }
+    }
+    
+    // Should never reach here, but TypeScript needs it
+    throw lastError;
+  };
+
+  /**
    * Update user profile
    */
   export interface UserUpdateData {
@@ -264,6 +304,56 @@ export const listUsers = async (): Promise<User[]> => {
       return await response.json();
     } catch (error) {
       console.error('Error creating user:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * @deprecated DO NOT USE for auth mode users
+   * 
+   * This function is deprecated. Auth mode should NEVER call createUser.
+   * The database trigger (sync_auth_user_to_public_users) automatically creates
+   * users in public.users when they sign up via Supabase Auth.
+   * 
+   * For auth mode: Use getUserWithRetry() instead, which retries once to handle
+   * trigger timing delays.
+   * 
+   * This function is kept only for reference/documentation purposes.
+   * It should NOT be called for authenticated users.
+   */
+  export const createUserFromAuth = async (
+    authUserId: string,
+    email: string,
+    metadata?: {
+      username?: string;
+      full_name?: string;
+      avatar_url?: string;
+    }
+  ): Promise<User> => {
+    try {
+      // Extract username from email if not provided in metadata
+      // Ensure username is unique by appending a suffix if needed
+      let username = metadata?.username || email.split('@')[0];
+      
+      // Create user with placeholder password (auth handles authentication)
+      const userData: UserCreateData = {
+        username,
+        email,
+        password: 'PLACEHOLDER_AUTH_USER', // Required by API but not used for auth users
+        full_name: metadata?.full_name,
+        avatar_url: metadata?.avatar_url,
+      };
+
+      const user = await createUser(userData);
+      
+      // Note: The backend generates a new user_id. The SQL trigger should have
+      // created the user with authUserId as user_id. If this fallback is used,
+      // the user_id may not match authUserId, but the user can still use the app.
+      // Consider running the backfill SQL script to sync existing auth users.
+      
+      return user;
+    } catch (error) {
+      console.error('Error creating user from auth:', error);
       throw error;
     }
   };

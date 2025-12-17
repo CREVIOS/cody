@@ -117,19 +117,24 @@ class CollaborationRoom extends EventEmitter {
     this.logger.metric('active_connections', this.connections.size, 'count');
 
     // Seed awareness so other clients see the user immediately
+    // NOTE: We store user awareness state keyed by clientId (connection ID)
+    // The client's doc.clientID is different from our connectionId
     try {
-      this.awareness.states.set(clientId, {
-        user: {
-          id: userInfo.id,
-          name: userInfo.name,
-          color: userInfo.color
-        },
-        cursor: null,
-        selection: null
-      });
-      this.broadcastAwareness([clientId]);
+      // Ensure awareness is initialized
+      if (!this.awareness) {
+        this.logger.warn('Awareness not initialized, reinitializing', { clientId });
+        this.awareness = new awarenessProtocol.Awareness(this.doc);
+      }
+
+      // Store user state in awareness states map directly
+      // Note: We cannot use setLocalState here because that's only for the local client
+      // Instead, we track user info separately and broadcast awareness updates
+      // The awareness state will be set when the client sends its first awareness update
+
+      // For now, just broadcast any existing awareness states to the new client
+      this.sendAwarenessToClient(ws);
     } catch (err) {
-      this.logger.warn('Failed to broadcast initial awareness state', {
+      this.logger.warn('Failed to setup initial awareness for client', {
         clientId,
         error: err.message
       });
@@ -138,7 +143,7 @@ class CollaborationRoom extends EventEmitter {
     // Send initial sync
     this.sendSyncStep1(ws);
 
-    // Send current awareness state
+    // Send current awareness state (only if properly initialized)
     this.sendAwarenessToClient(ws);
 
     // Setup message handler
@@ -399,16 +404,26 @@ class CollaborationRoom extends EventEmitter {
    * Send awareness state to a specific client
    */
   sendAwarenessToClient(ws) {
-    const states = this.awareness.getStates();
-    if (states.size > 0) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, messageAwareness);
-      encoding.writeVarUint8Array(
-        encoder,
-        awarenessProtocol.encodeAwarenessUpdate(this.awareness, Array.from(states.keys()))
-      );
+    // Guard against uninitialized awareness
+    if (!this.awareness) {
+      this.logger.warn('Cannot send awareness: awareness not initialized');
+      return;
+    }
 
-      this.sendMessage(ws, encoding.toUint8Array(encoder));
+    try {
+      const states = this.awareness.getStates();
+      if (states.size > 0) {
+        const clientIds = Array.from(states.keys());
+        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(this.awareness, clientIds);
+
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, messageAwareness);
+        encoding.writeVarUint8Array(encoder, awarenessUpdate);
+
+        this.sendMessage(ws, encoding.toUint8Array(encoder));
+      }
+    } catch (err) {
+      this.logger.error('Failed to encode/send awareness update', err);
     }
   }
 
@@ -416,14 +431,28 @@ class CollaborationRoom extends EventEmitter {
    * Broadcast awareness changes
    */
   broadcastAwareness(changedClients) {
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, messageAwareness);
-    encoding.writeVarUint8Array(
-      encoder,
-      awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
-    );
+    // Guard against uninitialized awareness
+    if (!this.awareness) {
+      this.logger.warn('Cannot broadcast awareness: awareness not initialized');
+      return;
+    }
 
-    this.broadcast(encoding.toUint8Array(encoder));
+    // Skip if no clients to broadcast to
+    if (!changedClients || changedClients.length === 0) {
+      return;
+    }
+
+    try {
+      const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients);
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, messageAwareness);
+      encoding.writeVarUint8Array(encoder, awarenessUpdate);
+
+      this.broadcast(encoding.toUint8Array(encoder));
+    } catch (err) {
+      this.logger.error('Failed to encode/broadcast awareness update', err);
+    }
   }
 
   scheduleAwarenessBroadcast(changedClients) {
@@ -677,22 +706,26 @@ class CollaborationRoom extends EventEmitter {
       if (snapshotFiles.length > 0) {
         const latestSnapshot = snapshotFiles[0];
         const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
-        Y.applyUpdate(this.doc, snapshotData, 'persistence');
-
-        this.logger.info('Loaded snapshot', { snapshot: latestSnapshot });
-
-        const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-        this.lastSnapshot = snapshotTimestamp;
-
-        await this.loadUpdatesAfter(snapshotTimestamp);
-      } else {
-        await this.loadUpdatesAfter(0);
+        try {
+          Y.applyUpdate(this.doc, snapshotData, 'persistence');
+          this.logger.info('Loaded snapshot', { snapshot: latestSnapshot });
+          const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
+          this.lastSnapshot = snapshotTimestamp;
+          await this.loadUpdatesAfter(snapshotTimestamp);
+          return;
+        } catch (err) {
+          this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message });
+        }
       }
+
+      // Fallback: attempt to load updates without snapshot
+      await this.loadUpdatesAfter(0);
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        throw err;
+        this.logger.warn('Failed to read snapshots, continuing without persistence', { error: err.message });
+      } else {
+        this.logger.info('No persisted state found, starting fresh');
       }
-      this.logger.info('No persisted state found, starting fresh');
     }
   }
 
@@ -711,8 +744,12 @@ class CollaborationRoom extends EventEmitter {
 
       for (const updateFile of relevantUpdates) {
         const updateData = await fs.readFile(path.join(updatePath, updateFile));
-        Y.applyUpdate(this.doc, updateData, 'persistence');
-        this.updateLog.push(updateData);
+        try {
+          Y.applyUpdate(this.doc, updateData, 'persistence');
+          this.updateLog.push(updateData);
+        } catch (err) {
+          this.logger.warn('Skipping corrupted update', { file: updateFile, error: err.message });
+        }
       }
 
       if (relevantUpdates.length > 0) {
@@ -720,7 +757,7 @@ class CollaborationRoom extends EventEmitter {
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        throw err;
+        this.logger.warn('Failed to read updates, continuing without them', { error: err.message });
       }
     }
   }

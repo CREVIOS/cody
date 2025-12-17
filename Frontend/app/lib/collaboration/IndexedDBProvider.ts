@@ -72,6 +72,13 @@ export class IndexedDBProvider {
   }
 
   /**
+   * Clear persisted data (alias for clearData)
+   */
+  public async clear(): Promise<void> {
+    return this.clearData();
+  }
+
+  /**
    * Destroy provider
    */
   public destroy(): void {

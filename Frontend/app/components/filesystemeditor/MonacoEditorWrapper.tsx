@@ -467,13 +467,22 @@ export function MonacoEditorWrapper({
             showStatusBar: true
           },
           
-          // Quick suggestions
+          // Quick suggestions - disabled to prevent auto-completion on single characters
           quickSuggestions: {
-            other: true,
-            comments: true,
-            strings: true
+            other: false,  // Disable auto-suggestions while typing
+            comments: false,
+            strings: false
           },
-          quickSuggestionsDelay: 100,
+          quickSuggestionsDelay: 500,  // Increased delay if re-enabled
+          
+          // Disable word-based suggestions that cause "l" -> "length" auto-completion
+          wordBasedSuggestions: false,
+          
+          // Only show suggestions when explicitly triggered (Ctrl+Space)
+          suggestOnTriggerCharacters: true,
+          acceptSuggestionOnCommitCharacter: false,
+          acceptSuggestionOnEnter: 'on',  // Only accept on Enter, not Tab
+          tabCompletion: 'off',  // Disable tab completion
           
           // Parameter hints
           parameterHints: {
