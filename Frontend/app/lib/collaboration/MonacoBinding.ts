@@ -307,48 +307,71 @@ export class MonacoBinding extends EventTarget {
         // Save current cursor/selection to restore after applying changes
         const selections = this.editor.getSelections();
 
-        // Apply each delta from Yjs to Monaco
-        const edits: Monaco.editor.IIdentifiedSingleEditOperation[] = [];
+        // Apply deltas sequentially to avoid overlapping ranges (Monaco rejects overlapping batches)
         let currentOffset = 0;
 
-        // Log remote changes for debugging
-        console.log('[MonacoBinding] Applying remote changes:', event.delta.length, 'deltas');
+        console.log('[MonacoBinding] Applying remote changes sequentially:', event.delta.length, 'deltas');
 
         for (const delta of event.delta) {
           if (delta.retain !== undefined) {
             currentOffset += delta.retain;
-          } else if (delta.insert !== undefined) {
+            continue;
+          }
+
+          if (delta.insert !== undefined) {
             const insertText = typeof delta.insert === 'string' ? delta.insert : '';
-            const position = this.model.getPositionAt(currentOffset);
-            edits.push({
-              range: {
-                startLineNumber: position.lineNumber,
-                startColumn: position.column,
-                endLineNumber: position.lineNumber,
-                endColumn: position.column,
-              },
-              text: insertText,
-            });
+            if (insertText.length === 0) continue;
+
+            const pos = this.model.getPositionAt(currentOffset);
+            this.model.applyEdits(
+              [
+                {
+                  range: {
+                    startLineNumber: pos.lineNumber,
+                    startColumn: pos.column,
+                    endLineNumber: pos.lineNumber,
+                    endColumn: pos.column,
+                  },
+                  text: insertText,
+                  forceMoveMarkers: true,
+                },
+              ],
+              true
+            );
+
             currentOffset += insertText.length;
-          } else if (delta.delete !== undefined) {
-            const startPosition = this.model.getPositionAt(currentOffset);
-            const endPosition = this.model.getPositionAt(currentOffset + delta.delete);
-            edits.push({
-              range: {
-                startLineNumber: startPosition.lineNumber,
-                startColumn: startPosition.column,
-                endLineNumber: endPosition.lineNumber,
-                endColumn: endPosition.column,
-              },
-              text: '',
-            });
+            continue;
+          }
+
+          if (delta.delete !== undefined) {
+            const deleteLength = delta.delete;
+            if (deleteLength <= 0) continue;
+
+            const start = this.model.getPositionAt(currentOffset);
+            const end = this.model.getPositionAt(currentOffset + deleteLength);
+
+            this.model.applyEdits(
+              [
+                {
+                  range: {
+                    startLineNumber: start.lineNumber,
+                    startColumn: start.column,
+                    endLineNumber: end.lineNumber,
+                    endColumn: end.column,
+                  },
+                  text: '',
+                  forceMoveMarkers: true,
+                },
+              ],
+              true
+            );
+            // currentOffset remains the same after delete (text shrinks after this point)
           }
         }
 
-        if (edits.length > 0) {
-          console.log('[MonacoBinding] Applying', edits.length, 'edits to Monaco');
-          // Apply all edits as a single operation
-          this.model.pushEditOperations(selections, edits, () => selections);
+        // Restore selections if available
+        if (selections) {
+          this.editor.setSelections(selections);
         }
       } catch (error) {
         console.error('[MonacoBinding] Error applying remote changes:', error);

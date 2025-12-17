@@ -329,7 +329,7 @@ app.get('/projects/:projectId/members', validateProjectId, asyncHandler(async (r
 app.get('/projects/:projectId/invitations', validateProjectId, asyncHandler(async (req, res) => {
   // Add project_id to query params and proxy will forward all query params
   req.query.project_id = req.params.projectId;
-  await proxyToFastAPI(req, res, `/api/v1/project-invitations`);
+  await proxyToFastAPI(req, res, `/api/v1/project-invitations/`);
 }));
 
 app.delete('/api/projects/:projectId', validateProjectId, asyncHandler(async (req, res) => {

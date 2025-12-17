@@ -34,14 +34,17 @@ export const getProjectMembers = async (projectId: string): Promise<ProjectMembe
 /**
  * Create a new project member
  */
-export const createProjectMember = async (memberData: {
-  project_id: string;
-  user_id: string;
-  role_id: string;
-  invited_by?: string;
-}): Promise<ProjectMember> => {
+export const createProjectMember = async (
+  memberData: {
+    project_id: string;
+    user_id: string;
+    role_id: string;
+    invited_by?: string;
+  },
+  actorId: string
+): Promise<ProjectMember> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/`, {
+    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/?actor_id=${actorId}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

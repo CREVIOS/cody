@@ -94,7 +94,7 @@ export default function ProjectCreateModal({
         // invited_by is null for owner as mentioned in the requirements
       };
 
-      await createProjectMember(memberData);
+      await createProjectMember(memberData, activeUserId);
 
       // Reset form
       setProjectName("");

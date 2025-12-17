@@ -106,7 +106,7 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
         expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
       };
   
-      const url = `${API_BASE_URL}/api/v1/project-invitations`;
+      const url = `${API_BASE_URL}/api/v1/project-invitations/`;
       
       console.log('Create invitation API call:', {
         url,

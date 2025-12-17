@@ -8,7 +8,7 @@ import { User } from "@/lib/projectAPI/TypeDefinitions";
 import { usePermissions } from '@/hooks/usePermissions';
 import { useFileLock } from '@/hooks/useFileLock';
 import { useCommandManager } from '@/hooks/useCommandManager';
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '@/lib/projectAPI/APIConfiguration';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -170,8 +170,10 @@ export function FileEditorContent({
       setRealtimeKeyLoading(true);
       setRealtimeKeyError(null);
       try {
+        // Prefer relative URL to leverage Next.js rewrites and avoid hardcoded hosts
+        const base = API_BASE_URL || '';
         const response = await fetch(
-          `${API_BASE_URL}/api/v1/files/${encodeURIComponent(selectedFile.path)}/realtime-key?user_id=${encodeURIComponent(user.user_id)}&project_id=${encodeURIComponent(projectId)}`
+          `${base}/api/v1/files/${encodeURIComponent(selectedFile.path)}/realtime-key?user_id=${encodeURIComponent(user.user_id)}&project_id=${encodeURIComponent(projectId)}`
         );
         
         if (!response.ok) {

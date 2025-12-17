@@ -7,7 +7,9 @@
  * - Listing file versions
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000/api/v1";
+import { API_BASE_URL } from "./APIConfiguration";
+
+const BASE_URL = `${API_BASE_URL.replace(/\/+$/, "")}/api/v1`;
 
 export interface FileVersionResponse {
   fileId: string;
@@ -148,4 +150,3 @@ export async function listFileVersions(
     throw error;
   }
 }
-

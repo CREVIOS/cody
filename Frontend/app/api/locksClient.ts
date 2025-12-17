@@ -1,3 +1,5 @@
+import { API_BASE_URL } from "@/lib/projectAPI/APIConfiguration";
+
 // src/api/locksClient.ts
 export type Role = "owner" | "editor" | "viewer" | "admin";
 
@@ -18,9 +20,7 @@ export type LockState =
       queue_size?: number;
     };
 
-export const BASE =
-  (process.env.NEXT_PUBLIC_API_BASE?.replace(/\/+$/, "") as string | undefined) ||
-  "http://localhost:8000/api/v1";
+export const BASE = `${API_BASE_URL.replace(/\/+$/, "")}/api/v1`;
 
 function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
