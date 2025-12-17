@@ -76,6 +76,31 @@ export class MonacoBinding extends EventTarget {
   }
 
   /**
+   * Mark document as corrupted and notify listeners once
+   */
+  private _markCorrupted(reason: { message: string; size: number }) {
+    if (this._isCorrupted) return;
+    this._isCorrupted = true;
+    this.dispatchEvent(
+      new CustomEvent('corruption-detected', {
+        detail: reason,
+      })
+    );
+
+    // Best‑effort cleanup to keep editor/Yjs in a safe state
+    try {
+      this.yText.delete(0, this.yText.length);
+    } catch {
+      // ignore
+    }
+    try {
+      this.model.setValue('');
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Initialize Monaco with existing Yjs content
    */
   private _initializeContent() {
@@ -181,7 +206,24 @@ export class MonacoBinding extends EventTarget {
         return;
       }
 
+      // Predict resulting length to catch runaway loops early
+      const currentLength = this.yText.length;
+      let predictedLength = currentLength;
+      for (const change of event.changes) {
+        predictedLength -= change.rangeLength;
+        predictedLength += change.text.length;
+      }
+      const MAX_DOC_LENGTH = 10 * 1024 * 1024; // 10MB
+      if (predictedLength > MAX_DOC_LENGTH) {
+        console.error('[MonacoBinding] Predicted document too large from local edit:', predictedLength);
+        this._markCorrupted({ message: 'Local edit would exceed size limit', size: predictedLength });
+        return;
+      }
+
       try {
+        // Log local changes for debugging
+        console.log('[MonacoBinding] Sending local changes to Yjs:', event.changes.length, 'changes');
+        
         // Use 'this' as origin to mark these changes as coming from Monaco
         // The Yjs observer will skip changes where origin === this
         // This prevents feedback loops (Monaco -> Yjs -> Monaco)
@@ -214,6 +256,8 @@ export class MonacoBinding extends EventTarget {
             }
           }
         }, this); // Use 'this' as origin so Yjs observer can skip these changes
+        
+        console.log('[MonacoBinding] Local changes applied to Yjs, doc length:', this.yText.length);
       } catch (error) {
         console.error('[MonacoBinding] Error applying Monaco changes to Yjs:', error);
       }
@@ -222,6 +266,9 @@ export class MonacoBinding extends EventTarget {
 
   /**
    * Yjs operations → Monaco changes
+   *
+   * This handles REMOTE changes from other users coming through WebSocket.
+   * We apply these changes to Monaco so they appear in the editor.
    */
   private _setupYjsToMonaco() {
     this._textObserver = (event: Y.YTextEvent, transaction: Y.Transaction) => {
@@ -230,20 +277,84 @@ export class MonacoBinding extends EventTarget {
         return;
       }
 
-      // CRITICAL: Skip ALL changes that originated from this binding
-      // This is the PRIMARY guard to prevent feedback loops
+      // Guard against oversized remote payloads (can happen with corrupted IndexedDB or bad peers)
+      const MAX_DOC_LENGTH = 10 * 1024 * 1024; // 10MB
+      if (this.yText.length > MAX_DOC_LENGTH) {
+        console.error('[MonacoBinding] Yjs document exceeded limit during observe:', this.yText.length);
+        this._markCorrupted({
+          message: 'Document exceeded size limit during observe',
+          size: this.yText.length,
+        });
+        return;
+      }
+
+      // Skip changes that originated from THIS MonacoBinding (local user edits)
+      // These are already in Monaco, no need to apply them again
       if (transaction.origin === this) {
         return;
       }
 
-      // CRITICAL: Skip ALL changes - we don't want Yjs changes to go back to Monaco
-      // The only changes that should be in Yjs are from Monaco (which we skip above)
-      // All other changes (WebSocket, server, etc.) should NOT be applied to Monaco
-      // to prevent echo loops and double-typing
-      // 
-      // DISABLED: Yjs→Monaco sync to prevent all feedback loops
-      // Only Monaco→Yjs sync is active (one-way only)
-      return;
+      // Skip if we're already applying changes (prevent recursion)
+      if (this._muxCounter > 0) {
+        return;
+      }
+
+      // Apply REMOTE changes (from WebSocket/other users) to Monaco
+      // This is what enables collaboration - seeing other users' edits!
+      try {
+        this._muxCounter++;
+
+        // Save current cursor/selection to restore after applying changes
+        const selections = this.editor.getSelections();
+
+        // Apply each delta from Yjs to Monaco
+        const edits: Monaco.editor.IIdentifiedSingleEditOperation[] = [];
+        let currentOffset = 0;
+
+        // Log remote changes for debugging
+        console.log('[MonacoBinding] Applying remote changes:', event.delta.length, 'deltas');
+
+        for (const delta of event.delta) {
+          if (delta.retain !== undefined) {
+            currentOffset += delta.retain;
+          } else if (delta.insert !== undefined) {
+            const insertText = typeof delta.insert === 'string' ? delta.insert : '';
+            const position = this.model.getPositionAt(currentOffset);
+            edits.push({
+              range: {
+                startLineNumber: position.lineNumber,
+                startColumn: position.column,
+                endLineNumber: position.lineNumber,
+                endColumn: position.column,
+              },
+              text: insertText,
+            });
+            currentOffset += insertText.length;
+          } else if (delta.delete !== undefined) {
+            const startPosition = this.model.getPositionAt(currentOffset);
+            const endPosition = this.model.getPositionAt(currentOffset + delta.delete);
+            edits.push({
+              range: {
+                startLineNumber: startPosition.lineNumber,
+                startColumn: startPosition.column,
+                endLineNumber: endPosition.lineNumber,
+                endColumn: endPosition.column,
+              },
+              text: '',
+            });
+          }
+        }
+
+        if (edits.length > 0) {
+          console.log('[MonacoBinding] Applying', edits.length, 'edits to Monaco');
+          // Apply all edits as a single operation
+          this.model.pushEditOperations(selections, edits, () => selections);
+        }
+      } catch (error) {
+        console.error('[MonacoBinding] Error applying remote changes:', error);
+      } finally {
+        this._muxCounter--;
+      }
     };
 
     this.yText.observe(this._textObserver);

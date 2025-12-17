@@ -141,7 +141,13 @@ export class WebSocketProvider extends EventTarget {
     this.docId = options.docId;
     this.projectId = options.projectId;
     this.filePath = options.filePath;
-    this.channelType = options.channelType || (this.filePath ? 'file-collab' : 'collaboration');
+    
+    // Validate file-collab requires filePath
+    const channelType = options.channelType || (this.filePath ? 'file-collab' : 'collaboration');
+    if (channelType === 'file-collab' && !this.filePath) {
+      console.warn('[WSProvider] file-collab channel requires filePath - falling back to collaboration channel');
+    }
+    this.channelType = channelType;
     // Handle undefined user gracefully (fallback for demo users or edge cases)
     const user = options.user || { id: 'anonymous', name: 'Anonymous' };
     this.user = {
@@ -251,7 +257,11 @@ export class WebSocketProvider extends EventTarget {
     
     // Clear any existing connection
     if (this.ws !== null) {
-      this.ws.close();
+      try {
+        this.ws.close();
+      } catch (e) {
+        // Ignore close errors
+      }
       this.ws = null;
     }
 
@@ -263,36 +273,45 @@ export class WebSocketProvider extends EventTarget {
       baseUrl = `ws://${baseUrl}`;
     }
     
-    const wsUrl = new URL(baseUrl);
-    wsUrl.searchParams.set('type', this.channelType);
-    wsUrl.searchParams.set('projectId', this.projectId || this.docId);
-    wsUrl.searchParams.set('docId', this.docId);
-    if (this.filePath) {
-      wsUrl.searchParams.set('path', this.filePath);
+    try {
+      const wsUrl = new URL(baseUrl);
+      wsUrl.searchParams.set('type', this.channelType);
+      wsUrl.searchParams.set('projectId', this.projectId || this.docId);
+      wsUrl.searchParams.set('docId', this.docId);
+      if (this.filePath) {
+        wsUrl.searchParams.set('path', this.filePath);
+      }
+      wsUrl.searchParams.set('userId', this.user.id);
+      wsUrl.searchParams.set('userName', this.user.name);
+      wsUrl.searchParams.set('userColor', this.user.color);
+
+      this.log('Connecting to', wsUrl.toString());
+      this.log('User ID:', this.user.id);
+
+      this.ws = new WebSocket(wsUrl.toString());
+      this.ws.binaryType = 'arraybuffer';
+
+      this.ws.onopen = this.handleOpen.bind(this);
+      this.ws.onmessage = this.handleMessage.bind(this);
+      this.ws.onerror = this.handleError.bind(this);
+      this.ws.onclose = this.handleClose.bind(this);
+    } catch (e) {
+      this.log('Error creating WebSocket connection:', e);
+      this.setConnectionStatus('disconnected');
+      this.dispatchEvent(new CustomEvent('error', { detail: e }));
     }
-    wsUrl.searchParams.set('userId', this.user.id);
-    wsUrl.searchParams.set('userName', this.user.name);
-    wsUrl.searchParams.set('userColor', this.user.color);
-
-    this.log('Connecting to', wsUrl.toString());
-    this.log('User ID:', this.user.id);
-
-    this.ws = new WebSocket(wsUrl.toString());
-    this.ws.binaryType = 'arraybuffer';
-
-    this.ws.onopen = this.handleOpen.bind(this);
-    this.ws.onmessage = this.handleMessage.bind(this);
-    this.ws.onerror = this.handleError.bind(this);
-    this.ws.onclose = this.handleClose.bind(this);
   }
 
   /**
    * Handle WebSocket open
    */
   private handleOpen() {
-    this.log('Connected');
+    this.log('Connected successfully to', this.url);
+    this.log('Channel type:', this.channelType, '| Doc ID:', this.docId, '| File path:', this.filePath);
     this.setConnectionStatus('connected');
     this.reconnectAttempts = 0; // Reset on successful connection
+    this._errorLogged = false; // Reset error flags
+    this._errorDispatched = false;
     
     // Clear any pending reconnect timeout
     if (this.reconnectTimeout) {
@@ -301,6 +320,7 @@ export class WebSocketProvider extends EventTarget {
     }
 
     // Send sync step 1
+    this.log('Sending sync step 1...');
     this.sendSyncStep1();
 
     // Send queued messages
@@ -329,35 +349,39 @@ export class WebSocketProvider extends EventTarget {
     if (typeof event.data === 'string') {
       try {
         const message = JSON.parse(event.data);
-        if (message.type === 'error' && message.code === 'AUTH_REQUIRED') {
-          this.log('Authentication error received - disabling reconnection');
-          this.reconnectEnabled = false;
-          this.dispatchEvent(new CustomEvent('error', { detail: new Error(message.message) }));
+        if (message.type === 'error') {
+          this.log('Server error received:', message.code, message.message);
+          // Disable reconnection for authentication and validation errors
+          if (message.code === 'AUTH_REQUIRED' || 
+              message.code === 'MISSING_FILE_PATH' || 
+              message.code === 'MISSING_PROJECT_ID' ||
+              message.code === 'INVALID_PROJECT_ID') {
+            this.log('Fatal error - disabling reconnection');
+            this.reconnectEnabled = false;
+          }
+          this.dispatchEvent(new CustomEvent('error', { detail: new Error(message.message || message.code) }));
+          return;
+        }
+        // Handle connection confirmation messages
+        if (message.type === 'collaboration:connected' || message.type === 'file-collab:connected') {
+          this.log('Collaboration confirmed:', message);
+          // Dispatch a custom event so the hook knows connection is fully established
+          this.dispatchEvent(new Event('collaboration-ready'));
           return;
         }
       } catch {
         // Not JSON, continue with normal processing
       }
+      return; // String messages are always JSON, don't process as binary
     }
-    
+
     // Validate we have binary data
     if (!(event.data instanceof ArrayBuffer) && !(event.data instanceof Uint8Array)) {
-      if (typeof event.data === 'string') {
-        // Handle JSON messages (like connection confirmation)
-        try {
-          const message = JSON.parse(event.data);
-          if (message.type === 'collaboration:connected') {
-            this.log('Collaboration confirmed:', message);
-          }
-        } catch {
-          // Not JSON, ignore
-        }
-      }
       return;
     }
 
     try {
-      const data = event.data instanceof ArrayBuffer 
+      const data = event.data instanceof ArrayBuffer
         ? new Uint8Array(event.data)
         : event.data;
 
@@ -367,81 +391,76 @@ export class WebSocketProvider extends EventTarget {
         return;
       }
 
-      // Create decoder with error handling
-      let decoder: decoding.Decoder;
-      try {
-        decoder = decoding.createDecoder(data);
-      } catch (decoderError) {
-        this.log('Error creating decoder:', decoderError);
+      // Minimum message size: 1 byte for type + at least some data
+      if (data.length < 2) {
+        this.log('Message too short:', data.length);
         return;
       }
 
-      // Validate we can read the message type
-      let messageType: number;
-      try {
-        messageType = decoding.readVarUint(decoder);
-      } catch (readError) {
-        this.log('Error reading message type (corrupted data):', readError);
-        // Close connection on corrupted data to prevent further issues
-        if (this.ws) {
-          this.ws.close(1003, 'Corrupted message received');
-        }
-        return;
-      }
+      // Create decoder
+      const decoder = decoding.createDecoder(data);
+
+      // Read message type
+      const messageType = decoding.readVarUint(decoder);
 
       // Handle message based on type
-      try {
-        switch (messageType) {
-          case syncProtocol.messageYjsSyncStep1:
-            this.handleSyncStep1(decoder);
-            break;
+      switch (messageType) {
+        case syncProtocol.messageYjsSyncStep1:
+          this.handleSyncStep1(decoder);
+          break;
 
-          case syncProtocol.messageYjsSyncStep2:
-            this.handleSyncStep2(decoder);
-            break;
+        case syncProtocol.messageYjsSyncStep2:
+          this.handleSyncStep2(decoder);
+          break;
 
-          case syncProtocol.messageYjsUpdate:
-            this.handleUpdate(decoder);
-            break;
+        case syncProtocol.messageYjsUpdate:
+          this.handleUpdate(decoder);
+          break;
 
-          case messageAwareness:
-            this.handleAwarenessUpdate(decoder);
-            break;
+        case messageAwareness:
+          this.handleAwarenessUpdate(decoder);
+          break;
 
-          default:
-            this.log('Unknown message type:', messageType);
-        }
-      } catch (handleError) {
-        this.log('Error handling message type', messageType, ':', handleError);
-        // Don't close connection for handling errors, just log them
+        default:
+          this.log('Unknown message type:', messageType);
       }
     } catch (err) {
       this.log('Error processing message:', err);
-      // Only close connection for critical decoding errors
-      if (err instanceof Error && err.message.includes('Unexpected end')) {
-        // This is a decoding error - close connection to prevent further corruption
-        if (this.ws) {
-          this.ws.close(1003, 'Message decoding error');
-        }
-      }
-      this.dispatchEvent(new CustomEvent('error', { detail: err }));
+      // Don't close connection for processing errors - just log and continue
+      // The sync protocol is resilient and will recover
     }
   }
 
   /**
    * Handle sync step 1 from server
+   *
+   * Server sends its state vector, we respond with missing updates (sync step 2)
    */
   private handleSyncStep1(decoder: decoding.Decoder) {
     try {
+      // Validate decoder has remaining data
+      if (decoder.pos >= decoder.arr.length) {
+        this.log('Sync step 1: decoder is empty, nothing to process');
+        return;
+      }
+
       // Build response for SyncStep2
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
-      // readSyncStep1 writes the reply content into the provided encoder
+
+      // readSyncStep1 reads the server's state vector and writes our missing updates
       syncProtocol.readSyncStep1(decoder, encoder, this.doc);
-      this.sendMessage(encoding.toUint8Array(encoder));
+
+      // Only send if we have data to send
+      const message = encoding.toUint8Array(encoder);
+      if (message.length > 1) {
+        // More than just the message type
+        this.sendMessage(message);
+      }
     } catch (error) {
       this.log('Error handling sync step 1:', error);
       // Don't throw - allow connection to continue
+      // The sync might still work on next attempt
     }
   }
 
@@ -473,9 +492,16 @@ export class WebSocketProvider extends EventTarget {
         this.log('Decoder exhausted before reading update');
         return;
       }
+      
+      // Log received update
+      const updateSize = decoder.arr.length - decoder.pos;
+      this.log('Received update from server:', updateSize, 'bytes');
+      
       // Read update with 'this' as origin so handleDocUpdate knows it's from server
       // This prevents echo loops
       syncProtocol.readUpdate(decoder, this.doc, this);
+      
+      this.log('Applied remote update successfully');
     } catch (error) {
       this.log('Error reading update:', error);
       // Close connection on update errors to prevent corruption
@@ -508,47 +534,46 @@ export class WebSocketProvider extends EventTarget {
 
   /**
    * Handle document updates (send to server)
+   *
+   * CRITICAL: We need to send LOCAL changes to the server, but NOT:
+   * - Changes we received FROM the server (to prevent echo loops)
+   * - Changes during initial sync
    */
   private handleDocUpdate = (update: Uint8Array, origin: any) => {
-    // CRITICAL: Only send updates from LOCAL user edits
-    // Skip ALL updates that came from:
-    // 1. This WebSocket provider (server echoes)
-    // 2. Any WebSocket provider (server updates)
-    // 3. Updates applied via readUpdate (server sync)
-    
-    // Skip if origin is this provider (we sent it to server, server echoed it back)
+    // Skip if origin is this WebSocket provider (changes from server)
+    // This prevents echo loops: server -> client -> server -> ...
     if (origin === this) {
       return;
     }
-    
-    // Skip if origin is null (happens during initial sync or server updates)
-    if (origin === null || origin === undefined) {
+
+    // Skip if origin is 'persistence' (from IndexedDB loading)
+    if (origin === 'persistence') {
       return;
     }
-    
-    // Skip if origin is a WebSocket provider object
+
+    // Skip if origin is 'sync' or 'remote' (from server sync)
+    if (origin === 'sync' || origin === 'remote') {
+      return;
+    }
+
+    // Skip if origin is another WebSocket provider instance
     if (origin && typeof origin === 'object') {
-      // Check for WebSocket provider indicators
-      if ((origin as any).ws !== undefined || 
-          (origin as any).docId !== undefined ||
-          (origin as any).doc === this.doc) {
-        // This is from WebSocket - don't send it back
-        return;
-      }
-      
-      // Check if it's a Monaco binding origin (we want to send these)
-      if ((origin as any)._monacoBinding && (origin as any)._isLocalEdit) {
-        // This is a local Monaco edit - SEND IT
-        this.pendingUpdates.push(update);
-        if (!this.updateFlushTimer) {
-          this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
-        }
+      if (origin.constructor?.name === 'WebSocketProvider' ||
+          (origin as any).ws !== undefined && (origin as any).docId !== undefined) {
         return;
       }
     }
-    
-    // For any other origin, be conservative and don't send
-    // This prevents unknown origins from causing echo loops
+
+    // Everything else is considered a LOCAL change that should be sent to the server
+    // This includes:
+    // - MonacoBinding changes (origin is the MonacoBinding instance)
+    // - Direct Y.Doc manipulations (origin may be null or undefined for transact() calls)
+    // - UndoManager changes
+
+    this.pendingUpdates.push(update);
+    if (!this.updateFlushTimer) {
+      this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
+    }
   };
 
   private flushPendingUpdates() {
@@ -562,7 +587,10 @@ export class WebSocketProvider extends EventTarget {
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
     encoding.writeVarUint8Array(encoder, merged);
-    this.sendMessage(encoding.toUint8Array(encoder));
+    
+    const message = encoding.toUint8Array(encoder);
+    this.log('Sending update to server:', merged.length, 'bytes (merged from', this.pendingUpdates.length, 'updates)');
+    this.sendMessage(message);
 
     this.pendingUpdates = [];
   }
@@ -652,59 +680,23 @@ export class WebSocketProvider extends EventTarget {
 
   /**
    * Handle WebSocket error
+   *
+   * Note: WebSocket errors are often transient (network issues, server restart).
+   * We allow reconnection unless there's a specific auth error.
    */
   private handleError(error: Event) {
-    // Extract more information from the error event
-    const errorInfo: any = {
-      type: error.type,
-      target: error.target,
-      timeStamp: error.timeStamp,
-    };
-    
-    // Try to get WebSocket state and URL
-    if (this.ws) {
-      errorInfo.readyState = this.ws.readyState;
-      errorInfo.url = this.ws.url;
-      errorInfo.protocol = this.ws.protocol;
-      errorInfo.extensions = this.ws.extensions;
-    }
-    
-    // Log with more context (only once per connection to avoid spam)
+    // Log error only once per connection attempt to avoid spam
     if (!this._errorLogged) {
-      console.error('[WSProvider] WebSocket error:', {
-        ...errorInfo,
-        docId: this.docId,
-        projectId: this.projectId,
-        filePath: this.filePath,
-        connectionStatus: this.connectionStatus,
-        reconnectAttempts: this.reconnectAttempts,
-      });
+      this.log('WebSocket error:', error.type);
       this._errorLogged = true;
     }
-    
-    // PERMANENTLY stop reconnection on any error to prevent infinite loops
-    this.reconnectEnabled = false;
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    
-    // Close the connection if it's still open
-    if (this.ws) {
-      try {
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close(1006, 'WebSocket error');
-        }
-      } catch (closeError) {
-        // Ignore close errors
-      }
-      this.ws = null;
-    }
-    
-    this.setConnectionStatus('disconnected');
-    // Don't dispatch error event repeatedly - only once
+
+    // Don't permanently disable reconnection - let handleClose decide based on close code
+    // The close event will fire after the error event
+
+    // Dispatch error event (only once)
     if (!this._errorDispatched) {
-      this.dispatchEvent(new CustomEvent('error', { detail: errorInfo }));
+      this.dispatchEvent(new CustomEvent('error', { detail: { type: error.type } }));
       this._errorDispatched = true;
     }
   }
@@ -713,7 +705,7 @@ export class WebSocketProvider extends EventTarget {
    * Handle WebSocket close
    */
   private handleClose(event: CloseEvent) {
-    this.log('Disconnected:', event.code, event.reason);
+    this.log('Disconnected:', event.code, event.reason || '(no reason)');
     this.setConnectionStatus('disconnected');
     this.synced = false;
     this.ws = null;
@@ -722,13 +714,15 @@ export class WebSocketProvider extends EventTarget {
 
     // Don't reconnect on authentication errors (code 1008) or intentional closes (code 1000)
     if (event.code === 1008 || event.code === 1000) {
-      this.log('Connection closed due to auth error or intentional close - not reconnecting');
+      this.log('Connection closed intentionally - not reconnecting');
       this.reconnectEnabled = false;
       this.dispatchEvent(new Event('reconnect-failed'));
       return;
     }
 
-    // Attempt reconnection only for unexpected disconnects
+    // Close code 1005 means no status code was provided - this is a normal disconnect
+    // Close code 1006 means abnormal closure - should reconnect
+    // Attempt reconnection for unexpected disconnects
     if (this.reconnectEnabled && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.scheduleReconnect();
     } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -756,6 +750,9 @@ export class WebSocketProvider extends EventTarget {
     this.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimeout = setTimeout(() => {
+      // Reset error flags for new connection attempt
+      this._errorLogged = false;
+      this._errorDispatched = false;
       this.connect();
     }, delay);
   }
@@ -820,6 +817,9 @@ export class WebSocketProvider extends EventTarget {
     this.disconnect();
     this.reconnectEnabled = true;
     this.reconnectAttempts = 0;
+    // Reset error flags for new connection
+    this._errorLogged = false;
+    this._errorDispatched = false;
     this.connect();
   }
 

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useRef, useEff
 import { FileSystemItem, FileSystemContextType, SearchResult } from '@/types/fileSystem';
 import { ProjectPersistenceService, ProjectSession } from '@/lib/projectPersistence';
 import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand, SaveFileCommand, CreateFileCommand, CreateFolderCommand, DuplicateFileCommand } from '@/lib/commands';
+import { useAuth } from './AuthContext';
 
 const FileSystemContext = createContext<FileSystemContextType | undefined>(undefined);
 
@@ -22,6 +23,7 @@ interface FileSystemProviderProps {
 }
 
 export function FileSystemProvider({ children, projectId, projectName = '' }: FileSystemProviderProps) {
+  const { userId, user } = useAuth();
   const [fileTree, setFileTree] = useState<FileSystemItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileSystemItem | null>(null);
   const [openFiles, setOpenFiles] = useState<Map<string, { item: FileSystemItem; content: string; savedContent: string; isDirty: boolean; isSaving?: boolean }>>(new Map());
@@ -144,18 +146,29 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   // Project-level watcher WebSocket: listen for file change broadcasts
   useEffect(() => {
     if (!projectId) return;
+    // Don't connect if user is not authenticated
+    if (!userId) {
+      console.warn('[FileSystem] Skipping watcher WebSocket - user not authenticated');
+      return;
+    }
 
     try {
       const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
       const url = new URL(wsBase);
       url.searchParams.set('type', 'watcher');
       url.searchParams.set('projectId', projectId);
+      url.searchParams.set('userId', userId);
+      // Include user name if available for better debugging
+      if (user?.email) {
+        url.searchParams.set('userName', user.email.split('@')[0]);
+      }
 
       const ws = new WebSocket(url.toString());
       watcherWsRef.current = ws;
 
       ws.onopen = () => {
         // Connected to watcher channel
+        console.log('[FileSystem] Watcher WebSocket connected');
       };
 
       ws.onmessage = (event) => {
@@ -196,7 +209,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     } catch (e) {
       console.warn('Watcher WebSocket setup failed:', e);
     }
-  }, [projectId, handleExternalChanges]);
+  }, [projectId, userId, user?.email, handleExternalChanges]);
 
   const saveProjectState = useCallback(() => {
     if (projectId) {

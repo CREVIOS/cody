@@ -620,9 +620,12 @@ export function FileEditorContent({
           realtimeKey
             ? {
                 enabled: true,
+                // Use consistent docId format that matches server expectations
                 docId: `file:${realtimeKey.projectId}:${realtimeKey.fileId}`,
                 projectId: realtimeKey.projectId,
-                filePath: realtimeKey.fileId,
+                // CRITICAL: Use the actual file path for WebSocket connection, not the fileId UUID
+                // The server expects the real file path for file-collab connections
+                filePath: selectedFile.path,
                 user: {
                   id: user?.id || user?.user_id || '',
                   name: user?.username || user?.email || 'User',

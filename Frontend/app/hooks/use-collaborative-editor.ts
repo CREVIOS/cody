@@ -170,6 +170,21 @@ export function useCollaborativeEditor(
   const monacoBindingRef = useRef<MonacoBinding | null>(null);
   const undoManagerRef = useRef<CollaborativeUndoManager | null>(null);
   const currentDocIdRef = useRef<string | null>(null);
+  const initialContentAppliedRef = useRef<boolean>(false);
+  
+  // Guards against infinite initialization loops
+  const initializingRef = useRef<boolean>(false);
+  const lastInitTimeRef = useRef<number>(0);
+  const initAttemptCountRef = useRef<number>(0);
+  const connectionSuccessfulRef = useRef<boolean>(false);
+  const maxInitAttempts = 5; // Maximum initialization attempts before giving up
+  const minInitIntervalMs = 2000; // Minimum time between initialization attempts
+  
+  // Memoize initialContent to prevent re-renders when content reference changes but value is same
+  const initialContentRef = useRef<string | undefined>(options.initialContent);
+  if (options.initialContent !== undefined) {
+    initialContentRef.current = options.initialContent;
+  }
 
   // State
   const [state, setState] = useState<CollaborativeEditorState>({
@@ -196,15 +211,81 @@ export function useCollaborativeEditor(
     }
 
     const editor = options.editor;
-    const { docId, user, wsUrl, offlineSupport, logging, undoOptions, initialContent, projectId, filePath } = options;
+    const { docId, user, wsUrl, offlineSupport, logging, undoOptions, projectId, filePath } = options;
+    // Use ref for initialContent to avoid dependency-triggered re-runs
+    const initialContent = initialContentRef.current;
     
     // Check if we already have a provider for this docId - prevent duplicate initialization
     if (wsProviderRef.current && currentDocIdRef.current === docId) {
+      // Also check if the connection is still active or connecting
+      const currentStatus = wsProviderRef.current.getStatus();
+      if (currentStatus === 'connected' || currentStatus === 'connecting' || currentStatus === 'reconnecting') {
+        if (logging) {
+          console.log('[Collaboration] Provider already exists and active for docId:', docId, '- status:', currentStatus, '- skipping reinit');
+        }
+        return;
+      }
       if (logging) {
-        console.log('[Collaboration] Provider already exists for docId:', docId, '- skipping reinit');
+        console.log('[Collaboration] Provider exists but disconnected for docId:', docId, '- allowing reinit');
+      }
+    }
+    
+    // Guard against initialization while already initializing
+    if (initializingRef.current) {
+      if (logging) {
+        console.log('[Collaboration] Already initializing, skipping duplicate init');
       }
       return;
     }
+    
+    // Additional guard: if we have a wsProvider that's connecting, don't re-init
+    if (wsProviderRef.current) {
+      const currentStatus = wsProviderRef.current.getStatus();
+      if (currentStatus === 'connecting') {
+        if (logging) {
+          console.log('[Collaboration] Connection in progress, skipping re-init');
+        }
+        return;
+      }
+    }
+    
+    // Guard against rapid re-initialization (debounce)
+    const now = Date.now();
+    if (now - lastInitTimeRef.current < minInitIntervalMs && currentDocIdRef.current === docId) {
+      if (logging) {
+        console.log('[Collaboration] Too soon since last init, skipping');
+      }
+      return;
+    }
+    
+    // Guard against too many init attempts for the same docId
+    // Only count as an attempt if the previous attempt didn't succeed
+    if (currentDocIdRef.current === docId && !connectionSuccessfulRef.current) {
+      initAttemptCountRef.current++;
+      if (initAttemptCountRef.current > maxInitAttempts) {
+        console.error('[Collaboration] Max init attempts reached for docId:', docId, '- giving up');
+        setState(prev => ({ 
+          ...prev, 
+          error: new Error('Failed to establish connection after multiple attempts'),
+          status: 'disconnected'
+        }));
+        initializingRef.current = false;
+        return;
+      }
+    } else if (currentDocIdRef.current !== docId) {
+      // Reset attempt counter and success flag for new docId
+      initAttemptCountRef.current = 1;
+      connectionSuccessfulRef.current = false;
+    } else if (connectionSuccessfulRef.current) {
+      // Previous connection was successful, skip re-initialization
+      if (logging) {
+        console.log('[Collaboration] Previous connection successful, skipping re-init for docId:', docId);
+      }
+      return;
+    }
+    
+    initializingRef.current = true;
+    lastInitTimeRef.current = now;
     
     // Update current docId
     currentDocIdRef.current = docId;
@@ -254,20 +335,9 @@ export function useCollaborativeEditor(
       console.log('[Collaboration] Initializing for docId:', docId);
     }
 
-    // Set initial content from backend if provided and Y.Doc is empty
-    // This ensures the latest version from MinIO is loaded into CRDT
-    if (initialContent !== undefined && initialContent !== null) {
-      const currentYText = yText.toString();
-      if (!currentYText || currentYText.length === 0) {
-        // Only set if Y.Doc is empty (to avoid overwriting synced content)
-        yText.insert(0, initialContent);
-        if (logging) {
-          console.log('[Collaboration] Loaded initial content into Y.Doc:', initialContent.length, 'chars');
-        }
-      } else if (logging) {
-        console.log('[Collaboration] Y.Doc already has content, skipping initial content load');
-      }
-    }
+    // Defer applying initialContent until after IndexedDB sync to avoid double-inserting
+    // (previous sessions may have persisted the same content already)
+    initialContentAppliedRef.current = false;
 
     // Setup IndexedDB persistence (if enabled)
     let indexedDBProvider: IndexedDBProvider | null = null;
@@ -296,11 +366,44 @@ export function useCollaborativeEditor(
         } catch (e) {
           console.error('[Collaboration] Error validating document after IndexedDB load:', e);
         }
+
+        // Apply initial content only if document is still empty after sync
+        if (!initialContentAppliedRef.current && (initialContent ?? null) !== null) {
+          try {
+            const current = yText.toString();
+            if (!current || current.length === 0) {
+              yText.insert(0, initialContent as string);
+              initialContentAppliedRef.current = true;
+              if (logging) {
+                console.log('[Collaboration] Loaded initial content post-IndexedDB sync:', (initialContent as string).length, 'chars');
+              }
+            } else if (logging) {
+              console.log('[Collaboration] Skipped initial content: document already had data after IndexedDB sync');
+            }
+          } catch (e) {
+            console.error('[Collaboration] Failed to apply initial content after sync:', e);
+          }
+        }
         setState((prev) => ({ ...prev, offlineReady: true }));
       }).catch((error) => {
         console.error('[Collaboration] Error loading from IndexedDB:', error);
         setState((prev) => ({ ...prev, offlineReady: true }));
       });
+    }
+    else {
+      // Offline persistence disabled — safe to apply initial content immediately
+      if (!initialContentAppliedRef.current && (initialContent ?? null) !== null) {
+        const currentYText = yText.toString();
+        if (!currentYText || currentYText.length === 0) {
+          yText.insert(0, initialContent as string);
+          initialContentAppliedRef.current = true;
+          if (logging) {
+            console.log('[Collaboration] Loaded initial content (no IndexedDB):', (initialContent as string).length, 'chars');
+          }
+        } else if (logging) {
+          console.log('[Collaboration] Skipped initial content (no IndexedDB): document already had data');
+        }
+      }
     }
 
     // Setup WebSocket provider
@@ -397,6 +500,23 @@ export function useCollaborativeEditor(
       const status = (event as CustomEvent).detail as ConnectionStatus;
       setState((prev) => ({ ...prev, status }));
       
+      // Mark connection as successful when connected - this prevents retry loops
+      if (status === 'connected') {
+        connectionSuccessfulRef.current = true;
+        initAttemptCountRef.current = 0; // Reset attempt counter on success
+        if (logging) {
+          console.log('[Collaboration] Connection established successfully for docId:', docId);
+        }
+      } else if (status === 'disconnected') {
+        // Only mark as failed if we weren't previously connected
+        // This handles the case where connection drops after being established
+        if (!connectionSuccessfulRef.current) {
+          if (logging) {
+            console.log('[Collaboration] Connection failed, attempts:', initAttemptCountRef.current);
+          }
+        }
+      }
+      
       // Phase 7: Dev-only logging
       if (logging && process.env.NODE_ENV === 'development') {
         console.log('[Phase 7] WebSocket status changed:', status);
@@ -429,6 +549,20 @@ export function useCollaborativeEditor(
     };
 
     wsProvider.addEventListener('error', handleError);
+    
+    // Listen to reconnect-failed (max retries exceeded in WebSocketProvider)
+    const handleReconnectFailed = () => {
+      if (logging) {
+        console.error('[Collaboration] WebSocket reconnection failed for docId:', docId);
+      }
+      setState((prev) => ({ 
+        ...prev, 
+        status: 'disconnected',
+        error: new Error('WebSocket reconnection failed after max retries')
+      }));
+    };
+
+    wsProvider.addEventListener('reconnect-failed', handleReconnectFailed);
 
     // Listen to awareness changes
     const handleAwarenessChange = () => {
@@ -449,15 +583,28 @@ export function useCollaborativeEditor(
 
     undoManager.on('state-change', handleUndoStateChange);
 
+    // Mark initialization as complete
+    initializingRef.current = false;
+    
+    if (logging) {
+      console.log('[Collaboration] Initialization complete for docId:', docId);
+    }
+
     // Cleanup
     return () => {
       if (logging) {
         console.log('[Collaboration] Cleaning up for docId:', docId);
       }
+      
+      // Reset initialization flag so we can re-initialize if needed
+      initializingRef.current = false;
+      // Reset connection success flag on cleanup so re-init can happen if needed
+      connectionSuccessfulRef.current = false;
 
       wsProvider.removeEventListener('status', handleStatus);
       wsProvider.removeEventListener('sync', handleSync);
       wsProvider.removeEventListener('error', handleError);
+      wsProvider.removeEventListener('reconnect-failed', handleReconnectFailed);
       wsProvider.awareness.off('change', handleAwarenessChange);
       undoManager.off('state-change', handleUndoStateChange);
       monacoBinding.removeEventListener('corruption-detected', handleCorruption as EventListener);
@@ -474,9 +621,13 @@ export function useCollaborativeEditor(
       indexedDBProviderRef.current = null;
       monacoBindingRef.current = null;
       undoManagerRef.current = null;
-      currentDocIdRef.current = null;
+      // NOTE: We intentionally do NOT reset currentDocIdRef.current here
+      // This allows the debounce/retry guards to work properly
+      // It will be updated when a new docId is provided
     };
-  }, [options.editor, options.docId, options.user?.id, options.wsUrl, options.offlineSupport, options.logging, options.initialContent]);
+  // Note: initialContent is accessed via ref to prevent re-initialization when content reference changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.editor, options.docId, options.user?.id, options.wsUrl, options.offlineSupport, options.logging]);
 
   // Actions
   const disconnect = useCallback(() => {
