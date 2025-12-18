@@ -611,7 +611,7 @@ export function FileEditorContent({
         isDark={isDark}
         roomName={projectId || 'default'}
         username={user?.username || 'User'}
-        userId={user?.id || user?.user_id || ''}
+        userId={user?.user_id || ''}
         docKey={selectedFile.path}
         forceReadOnly={false}
         lockState={null}
@@ -629,7 +629,7 @@ export function FileEditorContent({
                 // The server expects the real file path for file-collab connections
                 filePath: selectedFile.path,
                 user: {
-                  id: user?.id || user?.user_id || '',
+                  id: user?.user_id || '',
                   name: user?.username || user?.email || 'User',
                 },
                 wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',

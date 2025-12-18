@@ -1,6 +1,11 @@
-import { API_BASE_URL, fetchWithRetry, NetworkError } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
-import { ProjectInvitation, ProjectInvitationCreate, ProjectInvitationUpdate, ProjectInvitationWithDetails, PaginatedResponse } from "./TypeDefinitions";
+import { BaseAPITemplate, BaseAPITemplateSilentFail } from "./BaseAPITemplate";
+import {
+  PaginatedResponse,
+  ProjectInvitation,
+  ProjectInvitationCreate,
+  ProjectInvitationUpdate,
+  ProjectInvitationWithDetails,
+} from "./TypeDefinitions";
 import { findUserByEmail } from "./UserAPI";
 import { ProjectMember } from "./TypeDefinitions";
 
@@ -11,29 +16,37 @@ import { ProjectMember } from "./TypeDefinitions";
  * Returns invitations with full project, role, and inviter details
  */
 export const getPendingInvitationsByEmail = async (email: string): Promise<ProjectInvitationWithDetails[]> => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/project-invitations/by-email/${encodeURIComponent(email)}`
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
+  class GetPendingInvitationsByEmailCall extends BaseAPITemplate<ProjectInvitationWithDetails[]> {
+    constructor(private email: string) {
+      super();
+    }
+
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/project-invitations/by-email/${encodeURIComponent(this.email)}`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return { method: "GET" };
+    }
+
+    protected async parseResponse(response: Response): Promise<ProjectInvitationWithDetails[]> {
       const invitations: ProjectInvitationWithDetails[] = await response.json();
-      
+
       // Filter only pending invitations that haven't expired (server should already do this)
       const now = new Date();
-      return invitations.filter(inv => {
+      return invitations.filter((inv) => {
         const expiresAt = new Date(inv.expires_at);
-        return inv.status === 'pending' && expiresAt >= now;
+        return inv.status === "pending" && expiresAt >= now;
       });
-    } catch (error) {
-      console.error('Error fetching pending invitations:', error);
-      throw error;
     }
-  };
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error fetching pending invitations:", message);
+    }
+  }
+
+  return new GetPendingInvitationsByEmailCall(email).execute();
+};
   
   /**
    * Get all invitations for a specific project
@@ -45,35 +58,38 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
     skip: number = 0,
     limit: number = 100
   ): Promise<ProjectInvitation[]> => {
-    try {
-      const params = new URLSearchParams({
-        skip: skip.toString(),
-        limit: limit.toString()
-      });
-      
-      if (projectId) params.append('project_id', projectId);
-      if (status) params.append('status', status);
-      
-      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/project-invitations/?${params}`);
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class GetProjectInvitationsCall extends BaseAPITemplateSilentFail<ProjectInvitation[]> {
+      protected buildURL(): string {
+        const params = new URLSearchParams({
+          skip: skip.toString(),
+          limit: limit.toString(),
+        });
+
+        if (projectId) params.append("project_id", projectId);
+        if (status) params.append("status", status);
+
+        return `${this.getBaseURL()}/api/v1/project-invitations/?${params}`;
       }
-      
-      const data: PaginatedResponse<ProjectInvitation> = await response.json();
-      return data.items || [];
-    } catch (error) {
-      // Network errors are expected when backend is unavailable - handle silently
-      if (error instanceof NetworkError) {
-        // Only log at debug level to reduce console noise
-        console.debug('Backend unavailable, returning empty invitations list');
-      } else {
-        console.error('Error fetching project invitations:', error);
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
       }
-      // Return empty array instead of throwing to prevent UI breakage
-      return [];
+
+      protected async parseResponse(response: Response): Promise<ProjectInvitation[]> {
+        const data: PaginatedResponse<ProjectInvitation> = await response.json();
+        return data.items || [];
+      }
+
+      protected getFallbackValue(): ProjectInvitation[] {
+        return [];
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error fetching project invitations:", message);
+      }
     }
+
+    return new GetProjectInvitationsCall().execute();
   };
   
   /**
@@ -86,59 +102,62 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
     role_id: string;
     invited_by: string;
   }): Promise<ProjectInvitation> => {
-    try {
-      console.log('Creating invitation - input:', invitation);
-      
-      // First find the user by email
-      const user = await findUserByEmail(invitation.email);
-      if (!user) {
-        throw new Error(`No user found with email: ${invitation.email}`);
-      }
-      
-      // Prepare invitation data with user_id
-      const invitationData: ProjectInvitationCreate = {
-        project_id: invitation.project_id,
-        email: invitation.email,
-        role_id: invitation.role_id,
-        invited_by: invitation.invited_by,
-        user_id: user.user_id, // Include the user_id from found user
-        token: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-      };
-  
-      const url = `${API_BASE_URL}/api/v1/project-invitations/`;
-      
-      console.log('Create invitation API call:', {
-        url,
-        method: 'POST',
-        payload: invitationData
-      });
-  
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}` // Add token if you have auth
-        },
-        body: JSON.stringify(invitationData)
-      });
-      
-      console.log('Create invitation response:', {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok
-      });
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error creating invitation:', error);
-      throw error;
+    console.log("Creating invitation - input:", invitation);
+
+    // First find the user by email
+    const user = await findUserByEmail(invitation.email);
+    if (!user) {
+      throw new Error(`No user found with email: ${invitation.email}`);
     }
+
+    // Prepare invitation data with user_id
+    const invitationData: ProjectInvitationCreate = {
+      project_id: invitation.project_id,
+      email: invitation.email,
+      role_id: invitation.role_id,
+      invited_by: invitation.invited_by,
+      user_id: user.user_id, // Include the user_id from found user
+      token: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+
+    class CreateInvitationCall extends BaseAPITemplate<ProjectInvitation> {
+      protected buildURL(): string {
+        const url = `${this.getBaseURL()}/api/v1/project-invitations/`;
+        console.log("Create invitation API call:", {
+          url,
+          method: "POST",
+          payload: invitationData,
+        });
+        return url;
+      }
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Add token if you have auth
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: JSON.stringify(invitationData),
+        };
+      }
+
+      protected onSuccess(): void {
+        // Keep existing debug logging behavior
+        console.log("Create invitation succeeded");
+      }
+
+      protected async onError(message: string, response: Response): Promise<void> {
+        console.error("Error creating invitation:", message, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
+    }
+
+    return new CreateInvitationCall().execute();
   };
   
   /**
@@ -146,47 +165,38 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
    * Creates a project member and deletes the invitation
    */
   export const acceptInvitation = async (invitationId: string, userId: string): Promise<ProjectMember> => {
-    try {
-      const url = `${API_BASE_URL}/api/v1/project-invitations/${invitationId}/accept`;
-      const payload = { user_id: userId };
-      
-      console.log('Accept invitation API call:', {
-        url,
-        method: 'POST',
-        payload,
-        API_BASE_URL
-      });
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload)
-      });
-      
-      console.log('Accept invitation response:', {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok
-      });
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    const payload = { user_id: userId };
+
+    class AcceptInvitationCall extends BaseAPITemplate<ProjectMember> {
+      protected buildURL(): string {
+        const url = `${this.getBaseURL()}/api/v1/project-invitations/${invitationId}/accept`;
+        console.log("Accept invitation API call:", {
+          url,
+          method: "POST",
+          payload,
+        });
+        return url;
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error accepting invitation:', error);
-      
-      // Provide more specific error messages
-      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        throw new Error('Unable to connect to server. Please check if the backend is running and accessible.');
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        };
       }
-      
-      throw error;
+
+      protected async onError(message: string, response: Response): Promise<void> {
+        console.error("Error accepting invitation:", message, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
     }
+
+    return new AcceptInvitationCall().execute();
   };
   
   /**
@@ -194,27 +204,26 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
    * Updates the invitation status to 'declined'
    */
   export const declineInvitation = async (invitationId: string): Promise<ProjectInvitation> => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/project-invitations/${invitationId}/decline`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        }
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class DeclineInvitationCall extends BaseAPITemplate<ProjectInvitation> {
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/project-invitations/${invitationId}/decline`;
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error declining invitation:', error);
-      throw error;
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error declining invitation:", message);
+      }
     }
+
+    return new DeclineInvitationCall().execute();
   };
   
   /**
@@ -222,22 +231,25 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
    * Permanently removes the invitation from the database
    */
   export const deleteInvitation = async (invitationId: string): Promise<void> => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/project-invitations/${invitationId}`,
-        {
-          method: 'DELETE'
-        }
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class DeleteInvitationCall extends BaseAPITemplate<void> {
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/project-invitations/${invitationId}`;
       }
-    } catch (error) {
-      console.error('Error deleting invitation:', error);
-      throw error;
+
+      protected buildOptions(): RequestInit {
+        return { method: "DELETE" };
+      }
+
+      protected async parseResponse(): Promise<void> {
+        return;
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error deleting invitation:", message);
+      }
     }
+
+    return new DeleteInvitationCall().execute();
   };
   
   /**
@@ -245,21 +257,21 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
    * Used for invitation links
    */
   export const getInvitationByToken = async (token: string): Promise<ProjectInvitation> => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/project-invitations/token/${encodeURIComponent(token)}`
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class GetInvitationByTokenCall extends BaseAPITemplate<ProjectInvitation> {
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/project-invitations/token/${encodeURIComponent(token)}`;
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error fetching invitation by token:', error);
-      throw error;
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error fetching invitation by token:", message);
+      }
     }
+
+    return new GetInvitationByTokenCall().execute();
   };
   
   /**
@@ -270,27 +282,26 @@ export const getPendingInvitationsByEmail = async (email: string): Promise<Proje
     invitationId: string,
     update: ProjectInvitationUpdate
   ): Promise<ProjectInvitation> => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/project-invitations/${invitationId}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(update)
-        }
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class UpdateInvitationCall extends BaseAPITemplate<ProjectInvitation> {
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/project-invitations/${invitationId}`;
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error updating invitation:', error);
-      throw error;
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(update),
+        };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error updating invitation:", message);
+      }
     }
+
+    return new UpdateInvitationCall().execute();
   };
   

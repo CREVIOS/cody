@@ -35,7 +35,7 @@ export interface FileSystemContextType {
   projectName: string;
   fileTree: FileSystemItem[];
   selectedFile: FileSystemItem | null;
-  openFiles: Map<string, { item: FileSystemItem; content: string; isDirty: boolean }>;
+  openFiles: Map<string, { item: FileSystemItem; content: string; savedContent: string; isDirty: boolean; isSaving?: boolean }>;
   currentFileContent: string;
   isLoading: boolean;
   error: string | null;

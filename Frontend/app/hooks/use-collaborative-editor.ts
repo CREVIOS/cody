@@ -357,8 +357,10 @@ export function useCollaborativeEditor(
             yText.delete(0, yText.length);
             // Clear IndexedDB to prevent reloading corrupted data
             try {
-              await indexedDBProvider.clearData();
-              console.warn('[Collaboration] Cleared corrupted data from IndexedDB');
+              if (indexedDBProvider) {
+                await indexedDBProvider.clearData();
+                console.warn('[Collaboration] Cleared corrupted data from IndexedDB');
+              }
             } catch (clearError) {
               console.error('[Collaboration] Failed to clear IndexedDB:', clearError);
             }
@@ -434,58 +436,63 @@ export function useCollaborativeEditor(
 
     monacoBindingRef.current = monacoBinding;
     
-    // Handle corruption detection - destroy everything and recreate
-    const handleCorruption = async (event: CustomEvent) => {
-      // Prevent multiple corruption handlers from running
-      if (currentDocIdRef.current === null || currentDocIdRef.current !== docId) {
-        return; // Already handling corruption or docId changed
-      }
-      
-      // Log only once
-      if (!(handleCorruption as any)._logged) {
-        console.error('[Collaboration] Document corruption detected:', event.detail);
-        (handleCorruption as any)._logged = true;
-      }
-      
-      // Mark as corrupted to prevent re-initialization
-      const corruptedDocId = currentDocIdRef.current;
-      currentDocIdRef.current = null;
-      
-      // Destroy all providers and bindings
-      if (wsProviderRef.current) {
-        wsProviderRef.current.destroy();
-        wsProviderRef.current = null;
-      }
-      if (indexedDBProviderRef.current) {
-        try {
-          await indexedDBProviderRef.current.clearData();
-        } catch (e) {
-          console.error('[Collaboration] Failed to clear IndexedDB:', e);
+    // Handle corruption detection - destroy everything and recreate.
+    // Typed as a standard EventListener and dispatches an internal async task.
+    const handleCorruption: EventListener = (event: Event) => {
+      void (async () => {
+        const customEvent = event as CustomEvent;
+
+        // Prevent multiple corruption handlers from running
+        if (currentDocIdRef.current === null || currentDocIdRef.current !== docId) {
+          return; // Already handling corruption or docId changed
         }
-        indexedDBProviderRef.current.destroy();
-        indexedDBProviderRef.current = null;
-      }
-      if (monacoBindingRef.current) {
-        monacoBindingRef.current.destroy();
-        monacoBindingRef.current = null;
-      }
-      if (undoManagerRef.current) {
-        undoManagerRef.current.destroy();
-        undoManagerRef.current = null;
-      }
-      if (docRef.current) {
-        docRef.current.destroy();
-        docRef.current = null;
-      }
-      yTextRef.current = null;
-      
-      console.warn('[Collaboration] Cleared corrupted document:', corruptedDocId);
-      setState((prev) => ({ ...prev, status: 'disconnected', offlineReady: false, synced: false }));
-      
-      // The useEffect will detect currentDocIdRef.current === null and recreate everything
+        
+        // Log only once
+        if (!(handleCorruption as any)._logged) {
+          console.error('[Collaboration] Document corruption detected:', customEvent.detail);
+          (handleCorruption as any)._logged = true;
+        }
+        
+        // Mark as corrupted to prevent re-initialization
+        const corruptedDocId = currentDocIdRef.current;
+        currentDocIdRef.current = null;
+        
+        // Destroy all providers and bindings
+        if (wsProviderRef.current) {
+          wsProviderRef.current.destroy();
+          wsProviderRef.current = null;
+        }
+        if (indexedDBProviderRef.current) {
+          try {
+            await indexedDBProviderRef.current.clearData();
+          } catch (e) {
+            console.error('[Collaboration] Failed to clear IndexedDB:', e);
+          }
+          indexedDBProviderRef.current.destroy();
+          indexedDBProviderRef.current = null;
+        }
+        if (monacoBindingRef.current) {
+          monacoBindingRef.current.destroy();
+          monacoBindingRef.current = null;
+        }
+        if (undoManagerRef.current) {
+          undoManagerRef.current.destroy();
+          undoManagerRef.current = null;
+        }
+        if (docRef.current) {
+          docRef.current.destroy();
+          docRef.current = null;
+        }
+        yTextRef.current = null;
+        
+        console.warn('[Collaboration] Cleared corrupted document:', corruptedDocId);
+        setState((prev) => ({ ...prev, status: 'disconnected', offlineReady: false, synced: false }));
+        
+        // The useEffect will detect currentDocIdRef.current === null and recreate everything
+      })();
     };
     
-    monacoBinding.addEventListener('corruption-detected', handleCorruption as EventListener);
+    monacoBinding.addEventListener('corruption-detected', handleCorruption);
 
     // Setup undo manager
     const undoManager = new CollaborativeUndoManager(yText, {

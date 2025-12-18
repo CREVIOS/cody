@@ -309,13 +309,18 @@ export default function Layout({
           user={user}
           userRole={getUserRoleName()}
           collaboratorsComponent={
-            <DraggableCollaborators
-              projectMembers={projectMembers}
-              membersLoading={membersLoading}
-              membersError={membersError}
-              onClose={() => setShowCollaborators(false)}
-              theme={theme}
-            />
+            projectId && user ? (
+              <DraggableCollaborators
+                projectMembers={projectMembers}
+                membersLoading={membersLoading}
+                membersError={membersError}
+                onClose={() => setShowCollaborators(false)}
+                theme={theme}
+                projectId={projectId}
+                currentUserId={user.user_id}
+                currentUsername={user.username}
+              />
+            ) : null
           }
         />
 

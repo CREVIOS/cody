@@ -1,35 +1,38 @@
-import { API_BASE_URL, fetchWithRetry, NetworkError } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
+import { BaseAPITemplate, BaseAPITemplateSilentFail } from "./BaseAPITemplate";
 import { ProjectMemberWithDetails, ProjectMember } from "./TypeDefinitions";
 
 /**
  * Get project members with full user and role details by project ID
  */
 export const getProjectMembers = async (projectId: string): Promise<ProjectMemberWithDetails[]> => {
-    try {
-      const response = await fetchWithRetry(
-        `${API_BASE_URL}/api/v1/project-members/by-project/${projectId}`
-      );
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      const members: ProjectMemberWithDetails[] = await response.json();
-      return members;
-    } catch (error) {
-      // Network errors are expected when backend is unavailable - handle silently
-      if (error instanceof NetworkError) {
-        // Only log at debug level to reduce console noise
-        console.debug('Backend unavailable, returning empty members list');
-      } else {
-        console.error('Error fetching project members:', error);
-      }
-      // Return empty array instead of throwing to prevent UI breakage
+  class GetProjectMembersCall extends BaseAPITemplateSilentFail<ProjectMemberWithDetails[]> {
+    constructor(private projectId: string) {
+      super();
+    }
+
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/project-members/by-project/${this.projectId}`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return { method: "GET" };
+    }
+
+    protected async parseResponse(response: Response): Promise<ProjectMemberWithDetails[]> {
+      return response.json();
+    }
+
+    protected getFallbackValue(): ProjectMemberWithDetails[] {
       return [];
     }
-  };
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error fetching project members:", message);
+    }
+  }
+
+  return new GetProjectMembersCall(projectId).execute();
+};
 
 /**
  * Create a new project member
@@ -43,25 +46,27 @@ export const createProjectMember = async (
   },
   actorId: string
 ): Promise<ProjectMember> => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/?actor_id=${actorId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(memberData),
-    });
-
-    if (!response.ok) {
-      const errorMessage = await getErrorMessage(response);
-      throw new Error(errorMessage);
+  class CreateProjectMemberCall extends BaseAPITemplate<ProjectMember> {
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/project-members/?actor_id=${encodeURIComponent(actorId)}`;
     }
 
-    return await response.json();
-  } catch (error) {
-    console.error('Error creating project member:', error);
-    throw error;
+    protected buildOptions(): RequestInit {
+      return {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(memberData),
+      };
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error creating project member:", message);
+    }
   }
+
+  return new CreateProjectMemberCall().execute();
 };
 
 /**
@@ -75,25 +80,27 @@ export const updateProjectMember = async (
   },
   actorId: string
 ): Promise<ProjectMember> => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/${memberId}?actor_id=${encodeURIComponent(actorId)}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(memberUpdate),
-    });
-
-    if (!response.ok) {
-      const errorMessage = await getErrorMessage(response);
-      throw new Error(errorMessage);
+  class UpdateProjectMemberCall extends BaseAPITemplate<ProjectMember> {
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/project-members/${encodeURIComponent(memberId)}?actor_id=${encodeURIComponent(actorId)}`;
     }
 
-    return await response.json();
-  } catch (error) {
-    console.error('Error updating project member:', error);
-    throw error;
+    protected buildOptions(): RequestInit {
+      return {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(memberUpdate),
+      };
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error updating project member:", message);
+    }
   }
+
+  return new UpdateProjectMemberCall().execute();
 };
 
 /**
@@ -103,21 +110,29 @@ export const deleteProjectMember = async (
   memberId: string,
   actorId: string
 ): Promise<void> => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/project-members/${memberId}?actor_id=${encodeURIComponent(actorId)}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      const errorMessage = await getErrorMessage(response);
-      throw new Error(errorMessage);
+  class DeleteProjectMemberCall extends BaseAPITemplate<void> {
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/project-members/${encodeURIComponent(memberId)}?actor_id=${encodeURIComponent(actorId)}`;
     }
-  } catch (error) {
-    console.error('Error deleting project member:', error);
-    throw error;
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      };
+    }
+
+    protected async parseResponse(): Promise<void> {
+      return;
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error deleting project member:", message);
+    }
   }
+
+  return new DeleteProjectMemberCall().execute();
 };
   

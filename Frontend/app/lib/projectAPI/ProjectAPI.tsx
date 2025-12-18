@@ -1,123 +1,210 @@
-import { API_BASE_URL, fetchWithRetry, fetchWithUserId, invalidateCache } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
+import { BaseAPITemplate, BaseAPITemplateWithUser } from "./BaseAPITemplate";
 import { Project, PaginatedResponse } from "./TypeDefinitions";
+
+// ============================================================================
+// GET PROJECTS - List all projects with pagination and optional filtering
+// ============================================================================
+
+class GetProjectsCall extends BaseAPITemplate<Project[]> {
+  constructor(
+    private skip: number,
+    private limit: number,
+    private ownerId?: string
+  ) {
+    super();
+  }
+
+  protected buildURL(): string {
+    const params = new URLSearchParams({
+      skip: this.skip.toString(),
+      limit: this.limit.toString()
+    });
+
+    if (this.ownerId) {
+      params.append('owner_id', this.ownerId);
+    }
+
+    return `${this.getBaseURL()}/api/v1/projects?${params}`;
+  }
+
+  protected buildOptions(): RequestInit {
+    return {
+      method: 'GET'
+    };
+  }
+
+  /**
+   * Override parseResponse to extract items array from paginated response
+   */
+  protected async parseResponse(response: Response): Promise<Project[]> {
+    const data: PaginatedResponse<Project> = await response.json();
+    return data.items || [];
+  }
+
+  /**
+   * Override onError to add context-specific logging
+   */
+  protected async onError(message: string, response: Response): Promise<void> {
+    console.error('Error fetching projects:', message);
+  }
+}
 
 /**
  * Get all projects
  */
 export const getProjects = async (
-    skip: number = 0,
-    limit: number = 100,
-    ownerId?: string
-  ): Promise<Project[]> => {
-    try {
-      const params = new URLSearchParams({
-        skip: skip.toString(),
-        limit: limit.toString()
-      });
-      
-      if (ownerId) params.append('owner_id', ownerId);
-      
-      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects?${params}`);
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      const data: PaginatedResponse<Project> = await response.json();
-      return data.items || [];
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-      throw error;
-    }
-  };
-  
+  skip: number = 0,
+  limit: number = 100,
+  ownerId?: string
+): Promise<Project[]> => {
+  return new GetProjectsCall(skip, limit, ownerId).execute();
+};
+
+// ============================================================================
+// GET PROJECT BY ID - Fetch a specific project
+// ============================================================================
+
+class GetProjectByIdCall extends BaseAPITemplate<Project> {
+  constructor(private projectId: string) {
+    super();
+  }
+
+  protected buildURL(): string {
+    return `${this.getBaseURL()}/api/v1/projects/${this.projectId}`;
+  }
+
+  protected buildOptions(): RequestInit {
+    return {
+      method: 'GET'
+    };
+  }
+
   /**
-   * Get a specific project by ID
+   * Override onError to add context-specific logging
    */
-  export const getProjectById = async (projectId: string): Promise<Project> => {
-    try {
-      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/${projectId}`);
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error fetching project:', error);
-      throw error;
-    }
-  };
-  
+  protected async onError(message: string, response: Response): Promise<void> {
+    console.error('Error fetching project:', message);
+  }
+}
+
+/**
+ * Get a specific project by ID
+ */
+export const getProjectById = async (projectId: string): Promise<Project> => {
+  return new GetProjectByIdCall(projectId).execute();
+};
+
+// ============================================================================
+// DELETE PROJECT - Delete a project and invalidate cache
+// ============================================================================
+
+class DeleteProjectCall extends BaseAPITemplate<void> {
+  constructor(private projectId: string) {
+    super();
+  }
+
+  protected buildURL(): string {
+    return `${this.getBaseURL()}/api/v1/projects/${this.projectId}`;
+  }
+
+  protected buildOptions(): RequestInit {
+    return {
+      method: 'DELETE'
+    };
+  }
+
   /**
-   * Delete a project
+   * Override parseResponse since DELETE returns no content
    */
-  export const deleteProject = async (projectId: string): Promise<void> => {
-    try {
-      const response = await fetchWithRetry(`${API_BASE_URL}/api/v1/projects/${projectId}`, {
-        method: 'DELETE'
-      });
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      // Invalidate projects cache after deletion
-      invalidateCache('/projects');
-    } catch (error) {
-      console.error('Error deleting project:', error);
-      throw error;
-    }
-  };
+  protected async parseResponse(response: Response): Promise<void> {
+    // DELETE requests typically return no content
+    return;
+  }
+
+  /**
+   * Override onSuccess to invalidate cache after successful deletion
+   */
+  protected onSuccess(data: void, response: Response): void {
+    this.invalidateCache('/projects');
+  }
+
+  /**
+   * Override onError to add context-specific logging
+   */
+  protected async onError(message: string, response: Response): Promise<void> {
+    console.error('Error deleting project:', message);
+  }
+}
+
+/**
+ * Delete a project
+ */
+export const deleteProject = async (projectId: string): Promise<void> => {
+  return new DeleteProjectCall(projectId).execute();
+};
+
+// ============================================================================
+// CREATE PROJECT - Create a new project with user context
+// ============================================================================
+
+interface CreateProjectData {
+  project_name: string;
+  description?: string;
+  visibility?: string;
+  project_settings?: Record<string, any>;
+  owner_id: string;
+}
+
+class CreateProjectCall extends BaseAPITemplateWithUser<Project> {
+  constructor(
+    private projectData: CreateProjectData,
+    userId: string | null
+  ) {
+    // BaseAPITemplateWithUser requires userId, default to empty string if null
+    super(userId || '');
+  }
+
+  protected buildURL(): string {
+    return `${this.getBaseURL()}/api/v1/projects/`;
+  }
+
+  protected buildOptions(): RequestInit {
+    return {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(this.projectData),
+    };
+  }
+
+  /**
+   * Override onSuccess to invalidate cache after successful creation
+   */
+  protected onSuccess(data: Project, response: Response): void {
+    this.invalidateCache('/projects');
+  }
+
+  /**
+   * Override onError to add context-specific logging
+   */
+  protected async onError(message: string, response: Response): Promise<void> {
+    console.error('Error creating project:', message);
+  }
+}
 
 /**
  * Create a new project
  * Example of using fetchWithUserId to automatically include user_id in requests
- * 
+ *
  * Usage:
  *   import { useActiveUserId } from "@/hooks/useActiveUserId";
  *   const activeUserId = useActiveUserId();
  *   await createProject(projectData, activeUserId);
  */
 export const createProject = async (
-  projectData: {
-    project_name: string;
-    description?: string;
-    visibility?: string;
-    project_settings?: Record<string, any>;
-    owner_id: string;
-  },
+  projectData: CreateProjectData,
   userId: string | null
 ): Promise<Project> => {
-  try {
-    // fetchWithUserId automatically adds { user_id: userId } to the request body
-    const response = await fetchWithUserId(
-      `${API_BASE_URL}/api/v1/projects/`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(projectData),
-      },
-      userId
-    );
-
-    if (!response.ok) {
-      const errorMessage = await getErrorMessage(response);
-      throw new Error(errorMessage);
-    }
-
-    // Invalidate projects cache after creation
-    invalidateCache('/projects');
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error creating project:', error);
-    throw error;
-  }
+  return new CreateProjectCall(projectData, userId).execute();
 };

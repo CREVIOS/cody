@@ -110,7 +110,6 @@ export default function Collaborators({
               (user.full_name && user.full_name.trim()) ||
               (user.username && user.username.trim()) ||
               (user.email && user.email.trim()) ||
-              (user.name && user.name.trim()) ||
               `User ${idx + 1}`; // Fallback to numbered user instead of "Unknown User"
             const uid = getUserId(member);
             const online = isOnline(uid);

@@ -39,7 +39,10 @@ interface MonacoEditorWrapperProps {
   };
   
   // Callback to receive collaboration actions (for save pipeline)
-  onCollaborationReady?: (actions: { getSnapshot?: () => string }) => void;
+  onCollaborationReady?: (actions: { 
+    getSnapshot?: () => string;
+    setContent?: (content: string) => void;
+  }) => void;
   
   // Phase 5: Lock state for permission enforcement
   lockState?: {
@@ -476,7 +479,8 @@ export function MonacoEditorWrapper({
           quickSuggestionsDelay: 500,  // Increased delay if re-enabled
           
           // Disable word-based suggestions that cause "l" -> "length" auto-completion
-          wordBasedSuggestions: false,
+          // Use 'off' to satisfy the editor options type
+          wordBasedSuggestions: 'off',
           
           // Only show suggestions when explicitly triggered (Ctrl+Space)
           suggestOnTriggerCharacters: true,
@@ -541,22 +545,9 @@ export function MonacoEditorWrapper({
           mouseWheelZoom: true,
           mouseWheelScrollSensitivity: 1,
           fastScrollSensitivity: 5,
-          multiCursorModifier: 'ctrlCmd',
           
           // Render optimization for smoothness
           renderValidationDecorations: 'on',
-          renderWhitespace: 'selection',
-          
-          // Performance optimizations
-          renderLineHighlight: 'all',
-          renderIndentGuides: true,
-          renderFinalNewline: 'on',
-          renderControlCharacters: false,
-          
-          // Enhanced smoothness
-          cursorSmoothCaretAnimation: 'on',
-          cursorBlinking: 'smooth',
-          
           // Accessibility
           accessibilitySupport: 'auto',
           

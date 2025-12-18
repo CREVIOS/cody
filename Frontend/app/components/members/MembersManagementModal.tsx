@@ -195,7 +195,6 @@ export default function MembersManagementModal({
                   (user.full_name && user.full_name.trim()) ||
                   (user.username && user.username.trim()) ||
                   (user.email && user.email.trim()) ||
-                  (user.name && user.name.trim()) ||
                   `User ${member.project_member_id || member.user_id || 'unknown'}`;
                 const currentRoleId = selectedRoleId[member.project_member_id || member.user_id] || member.role_id;
                 const isUpdating = updatingMemberId === (member.project_member_id || member.user_id);

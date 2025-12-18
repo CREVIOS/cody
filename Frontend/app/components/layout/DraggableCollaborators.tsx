@@ -8,6 +8,9 @@ interface DraggableCollaboratorsProps {
   membersError: string | null;
   onClose: () => void;
   theme: string;
+  projectId: string;
+  currentUserId: string;
+  currentUsername?: string;
 }
 
 export function DraggableCollaborators({ 
@@ -15,7 +18,10 @@ export function DraggableCollaborators({
   membersLoading, 
   membersError, 
   onClose, 
-  theme 
+  theme,
+  projectId,
+  currentUserId,
+  currentUsername,
 }: DraggableCollaboratorsProps) {
   const [isDragging, setIsDragging] = useState(false);
   const collaboratorsRef = useRef<HTMLDivElement | null>(null);
@@ -132,6 +138,9 @@ export function DraggableCollaborators({
           members={projectMembers}
           loading={membersLoading}
           error={membersError}
+          projectId={projectId}
+          currentUserId={currentUserId}
+          currentUsername={currentUsername}
         />
       </div>
     </div>

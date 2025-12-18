@@ -1,5 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
+import { BaseAPITemplate } from "./BaseAPITemplate";
 import { User, PaginatedResponse, UserProjectsResponse } from "./TypeDefinitions";
 import { getRoles } from "./RoleAPI";
 import { Project } from "./TypeDefinitions";
@@ -9,33 +8,32 @@ import { Project } from "./TypeDefinitions";
  * List all users
  */
 export const listUsers = async (): Promise<User[]> => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
+  class ListUsersCall extends BaseAPITemplate<User[]> {
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/users`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
-      });
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
+      };
+    }
+
+    protected async parseResponse(response: Response): Promise<User[]> {
       const data: PaginatedResponse<User> = await response.json();
       return data.items || [];
-    } catch (error) {
-      // Handle network errors with a more helpful message
-      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        const networkError = new Error(
-          `Unable to connect to backend server at ${API_BASE_URL}. Please ensure the backend is running on port 8000.`
-        );
-        console.error('Network error listing users:', networkError);
-        throw networkError;
-      }
-      console.error('Error listing users:', error);
-      throw error;
     }
-  };
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error listing users:", message);
+    }
+  }
+
+  return new ListUsersCall().execute();
+};
   
   /**
    * Find user by email
@@ -43,115 +41,164 @@ export const listUsers = async (): Promise<User[]> => {
    * In production, add email filtering to the backend API
    */
   export const findUserByEmail = async (email: string): Promise<User | null> => {
-    try {
-      if (!API_BASE_URL) {
-        throw new Error('API_BASE_URL is not configured');
+    class FindUserByEmailCall extends BaseAPITemplate<User | null> {
+      constructor(private email: string) {
+        super();
       }
-  
-      // Get all users and filter by email (temporary solution until backend endpoint is ready)
-      const response = await fetch(`${API_BASE_URL}/api/v1/users`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}` // Add token if you have auth
+
+      protected buildURL(): string {
+        const baseUrl = this.getBaseURL();
+        if (!baseUrl) {
+          throw new Error("API_BASE_URL is not configured");
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        return `${baseUrl}/api/v1/users`;
       }
-      
-      const data = await response.json();
-      const users = data.items || [];
-      const user = users.find((u: User) => u.email.toLowerCase() === email.toLowerCase());
-      
-      if (!user) {
-        console.log('No user found with email:', email);
-        return null;
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            // Add token if you have auth
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+        };
       }
-  
-      console.log('Found user:', user);
-      return user;
-    } catch (error) {
-      console.error('Error finding user by email:', error);
-      throw error; // Let the caller handle the error
+
+      protected async parseResponse(response: Response): Promise<User | null> {
+        const data: PaginatedResponse<User> = await response.json();
+        const users = data.items || [];
+        const user = users.find((u: User) => u.email.toLowerCase() === this.email.toLowerCase());
+
+        if (!user) {
+          console.log("No user found with email:", this.email);
+          return null;
+        }
+
+        console.log("Found user:", user);
+        return user;
+      }
+
+      /**
+       * Preserve the previous behavior: non-OK throws status-based error (not getErrorMessage()).
+       */
+      protected async getErrorMessage(response: Response): Promise<string> {
+        return `HTTP error! status: ${response.status}`;
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error finding user by email:", message);
+      }
     }
+
+    return new FindUserByEmailCall(email).execute();
   };
   
     /**
    * Get user's all projects (owned and member)
    */
   export const getUserProjects = async (userId: string): Promise<UserProjectsResponse> => {
-    try {
-      // First get all roles to find the owner role ID
-      const roles = await getRoles();
-      const ownerRole = roles.find(role => role.role_name.toLowerCase() === 'owner');
-      if (!ownerRole) {
-        throw new Error('Owner role not found in the system');
-      }
-
-      const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/all-projects`);
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-      
-      const data = await response.json();
-      console.log('API Response:', data); // Debug log
-      
-      // Transform the response to match expected structure
-      const allProjects = [
-        // Handle owned projects
-        ...(data.owned_projects || []).map((project: Project) => ({
-          ...project,
-          role_id: ownerRole.role_id
-        })),
-        // Handle member projects
-        ...(data.member_projects || []).map((memberProject: { project: Project; role: string }) => {
-          // Find the role ID that matches the role name
-          const roleId = roles.find(r => r.role_name.toLowerCase() === memberProject.role.toLowerCase())?.role_id;
-          if (!roleId) {
-            console.warn(`Role not found for name: ${memberProject.role}`);
-          }
-          return {
-            ...memberProject.project,
-            role_id: roleId || 'unknown'
-          };
-        })
-      ];
-
-      console.log('Transformed projects:', allProjects); // Debug log
-
-      return {
-        items: allProjects,
-        total: allProjects.length,
-        page: 1,
-        size: allProjects.length,
-        pages: 1
-      };
-    } catch (error) {
-      console.error('Error fetching user projects:', error);
-      throw error;
+    // First get all roles to find the owner role ID
+    const roles = await getRoles();
+    const ownerRole = roles.find((role) => role.role_name.toLowerCase() === "owner");
+    if (!ownerRole) {
+      throw new Error("Owner role not found in the system");
     }
+
+    type RawUserProjectsResponse = {
+      owned_projects?: Project[];
+      member_projects?: Array<{ project: Project; role: string }>;
+    };
+
+    class GetUserProjectsCall extends BaseAPITemplate<UserProjectsResponse> {
+      constructor(private userId: string) {
+        super();
+      }
+
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/users/${this.userId}/all-projects`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
+      }
+
+      /**
+       * Preserve the previous behavior: status-based error (not getErrorMessage()).
+       */
+      protected async getErrorMessage(response: Response): Promise<string> {
+        return `HTTP error! status: ${response.status}`;
+      }
+
+      protected async parseResponse(response: Response): Promise<UserProjectsResponse> {
+        const data: RawUserProjectsResponse = await response.json();
+        console.log("API Response:", data); // Debug log
+
+        // Transform the response to match expected structure
+        const allProjects = [
+          // Handle owned projects
+          ...(data.owned_projects || []).map((project: Project) => ({
+            ...project,
+            role_id: ownerRole.role_id,
+          })),
+          // Handle member projects
+          ...(data.member_projects || []).map((memberProject) => {
+            // Find the role ID that matches the role name
+            const roleId = roles.find(
+              (r) => r.role_name.toLowerCase() === memberProject.role.toLowerCase()
+            )?.role_id;
+            if (!roleId) {
+              console.warn(`Role not found for name: ${memberProject.role}`);
+            }
+            return {
+              ...memberProject.project,
+              role_id: roleId || "unknown",
+            };
+          }),
+        ];
+
+        console.log("Transformed projects:", allProjects); // Debug log
+
+        return {
+          items: allProjects,
+          total: allProjects.length,
+          page: 1,
+          size: allProjects.length,
+          pages: 1,
+        };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error fetching user projects:", message);
+      }
+    }
+
+    return new GetUserProjectsCall(userId).execute();
   };
 
   /**
    * Get user by ID
    */
   export const getUser = async (userId: string): Promise<User> => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`);
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class GetUserCall extends BaseAPITemplate<User> {
+      constructor(private userId: string) {
+        super();
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error fetching user:', error);
-      throw error;
+
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/users/${this.userId}`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error fetching user:", message);
+      }
     }
+
+    return new GetUserCall(userId).execute();
   };
 
   /**
@@ -206,25 +253,34 @@ export const listUsers = async (): Promise<User[]> => {
   }
 
   export const updateUser = async (userId: string, updateData: UserUpdateData): Promise<User> => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updateData),
-      });
-      
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class UpdateUserCall extends BaseAPITemplate<User> {
+      constructor(
+        private userId: string,
+        private updateData: UserUpdateData
+      ) {
+        super();
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error updating user:', error);
-      throw error;
+
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/users/${this.userId}`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(this.updateData),
+        };
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Error updating user:", message);
+      }
     }
+
+    return new UpdateUserCall(userId, updateData).execute();
   };
 
   /**
@@ -281,31 +337,39 @@ export const listUsers = async (): Promise<User[]> => {
   }
 
   export const createUser = async (userData: UserCreateData): Promise<User> => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/users/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(userData),
-      });
-      if (!response.ok) {
-        // Debug details to help diagnose 405 issues
-        console.error('createUser failed:', {
-          requestedUrl: `${API_BASE_URL}/api/v1/users/`,
+    class CreateUserCall extends BaseAPITemplate<User> {
+      constructor(private userData: UserCreateData) {
+        super();
+      }
+
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/users/`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(this.userData),
+        };
+      }
+
+      protected async onError(message: string, response: Response): Promise<void> {
+        // Debug details to help diagnose 405 issues (preserve existing behavior)
+        console.error("createUser failed:", {
+          requestedUrl: `${this.getBaseURL()}/api/v1/users/`,
           resolvedUrl: response.url,
           status: response.status,
           statusText: response.statusText,
-          method: 'POST'
+          method: "POST",
         });
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+        console.error("Error creating user:", message);
       }
-      return await response.json();
-    } catch (error) {
-      console.error('Error creating user:', error);
-      throw error;
     }
+
+    return new CreateUserCall(userData).execute();
   };
 
   /**
