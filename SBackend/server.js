@@ -134,7 +134,22 @@ async function initializeServices() {
       gcEnabled: true,
       roomCleanupInterval: 60 * 1000, // 1 minute
       roomIdleTimeout: 5 * 60 * 1000, // 5 minutes
-      pubSubBridge: collabPubSub
+      pubSubBridge: collabPubSub,
+      // Production-grade: seed new file docs from the actual file content ON THE SERVER.
+      // This prevents "double content" when two users open the same file concurrently
+      // and both clients try to insert the initial content into an empty CRDT doc.
+      initialContentProvider: async ({ projectId, filePath }) => {
+        if (!projectId || !filePath) return null;
+        try {
+          const result = await fileSystemService.readFile(projectId, filePath);
+          if (result && result.success && typeof result.content === 'string') {
+            return result.content;
+          }
+        } catch (err) {
+          console.warn('[Collaboration] Failed to load initial content for doc', { projectId, filePath, error: err?.message || String(err) });
+        }
+        return null;
+      }
     });
 
     // Initialize version retention manager with default strategy
@@ -229,6 +244,47 @@ const filePersistTimers = new Map(); // key => timeout handle
 const fileOperationQueues = new Map(); // key => promise chain
 
 // Health check with detailed status
+// Adapter Pattern Debug Endpoint - Verify adapter is working
+app.get('/api/debug/adapter', asyncHandler(async (req, res) => {
+  try {
+    const adapterInfo = {
+      adapterType: fileSystemService?.storage?.constructor?.name || 'Unknown',
+      adapterMethods: fileSystemService?.storage ? Object.getOwnPropertyNames(Object.getPrototypeOf(fileSystemService.storage)).filter(m => m !== 'constructor') : [],
+      hasInit: typeof fileSystemService?.storage?.init === 'function',
+      isMinIO: fileSystemService?.storage?.constructor?.name === 'MinIOStorageAdapter',
+      isMock: fileSystemService?.storage?.constructor?.name === 'MockStorageAdapter',
+      timestamp: new Date().toISOString()
+    };
+    
+    // Try to get versioning status if available
+    if (typeof fileSystemService?.storage?.getVersioningStatus === 'function') {
+      try {
+        adapterInfo.versioningStatus = await fileSystemService.storage.getVersioningStatus();
+      } catch (err) {
+        adapterInfo.versioningStatus = { error: err.message };
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Adapter Pattern Status',
+      adapter: adapterInfo,
+      pattern: {
+        name: 'Adapter Pattern',
+        type: 'Structural Design Pattern',
+        description: 'Allows FileSystemService to work with different storage backends (MinIO, S3, Azure, etc.) through a unified interface',
+        currentAdapter: adapterInfo.adapterType,
+        interchangeable: true
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}));
+
 app.get('/api/health', asyncHandler(async (req, res) => {
   const health = {
     status: 'healthy',
@@ -329,7 +385,7 @@ app.get('/projects/:projectId/members', validateProjectId, asyncHandler(async (r
 app.get('/projects/:projectId/invitations', validateProjectId, asyncHandler(async (req, res) => {
   // Add project_id to query params and proxy will forward all query params
   req.query.project_id = req.params.projectId;
-  await proxyToFastAPI(req, res, `/api/v1/project-invitations`);
+  await proxyToFastAPI(req, res, `/api/v1/project-invitations/`);
 }));
 
 app.delete('/api/projects/:projectId', validateProjectId, asyncHandler(async (req, res) => {
@@ -1598,6 +1654,23 @@ function handleFileCollabConnection(ws, projectId, connectionId, url) {
       code: 'MISSING_FILE_PATH'
     }));
     ws.close(1008, 'File path required');
+    return;
+  }
+
+  // Basic path validation: prevent traversal / null byte.
+  // File paths are treated as logical project paths; they must not escape via "..".
+  const normalizedPath = String(filePath).replace(/\\/g, '/');
+  if (
+    normalizedPath.length > 4096 ||
+    normalizedPath.includes('\0') ||
+    normalizedPath.split('/').some((seg) => seg === '..')
+  ) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Invalid file path',
+      code: 'INVALID_FILE_PATH'
+    }));
+    ws.close(1008, 'Invalid file path');
     return;
   }
 

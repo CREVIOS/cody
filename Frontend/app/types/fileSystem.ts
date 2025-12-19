@@ -35,7 +35,7 @@ export interface FileSystemContextType {
   projectName: string;
   fileTree: FileSystemItem[];
   selectedFile: FileSystemItem | null;
-  openFiles: Map<string, { item: FileSystemItem; content: string; isDirty: boolean }>;
+  openFiles: Map<string, { item: FileSystemItem; content: string; savedContent: string; isDirty: boolean; isSaving?: boolean }>;
   currentFileContent: string;
   isLoading: boolean;
   error: string | null;
@@ -46,7 +46,7 @@ export interface FileSystemContextType {
   createFile: (path: string, content?: string) => Promise<void>;
   createFolder: (path: string) => Promise<void>;
   openFile: (item: FileSystemItem) => Promise<void>;
-  saveFile: (path: string, content: string) => Promise<void>;
+  saveFile: (path: string, content: string, skipCommand?: boolean) => Promise<void>;
   deleteItem: (path: string) => Promise<void>;
   renameItem: (oldPath: string, newPath: string) => Promise<void>;
   copyItem: (sourcePath: string, destinationPath: string) => Promise<void>;
@@ -54,7 +54,11 @@ export interface FileSystemContextType {
   closeFile: (path: string) => void;
   closeAllFiles: () => void;
   selectFile: (item: FileSystemItem | null) => void;
-  updateCurrentContent: (content: string) => void;
+  /**
+   * Update the in-memory buffer for a specific open file.
+   * Must be file-scoped to avoid cross-tab/content mixing on rapid tab switches.
+   */
+  updateCurrentContent: (path: string, content: string) => void;
   searchFiles: (query: string) => Promise<SearchResult[]>;
   getFileMetadata: (path: string) => Promise<FileMetadata>;
   setExpandedFolders: (folders: Set<string>) => void;

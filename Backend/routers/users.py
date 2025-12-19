@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel
@@ -138,9 +139,31 @@ async def sync_user_from_auth(
         existing = await crud.crud_user.get(db, id=user_uuid)
         if existing:
             return {"message": "User already exists", "user_id": str(user_uuid)}
+
+        # If a different user already has this email, reuse that account instead of raising a 500
+        existing_email_user = await crud.crud_user.get_by_email(db, email=email)
+        if existing_email_user:
+            # Refresh profile details if newer info is provided
+            update_payload = {}
+            if full_name and full_name.strip():
+                update_payload["full_name"] = full_name.strip()
+            if avatar_url and avatar_url.strip():
+                update_payload["avatar_url"] = avatar_url.strip()
+            if update_payload:
+                existing_email_user = await crud.crud_user.update(
+                    db, db_obj=existing_email_user, obj_in=schemas.UserUpdate(**update_payload)
+                )
+            return {
+                "message": "User already exists with this email",
+                "user_id": str(existing_email_user.user_id)
+            }
         
         # Use provided username or extract from email
-        username = provided_username.strip() if provided_username and provided_username.strip() else email.split('@')[0]
+        username = (
+            provided_username.strip()
+            if isinstance(provided_username, str) and provided_username.strip()
+            else email.split('@')[0]
+        )
         
         # Handle username conflicts by appending number
         base_username = username
@@ -162,7 +185,9 @@ async def sync_user_from_auth(
                     user_data["avatar_url"] = avatar_url.strip()
                 user = await crud.crud_user.create(db, obj_in=user_data)
                 return {"message": "User synced successfully", "user_id": str(user.user_id)}
-            except Exception as e:
+            except IntegrityError as e:
+                # Roll back the failed transaction before retrying
+                await db.rollback()
                 error_str = str(e).lower()
                 if "username" in error_str or "unique" in error_str or "duplicate" in error_str:
                     counter += 1
@@ -183,6 +208,13 @@ async def sync_user_from_auth(
                         user = await crud.crud_user.create(db, obj_in=user_data)
                         return {"message": "User synced with email as username", "user_id": str(user.user_id)}
                     continue
+                if "email" in error_str:
+                    existing_email_user = await crud.crud_user.get_by_email(db, email=email)
+                    if existing_email_user:
+                        return {
+                            "message": "User already exists with this email",
+                            "user_id": str(existing_email_user.user_id)
+                        }
                 raise
     except ValueError as e:
         raise HTTPException(

@@ -8,7 +8,9 @@ import { User } from "@/lib/projectAPI/TypeDefinitions";
 import { usePermissions } from '@/hooks/usePermissions';
 import { useFileLock } from '@/hooks/useFileLock';
 import { useCommandManager } from '@/hooks/useCommandManager';
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '@/lib/projectAPI/APIConfiguration';
+import { SaveFileCommand } from '@/lib/commands/SaveFileCommand';
+import { getFileVersionContent, saveFileContent } from '@/lib/projectAPI/FileVersionsAPI';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -23,8 +25,8 @@ interface OpenFileContent {
 interface FileEditorContentProps {
   selectedFile: FileSystemItem;
   currentFileContent: string;
-  updateCurrentContent: (content: string) => void;
-  saveFile: (path: string, content: string) => void;
+  updateCurrentContent: (path: string, content: string) => void;
+  saveFile: (path: string, content: string, skipCommand?: boolean) => Promise<void>;
   openFiles: Map<string, OpenFileContent>;
   isDark: boolean;
   projectId?: string;
@@ -53,6 +55,8 @@ export function FileEditorContent({
   user,
   userRole,
 }: FileEditorContentProps) {
+  // Allow disabling CRDT collaboration entirely (single-user / debug mode)
+  const collabDisabled = process.env.NEXT_PUBLIC_DISABLE_COLLAB === '1';
   const [language, setLanguage] = useState("javascript");
   const [realtimeKey, setRealtimeKey] = useState<RealtimeKeyMetadata | null>(null);
   const [realtimeKeyLoading, setRealtimeKeyLoading] = useState(false);
@@ -114,6 +118,28 @@ export function FileEditorContent({
     }
   }, [selectedFile]);
 
+  // Normalize file path (server treats paths as logical project paths using forward slashes).
+  const normalizedPath = useMemo(() => selectedFile?.path?.replace(/\\/g, '/') ?? '', [selectedFile?.path]);
+
+  // Ensure a stable user id so collaboration always connects (even if user is missing due to edge cases).
+  const effectiveUserId = useMemo(() => {
+    if (user?.user_id) return user.user_id;
+    if (typeof window === 'undefined') return '';
+    const key = 'cody-anon-user-id';
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const created = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    window.localStorage.setItem(key, created);
+    return created;
+  }, [user?.user_id]);
+
+  const effectiveUserName = useMemo(() => {
+    return user?.username || user?.email || 'User';
+  }, [user?.username, user?.email]);
+
+  const collabProjectId = realtimeKey?.projectId || projectId || '';
+  const collaborationEnabled = !collabDisabled && !!collabProjectId && !!normalizedPath && !!effectiveUserId;
+
   // COMMENTED OUT: Lock request/release disabled (CRDT-only mode)
   // // Phase 5: Request lock when file opens
   // useEffect(() => {
@@ -170,19 +196,34 @@ export function FileEditorContent({
       setRealtimeKeyLoading(true);
       setRealtimeKeyError(null);
       try {
+        // Prefer relative URL to leverage Next.js rewrites and avoid hardcoded hosts
+        const base = API_BASE_URL || '';
         const response = await fetch(
-          `${API_BASE_URL}/api/v1/files/${encodeURIComponent(selectedFile.path)}/realtime-key?user_id=${encodeURIComponent(user.user_id)}&project_id=${encodeURIComponent(projectId)}`
+          `${base}/api/v1/files/${encodeURIComponent(selectedFile.path)}/realtime-key?user_id=${encodeURIComponent(user.user_id)}&project_id=${encodeURIComponent(projectId)}`
         );
         
         if (!response.ok) {
-          throw new Error(`Failed to fetch realtime-key: ${response.statusText}`);
+          // Handle 404 and other errors gracefully - realtime-key endpoint may not be available
+          // This is non-critical and should not block the editor
+          if (response.status === 404) {
+            // Silently fail for 404s - this is expected if the backend doesn't support realtime-key
+            setRealtimeKey(null);
+            setRealtimeKeyLoading(false);
+            return;
+          }
+          // For other HTTP errors, handle silently (non-critical feature)
+          setRealtimeKey(null);
+          setRealtimeKeyLoading(false);
+          return;
         }
         
         const data: RealtimeKeyMetadata = await response.json();
         setRealtimeKey(data);
       } catch (error) {
-        console.error('Error fetching realtime-key:', error);
-        setRealtimeKeyError(error instanceof Error ? error.message : 'Failed to fetch realtime-key');
+        // Silently handle all errors - realtime-key is optional and should not block the editor
+        // Network errors, JSON parsing errors, etc. are all handled gracefully
+        setRealtimeKey(null);
+        // Don't set error state or log - this is expected to fail in some configurations
         // Don't block editor if realtime-key fails - allow fallback behavior
       } finally {
         setRealtimeKeyLoading(false);
@@ -219,7 +260,7 @@ export function FileEditorContent({
 
   const handleEditorChange = (value: string | undefined) => {
     // CRDT-only mode: Always allow changes - no permission checks
-    updateCurrentContent(value || "");
+    updateCurrentContent(normalizedPath, value || "");
   };
 
   // Command manager for undo/redo
@@ -227,30 +268,44 @@ export function FileEditorContent({
 
   const handleSave = useCallback(async () => {
     // CRDT-only mode: Always allow save - no permission or lock checks
-    if (!selectedFile || !projectId || !user?.user_id) return;
+    if (!selectedFile || !projectId) return;
+    if (!user?.user_id) {
+      alert('You must be logged in to save.');
+      return;
+    }
     
     try {
       // Phase 6 Step 2: Get CRDT snapshot if collaboration is enabled
       let contentToSave = currentFileContent;
       
-      if (realtimeKey && collaborationActionsRef.current?.getSnapshot) {
+      if (collaborationActionsRef.current?.getSnapshot) {
         // Get snapshot from Y.Doc (Phase 6: Use CRDT snapshot)
         const snapshot = collaborationActionsRef.current.getSnapshot();
         if (snapshot !== undefined && snapshot !== null) {
           contentToSave = snapshot;
-          console.log('[Save] Using Y.Doc snapshot for save:', snapshot.length, 'chars');
         }
       }
-      
-      // Phase 6 Step 2: Use SaveFileCommand with new API
-      const { SaveFileCommand } = await import('@/lib/commands/SaveFileCommand');
-      const { saveFileContent } = await import('@/lib/projectAPI/FileVersionsAPI');
       
       // Create save service that uses the new API
       const saveService = {
         getCurrentVersionId: async (projId: string, filePath: string) => {
-          // This is handled by the new save endpoint
-          return { success: true, versionId: null, exists: false };
+          // Get current version ID from SBackend before saving
+          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          try {
+            const response = await fetch(`${baseUrl}/api/projects/${projId}/files/current-version?path=${encodeURIComponent(filePath)}`);
+            if (!response.ok) {
+              // File might not exist yet, return exists: false
+              return { success: true, versionId: null, exists: false };
+            }
+            const data = await response.json();
+            if (!data.success) {
+              return { success: true, versionId: null, exists: false };
+            }
+            return data;
+          } catch (error) {
+            // If API call fails, assume file doesn't exist
+            return { success: true, versionId: null, exists: false };
+          }
         },
         updateFile: async (projId: string, filePath: string, fileContent: string) => {
           // Phase 6: Use new save-content endpoint
@@ -281,10 +336,32 @@ export function FileEditorContent({
           return data;
         },
         getFileVersion: async (projId: string, filePath: string, versionId: string) => {
-          // Phase 6: Use new version content endpoint
-          const { getFileVersionContent } = await import('@/lib/projectAPI/FileVersionsAPI');
-          const result = await getFileVersionContent(versionId, projId);
-          return { success: true, content: result.content };
+          // Check if versionId is a UUID (database version ID) or MinIO version ID
+          // UUIDs have format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+          const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(versionId);
+          
+          if (isUUID) {
+            // Database UUID - use FastAPI endpoint (if versions are in DB)
+            try {
+              const result = await getFileVersionContent(versionId, projId);
+              return { success: true, content: result.content };
+            } catch (error) {
+              // If DB lookup fails, fall back to MinIO (version might only be in MinIO)
+              // Continue to MinIO endpoint below
+            }
+          }
+          
+          // MinIO version ID - use SBackend endpoint directly
+          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          const response = await fetch(
+            `${baseUrl}/api/projects/${projId}/files/version/${encodeURIComponent(versionId)}?path=${encodeURIComponent(filePath)}`
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: Failed to get file version`);
+          }
+          const data = await response.json();
+          if (!data.success) throw new Error(data.error || 'Failed to get file version');
+          return { success: true, content: data.content };
         },
         readFile: async (projId: string, filePath: string) => {
           const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
@@ -301,8 +378,7 @@ export function FileEditorContent({
             // Phase 6 Step 6: Update Y.Doc directly with restored content
             collaborationActionsRef.current?.setContent?.(content);
             // Also update UI
-            updateCurrentContent(content);
-            console.log('[Save] Updated Y.Doc and UI with restored version content');
+            updateCurrentContent(normalizedPath, content);
           }
         : undefined;
       
@@ -312,16 +388,21 @@ export function FileEditorContent({
         updateYDocContent,
       };
       
+      // Get the previous saved content (what was saved before this save)
+      // This is what we'll restore to when undoing
+      const openFile = openFiles.get(normalizedPath);
+      const previousSavedContent = openFile?.savedContent || null;
+      
       const saveCommand = new SaveFileCommand(
         user.user_id,
         projectId,
-        selectedFile.path,
+        normalizedPath,
         contentToSave,
-        currentFileContent, // Previous content before save
+        previousSavedContent, // Previous saved content before this save
         saveServiceWithYDoc,
         (updatedContent: string) => {
           // Update UI with saved content
-          updateCurrentContent(updatedContent);
+          updateCurrentContent(normalizedPath, updatedContent);
         }
       );
       
@@ -338,18 +419,9 @@ export function FileEditorContent({
       // Note: versionId will be tracked via the saveService.updateFile response
       // We can enhance this later to extract it from the command's internal state
       
-      // Phase 7: Dev-only logging
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[Phase 7] Save succeeded:', {
-          filePath: selectedFile.path,
-          contentLength: contentToSave.length,
-          timestamp: new Date().toISOString(),
-        });
-      }
-      
-      // Also call the original saveFile for FileSystemContext integration
-      // This updates the openFiles state in the context
-      await saveFile(selectedFile.path, contentToSave);
+      // Update FileSystemContext state without creating another SaveFileCommand
+      // Pass skipCommand=true to prevent duplicate command creation
+      await saveFile(normalizedPath, contentToSave, true);
       
     } catch (error) {
       console.error('Save failed:', error);
@@ -368,33 +440,16 @@ export function FileEditorContent({
         }
       }
       
-      // Phase 7: Dev-only logging
-      if (process.env.NODE_ENV === 'development') {
-        console.error('[Phase 7] Save error:', {
-          filePath: selectedFile.path,
-          error: error instanceof Error ? error.message : String(error),
-          timestamp: new Date().toISOString(),
-        });
-      }
-      
       // Show user-friendly error message
       alert(errorMessage);
     }
-  }, [selectedFile, currentFileContent, saveFile, realtimeKey, projectId, user?.user_id, updateCurrentContent, openFiles]);
+  }, [selectedFile, projectId, currentFileContent, normalizedPath, saveFile, updateCurrentContent, user?.user_id]);
 
   const handleUndo = useCallback(async () => {
     // CRDT-only mode: Remove permission check - always allow undo
     if (!canUndo) return;
     try {
       await undo();
-      
-      // Phase 7: Dev-only logging
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[Phase 7] Undo performed:', {
-          filePath: selectedFile?.path,
-          timestamp: new Date().toISOString(),
-        });
-      }
     } catch (error) {
       console.error('Undo failed:', error);
       
@@ -408,10 +463,6 @@ export function FileEditorContent({
         }
       }
       
-      if (process.env.NODE_ENV === 'development') {
-        console.error('[Phase 7] Undo error:', error);
-      }
-      
       alert(errorMessage);
     }
   }, [canUndo, undo, selectedFile?.path]);
@@ -421,14 +472,6 @@ export function FileEditorContent({
     if (!canRedo) return;
     try {
       await redo();
-      
-      // Phase 7: Dev-only logging
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[Phase 7] Redo performed:', {
-          filePath: selectedFile?.path,
-          timestamp: new Date().toISOString(),
-        });
-      }
     } catch (error) {
       console.error('Redo failed:', error);
       
@@ -436,10 +479,6 @@ export function FileEditorContent({
       let errorMessage = 'Failed to redo. Please try again.';
       if (error instanceof Error) {
         errorMessage = `Redo failed: ${error.message}`;
-      }
-      
-      if (process.env.NODE_ENV === 'development') {
-        console.error('[Phase 7] Redo error:', error);
       }
       
       alert(errorMessage);
@@ -477,14 +516,14 @@ export function FileEditorContent({
   }, [handleSave, handleUndo, handleRedo, canEdit, canUndo, canRedo]);
 
   const isModified = () => {
-    const openFile = openFiles.get(selectedFile.path);
+    const openFile = openFiles.get(normalizedPath);
     if (!openFile) return false;
     // Check if content differs from saved content
     return openFile.isDirty || currentFileContent !== (openFile.savedContent || openFile.content);
   };
 
   const isSaving = () => {
-    const openFile = openFiles.get(selectedFile.path);
+    const openFile = openFiles.get(normalizedPath);
     return openFile?.isSaving || false;
   };
 
@@ -592,7 +631,7 @@ export function FileEditorContent({
       )} */}
 
       {/* Phase 7: WebSocket offline warning */}
-      {realtimeKey && wsStatus === 'disconnected' && (
+      {collaborationEnabled && wsStatus === 'disconnected' && (
         <div className={`px-3 py-1.5 text-xs border-b flex items-center gap-2 shrink-0 ${
           isDark 
             ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-300' 
@@ -608,27 +647,25 @@ export function FileEditorContent({
         onChange={handleEditorChange}
         isDark={isDark}
         roomName={projectId || 'default'}
-        username={user?.username || 'User'}
-        userId={user?.id || user?.user_id || ''}
-        docKey={selectedFile.path}
+        username={effectiveUserName}
+        userId={effectiveUserId}
+        docKey={normalizedPath}
         forceReadOnly={false}
         lockState={null}
         lockStatusMessage={undefined}
         collaboration={
-          // CRDT-only mode: Enable collaboration regardless of permissions
-          // Always enable CRDT collaboration - no permission checks
-          realtimeKey
+          // Production-grade: collaboration must not depend on realtime-key (permissions endpoint).
+          // If realtime-key fetch fails (CORS/proxy/temporary API outage), users should STILL sync edits.
+          collaborationEnabled
             ? {
                 enabled: true,
-                // Use consistent docId format that matches server expectations
-                docId: `file:${realtimeKey.projectId}:${realtimeKey.fileId}`,
-                projectId: realtimeKey.projectId,
-                // CRITICAL: Use the actual file path for WebSocket connection, not the fileId UUID
-                // The server expects the real file path for file-collab connections
-                filePath: selectedFile.path,
+                // Match SBackend: getFileDocId(projectId, filePath) = `file:${projectId}:${filePath}`
+                docId: `file:${collabProjectId}:${normalizedPath}`,
+                projectId: collabProjectId,
+                filePath: normalizedPath,
                 user: {
-                  id: user?.id || user?.user_id || '',
-                  name: user?.username || user?.email || 'User',
+                  id: effectiveUserId,
+                  name: effectiveUserName,
                 },
                 wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
                 offlineSupport: true,
@@ -653,21 +690,18 @@ export function FileEditorContent({
         lockState={null}
         lastSavedVersionId={lastSavedVersionId}
         lastSavedAt={lastSavedAt}
-        isCollaborative={!!realtimeKey}
+        isCollaborative={collaborationEnabled}
         wsStatus={wsStatus}
         onReloadVersion={async (versionId: string) => {
           // Phase 7 Step 6: Force reload version (dev tool)
           if (!projectId || !collaborationActionsRef.current?.setContent) return;
           
           try {
-            const { getFileVersionContent } = await import('@/lib/projectAPI/FileVersionsAPI');
             const result = await getFileVersionContent(versionId, projectId);
             
             // Update Y.Doc with version content
             collaborationActionsRef.current.setContent(result.content);
-            updateCurrentContent(result.content);
-            
-            console.log('[Phase 7] Reloaded version:', versionId);
+            updateCurrentContent(normalizedPath, result.content);
           } catch (error) {
             console.error('[Phase 7] Failed to reload version:', error);
             alert('Failed to reload version. Please try again.');

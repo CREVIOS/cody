@@ -7,7 +7,7 @@
  * - Listing file versions
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000/api/v1";
+import { BaseAPITemplate } from "./BaseAPITemplate";
 
 export interface FileVersionResponse {
   fileId: string;
@@ -28,6 +28,8 @@ export interface FileVersionContentResponse {
   createdBy: string;
 }
 
+const getBaseV1Url = (baseUrl: string): string => `${baseUrl.replace(/\/+$/, "")}/api/v1`;
+
 /**
  * Save file content and create a new version
  */
@@ -38,36 +40,41 @@ export async function saveFileContent(
   content: string,
   message?: string
 ): Promise<FileVersionResponse> {
-  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileIdentifier);
-  const queryParams = new URLSearchParams({
-    user_id: userId,
-    project_id: projectId,
-  });
-  
-  const url = `${BASE_URL}/files/${encodeURIComponent(fileIdentifier)}/save-content?${queryParams.toString()}`;
-  
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        content,
-        message,
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to save file: ${response.status} ${errorText}`);
+  class SaveFileContentCall extends BaseAPITemplate<FileVersionResponse> {
+    protected buildURL(): string {
+      const queryParams = new URLSearchParams({
+        user_id: userId,
+        project_id: projectId,
+      });
+
+      const baseV1Url = getBaseV1Url(this.getBaseURL());
+      return `${baseV1Url}/files/${encodeURIComponent(fileIdentifier)}/save-content?${queryParams.toString()}`;
     }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error saving file content:', error);
-    throw error;
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content,
+          message,
+        }),
+      };
+    }
+
+    protected async getErrorMessage(response: Response): Promise<string> {
+      const errorText = await response.text().catch(() => "");
+      return `Failed to save file: ${response.status} ${errorText}`.trim();
+    }
+
+    protected async onError(message: string): Promise<void> {
+      // Error handling - no logging
+    }
   }
+
+  return new SaveFileContentCall().execute();
 }
 
 /**
@@ -77,26 +84,32 @@ export async function getFileVersionContent(
   versionId: string,
   projectId: string
 ): Promise<FileVersionContentResponse> {
-  const url = `${BASE_URL}/file-versions/${versionId}/content?project_id=${projectId}`;
-  
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to get version content: ${response.status} ${errorText}`);
+  class GetFileVersionContentCall extends BaseAPITemplate<FileVersionContentResponse> {
+    protected buildURL(): string {
+      const baseV1Url = getBaseV1Url(this.getBaseURL());
+      return `${baseV1Url}/file-versions/${encodeURIComponent(versionId)}/content?project_id=${encodeURIComponent(projectId)}`;
     }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error getting file version content:', error);
-    throw error;
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      };
+    }
+
+    protected async getErrorMessage(response: Response): Promise<string> {
+      const errorText = await response.text().catch(() => "");
+      return `Failed to get version content: ${response.status} ${errorText}`.trim();
+    }
+
+    protected async onError(message: string): Promise<void> {
+      // Error handling - no logging
+    }
   }
+
+  return new GetFileVersionContentCall().execute();
 }
 
 /**
@@ -121,31 +134,52 @@ export async function listFileVersions(
   size: number;
   pages: number;
 }> {
-  const queryParams = new URLSearchParams({
-    file_id: fileId,
-    skip: skip.toString(),
-    limit: limit.toString(),
-  });
-  
-  const url = `${BASE_URL}/file-versions?${queryParams.toString()}`;
-  
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to list file versions: ${response.status} ${errorText}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error listing file versions:', error);
-    throw error;
-  }
-}
+  type ListFileVersionsResponse = {
+    items: Array<{
+      version_id: string;
+      file_id: string;
+      version_number: number;
+      version_link: string;
+      size_in_bytes: number;
+      created_at: string;
+      created_by: string;
+    }>;
+    total: number;
+    page: number;
+    size: number;
+    pages: number;
+  };
 
+  class ListFileVersionsCall extends BaseAPITemplate<ListFileVersionsResponse> {
+    protected buildURL(): string {
+      const queryParams = new URLSearchParams({
+        file_id: fileId,
+        skip: skip.toString(),
+        limit: limit.toString(),
+      });
+
+      const baseV1Url = getBaseV1Url(this.getBaseURL());
+      return `${baseV1Url}/file-versions?${queryParams.toString()}`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      };
+    }
+
+    protected async getErrorMessage(response: Response): Promise<string> {
+      const errorText = await response.text().catch(() => "");
+      return `Failed to list file versions: ${response.status} ${errorText}`.trim();
+    }
+
+    protected async onError(message: string): Promise<void> {
+      // Error handling - no logging
+    }
+  }
+
+  return new ListFileVersionsCall().execute();
+}

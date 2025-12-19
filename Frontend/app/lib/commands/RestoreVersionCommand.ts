@@ -36,7 +36,7 @@ export class RestoreVersionCommand extends BaseCommand {
 
   constructor(
     userId: string,
-    private projectId: string,
+    projectId: string,
     private filePath: string,
     private targetVersionId: string,
     private versionService: VersionService,

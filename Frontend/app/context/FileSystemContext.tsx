@@ -42,15 +42,25 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
   const lastSavedContent = useRef<string>('');
   const watcherWsRef = useRef<WebSocket | null>(null);
+  const selectedFilePathRef = useRef<string | null>(null);
+  const sessionRestoredRef = useRef<boolean>(false);
 
   // Update project name when prop changes
   useEffect(() => {
     setCurrentProjectName(projectName);
   }, [projectName]);
+  
+  // Keep a ref to the currently selected file path to prevent stale closures from
+  // writing editor content into the wrong tab during rapid file switches.
+  useEffect(() => {
+    selectedFilePathRef.current = selectedFile?.path ?? null;
+  }, [selectedFile?.path]);
 
   // Load persisted project state on mount
   useEffect(() => {
     if (projectId) {
+      // New project => allow a one-time restore on the next successful loadFileTree()
+      sessionRestoredRef.current = false;
       const session = ProjectPersistenceService.loadProjectSession(projectId);
       if (session) {
         // Restore expanded folders
@@ -78,21 +88,22 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     }
   }, [projectId, projectName, currentProjectName]);
 
-  // Auto-save project state
+  // Persist UI state (open tabs / selected file / expanded folders) promptly.
+  // Important: avoid depending on `openFiles` reference since it changes on every edit.
+  const openFilePathsSignature = Array.from(openFiles.keys()).join('|');
+  const expandedFoldersSignature = Array.from(expandedFolders).join('|');
   useEffect(() => {
     if (!projectId) return;
-
-    const cleanup = ProjectPersistenceService.setupAutoSave(
-      projectId,
-      () => ({
-        openFiles: Array.from(openFiles.keys()),
-        selectedFile: selectedFile?.path || null,
-        expandedFolders: Array.from(expandedFolders)
-      })
-    );
-
-    return cleanup;
-  }, [projectId, openFiles, selectedFile, expandedFolders]);
+    const timeout = setTimeout(() => {
+      ProjectPersistenceService.saveFileState(
+        projectId,
+        Array.from(openFiles.keys()),
+        selectedFile?.path || null,
+        Array.from(expandedFolders)
+      );
+    }, 150);
+    return () => clearTimeout(timeout);
+  }, [projectId, openFilePathsSignature, expandedFoldersSignature, selectedFile?.path]);
 
   const handleError = (error: Error | unknown, action: string) => {
     console.error(`Error ${action}:`, error);
@@ -211,17 +222,6 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     }
   }, [projectId, userId, user?.email, handleExternalChanges]);
 
-  const saveProjectState = useCallback(() => {
-    if (projectId) {
-      ProjectPersistenceService.saveFileState(
-        projectId,
-        Array.from(openFiles.keys()),
-        selectedFile?.path || null,
-        Array.from(expandedFolders)
-      );
-    }
-  }, [projectId, openFiles, selectedFile, expandedFolders]);
-
   const closeFile = useCallback((path: string) => {
     setOpenFiles(prev => {
       const newMap = new Map(prev);
@@ -291,54 +291,59 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       if (data.success) {
         setFileTree(data.structure || []);
         
-        // Restore previously open files and selected file
-        const session = ProjectPersistenceService.loadProjectSession(projectId);
-        if (session) {
-          // Restore open files
-          for (const filePath of session.openFiles) {
-            try {
-              const fileResponse = await fetch(`${baseUrl}/api/projects/${projectId}/files/read?path=${encodeURIComponent(filePath)}`);
-              
-              if (fileResponse.ok) {
-                const fileData = await fileResponse.json();
-                
-                if (fileData.success) {
-                  const fileItem: FileSystemItem = {
-                    name: filePath.split('/').pop() || filePath,
-                    path: filePath,
-                    type: 'file',
-                    size: fileData.content.length
-                  };
-                  
-                  setOpenFiles(prev => new Map(prev).set(filePath, {
-                    item: fileItem,
-                    content: fileData.content,
-                    savedContent: fileData.content, // Track saved content
-                    isDirty: false
-                  }));
+        // Restore previously open files and selected file ONCE per project.
+        // `loadFileTree()` is called after many operations (create/rename/move/etc) and
+        // should never re-open tabs that the user already closed.
+        if (!sessionRestoredRef.current) {
+          sessionRestoredRef.current = true;
+          const session = ProjectPersistenceService.loadProjectSession(projectId);
+          if (session) {
+            // Restore open files
+            for (const filePath of session.openFiles) {
+              try {
+                const fileResponse = await fetch(`${baseUrl}/api/projects/${projectId}/files/read?path=${encodeURIComponent(filePath)}`);
+
+                if (fileResponse.ok) {
+                  const fileData = await fileResponse.json();
+
+                  if (fileData.success) {
+                    const fileItem: FileSystemItem = {
+                      name: filePath.split('/').pop() || filePath,
+                      path: filePath,
+                      type: 'file',
+                      size: fileData.content.length
+                    };
+
+                    setOpenFiles(prev => new Map(prev).set(filePath, {
+                      item: fileItem,
+                      content: fileData.content,
+                      savedContent: fileData.content, // Track saved content
+                      isDirty: false
+                    }));
+                  }
                 }
+              } catch (error) {
+                console.warn(`Failed to restore file: ${filePath}`, error);
               }
-            } catch (error) {
-              console.warn(`Failed to restore file: ${filePath}`, error);
             }
-          }
-          
-          // Restore selected file
-          if (session.selectedFile && data.structure) {
-            const findFileInTree = (items: FileSystemItem[], path: string): FileSystemItem | null => {
-              for (const item of items) {
-                if (item.path === path) return item;
-                if (item.children) {
-                  const found = findFileInTree(item.children, path);
-                  if (found) return found;
+
+            // Restore selected file
+            if (session.selectedFile && data.structure) {
+              const findFileInTree = (items: FileSystemItem[], path: string): FileSystemItem | null => {
+                for (const item of items) {
+                  if (item.path === path) return item;
+                  if (item.children) {
+                    const found = findFileInTree(item.children, path);
+                    if (found) return found;
+                  }
                 }
+                return null;
+              };
+
+              const selectedFileItem = findFileInTree(data.structure, session.selectedFile);
+              if (selectedFileItem) {
+                setSelectedFile(selectedFileItem);
               }
-              return null;
-            };
-            
-            const selectedFileItem = findFileInTree(data.structure, session.selectedFile);
-            if (selectedFileItem) {
-              setSelectedFile(selectedFileItem);
             }
           }
         }
@@ -471,7 +476,6 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       setCurrentFileContent(openFile.content);
       // Use savedContent if available, otherwise use content
       lastSavedContent.current = openFile.savedContent || openFile.content;
-      saveProjectState();
       return;
     }
     
@@ -490,12 +494,16 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           size: new Blob([content]).size
         };
         
-        setOpenFiles(prev => new Map(prev.set(item.path, { 
-          item: updatedItem, 
-          content, 
-          savedContent: content, // Track saved content
-          isDirty: false 
-        })));
+        setOpenFiles(prev => {
+          const next = new Map(prev);
+          next.set(item.path, { 
+            item: updatedItem, 
+            content, 
+            savedContent: content, // Track saved content
+            isDirty: false 
+          });
+          return next;
+        });
         
         setSelectedFile(updatedItem);
         setCurrentFileContent(content);
@@ -524,7 +532,6 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
           return updateFileInTree(prev);
         });
         
-        saveProjectState();
       } else {
         throw new Error(data.error || 'Failed to open file');
       }
@@ -533,9 +540,9 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     } finally {
       setIsLoading(false);
     }
-  }, [projectId, baseUrl, openFiles, saveProjectState]);
+  }, [projectId, baseUrl, openFiles]);
 
-  const saveFile = useCallback(async (path: string, content: string) => {
+  const saveFile = useCallback(async (path: string, content: string, skipCommand: boolean = false) => {
     if (!projectId) return;
     
     // Check if content actually changed - don't create duplicate versions
@@ -572,6 +579,35 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         }
         return newMap;
       });
+
+      // If skipCommand is true, just update state without creating a command
+      // This is used when a SaveFileCommand was already created elsewhere (e.g., in handleSave)
+      if (skipCommand) {
+        // Just update the state to reflect that the file was saved
+        setOpenFiles(prev => {
+          const newMap = new Map(prev);
+          const openFile = newMap.get(path);
+          if (openFile) {
+            newMap.set(path, { 
+              ...openFile,
+              savedContent: content, // Update saved content
+              isDirty: false,
+              isSaving: false
+            });
+          }
+          return newMap;
+        });
+        lastSavedContent.current = content;
+        
+        // Notify peers via watcher channel for instant updates
+        const ws = watcherWsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'file:changed', path, content }));
+          } catch {}
+        }
+        return; // Exit early - no command creation needed
+      }
 
       // Create file system service adapter for SaveFileCommand
       const saveFileService = {
@@ -727,10 +763,10 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         lastSavedContent.current = newContent;
       };
 
-      // Get the content that was in the editor BEFORE this save
+      // Get the previous saved content (what was saved before this save)
       // This is what we'll restore to when undoing
       const openFile = openFiles.get(path);
-      const previousContentBeforeSave = openFile?.content || null;
+      const previousContentBeforeSave = openFile?.savedContent || null;
 
       // Execute save using command pattern (enables undo/redo)
       // Pass the previous content so we can restore to it on undo
@@ -883,34 +919,36 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     if (item && openFiles.has(item.path)) {
       const openFile = openFiles.get(item.path)!;
       setCurrentFileContent(openFile.content);
-      lastSavedContent.current = openFile.content;
+      lastSavedContent.current = openFile.savedContent || openFile.content;
     } else {
       setCurrentFileContent('');
       lastSavedContent.current = '';
     }
   }, [openFiles]);
 
-  const updateCurrentContent = useCallback((content: string) => {
-    setCurrentFileContent(content);
-    
-    // Update isDirty flag when content changes
-    if (selectedFile) {
-      setOpenFiles(prev => {
-        const newMap = new Map(prev);
-        const openFile = newMap.get(selectedFile.path);
-        if (openFile) {
-          // Compare with saved content to determine if dirty
-          const isDirty = content !== openFile.savedContent;
-          newMap.set(selectedFile.path, {
-            ...openFile,
-            content: content,
-            isDirty: isDirty
-          });
-        }
-        return newMap;
-      });
+  const updateCurrentContent = useCallback((path: string, content: string) => {
+    // Update the per-file buffer first (always scoped by `path`)
+    setOpenFiles(prev => {
+      const next = new Map(prev);
+      const openFile = next.get(path);
+      if (openFile) {
+        const isDirty = content !== openFile.savedContent;
+        next.set(path, {
+          ...openFile,
+          content,
+          isDirty,
+        });
+      }
+      return next;
+    });
+
+    // Only update the visible editor content if this update belongs to the
+    // currently selected tab. This prevents cross-file content mixing when
+    // Monaco emits late onChange events during tab switches.
+    if (selectedFilePathRef.current === path) {
+      setCurrentFileContent(content);
     }
-  }, [selectedFile]);
+  }, []);
 
   const searchFiles = useCallback(async (query: string): Promise<SearchResult[]> => {
     if (!projectId || !query.trim()) return [];
@@ -1028,7 +1066,13 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     setOpenFiles(new Map());
     setSelectedFile(null);
     setCurrentFileContent('');
-  }, [setOpenFiles, setSelectedFile, setCurrentFileContent]);
+    lastSavedContent.current = '';
+
+    // Persist immediately so a subsequent file-tree refresh doesn't resurrect old tabs.
+    if (projectId) {
+      ProjectPersistenceService.saveFileState(projectId, [], null, Array.from(expandedFolders));
+    }
+  }, [projectId, expandedFolders, setOpenFiles, setSelectedFile, setCurrentFileContent]);
 
   const getFileMetadata = useCallback(async (path: string) => {
     // TODO: Implement metadata retrieval
@@ -1165,7 +1209,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       clearTimeout(autoSaveTimeoutRef.current);
     }
 
-    // Set new timeout for auto-save (3 seconds of inactivity)
+    // Set new timeout for auto-save (10 seconds of inactivity)
     autoSaveTimeoutRef.current = setTimeout(async () => {
       // Check again before saving
       const currentOpenFile = openFiles.get(selectedFile.path);
@@ -1185,7 +1229,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       } finally {
         isSavingRef.current = false;
       }
-    }, 3000); // 3 seconds of inactivity
+    }, 10000); // 10 seconds of inactivity
 
     return () => {
       if (autoSaveTimeoutRef.current) {

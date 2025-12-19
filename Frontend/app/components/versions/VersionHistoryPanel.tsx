@@ -33,6 +33,7 @@ export default function VersionHistoryPanel({
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [versionContent, setVersionContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
+  const [hoveredVersion, setHoveredVersion] = useState<string | null>(null);
 
   // Load versions when component mounts
   useEffect(() => {
@@ -208,9 +209,15 @@ export default function VersionHistoryPanel({
                 padding: '12px 16px',
                 borderBottom: '1px solid #2a2a2a',
                 cursor: 'pointer',
-                backgroundColor: selectedVersion === version.versionId ? '#2a2a2a' : 'transparent',
-                '&:hover': { backgroundColor: '#252525' }
+                backgroundColor:
+                  selectedVersion === version.versionId
+                    ? '#2a2a2a'
+                    : hoveredVersion === version.versionId
+                      ? '#252525'
+                      : 'transparent'
               }}
+              onMouseEnter={() => setHoveredVersion(version.versionId)}
+              onMouseLeave={() => setHoveredVersion(prev => (prev === version.versionId ? null : prev))}
               onClick={() => loadVersionContent(version.versionId)}
             >
               <div style={{

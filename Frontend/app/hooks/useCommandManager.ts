@@ -5,7 +5,7 @@
  * Automatically subscribes to command stack changes and updates UI.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { commandManager } from "@/lib/commands/CommandManager";
 import { Command } from "@/lib/commands/Command";
 import { eventBus, EventType } from "@/lib/events/EventBus";
@@ -15,6 +15,7 @@ interface CommandManagerState {
   canRedo: boolean;
   undoDescription: string | null;
   redoDescription: string | null;
+  isProcessing: boolean;
 }
 
 /**
@@ -45,20 +46,27 @@ export function useCommandManager() {
     canRedo: commandManager.canRedo(),
     undoDescription: commandManager.getUndoDescription(),
     redoDescription: commandManager.getRedoDescription(),
+    isProcessing: false,
   });
+
+  // Use ref to track processing state synchronously (prevents race conditions)
+  const isProcessingRef = useRef(false);
 
   // Update state when command stack changes
   useEffect(() => {
     const handleStackChange = () => {
+      // Don't update state if we're processing (to avoid race conditions)
+      if (isProcessingRef.current) {
+        return;
+      }
+      
       const newState = {
         canUndo: commandManager.canUndo(),
         canRedo: commandManager.canRedo(),
         undoDescription: commandManager.getUndoDescription(),
         redoDescription: commandManager.getRedoDescription(),
+        isProcessing: false,
       };
-      
-      // Debug logging
-      console.log('[useCommandManager] State update:', newState);
       
       setState(newState);
     };
@@ -70,42 +78,98 @@ export function useCommandManager() {
     const unsubscribe = eventBus.subscribe(
       EventType.PERMISSION_CHANGED, // Reusing existing event type
       (event: any) => {
-        console.log('[useCommandManager] Event received:', event);
         if (event.permission === 'command_stack_changed') {
-          console.log('[useCommandManager] Command stack changed event detected');
+          // Update state immediately when event is received
           handleStackChange();
         }
       }
     );
 
-    // Also poll the state periodically as a fallback (in case events are missed)
-    // This ensures the UI stays in sync even if events fail
-    const pollInterval = setInterval(() => {
-      handleStackChange();
-    }, 500); // Check every 500ms
-
     return () => {
       unsubscribe();
-      clearInterval(pollInterval);
     };
   }, []);
 
   // Memoized action handlers
   const undo = useCallback(async () => {
+    // Prevent multiple simultaneous operations using ref (synchronous check)
+    if (isProcessingRef.current) {
+      return; // Already processing, ignore this call
+    }
+    
+    isProcessingRef.current = true;
+    // Update state immediately to disable buttons (synchronous state update)
+    setState(prev => ({
+      ...prev,
+      canUndo: false,
+      canRedo: false,
+      isProcessing: true,
+    }));
+
     try {
       await commandManager.undo();
+      // Immediately update state after undo (don't wait for event)
+      setState({
+        canUndo: commandManager.canUndo(),
+        canRedo: commandManager.canRedo(),
+        undoDescription: commandManager.getUndoDescription(),
+        redoDescription: commandManager.getRedoDescription(),
+        isProcessing: false,
+      });
     } catch (error) {
       console.error('Undo failed:', error);
+      // Update state on error to reflect actual state
+      setState({
+        canUndo: commandManager.canUndo(),
+        canRedo: commandManager.canRedo(),
+        undoDescription: commandManager.getUndoDescription(),
+        redoDescription: commandManager.getRedoDescription(),
+        isProcessing: false,
+      });
       throw error;
+    } finally {
+      isProcessingRef.current = false;
     }
   }, []);
 
   const redo = useCallback(async () => {
+    // Prevent multiple simultaneous operations using ref (synchronous check)
+    if (isProcessingRef.current) {
+      return; // Already processing, ignore this call
+    }
+    
+    isProcessingRef.current = true;
+    // Update state immediately to disable buttons (synchronous state update)
+    setState(prev => ({
+      ...prev,
+      canUndo: false,
+      canRedo: false,
+      isProcessing: true,
+    }));
+
     try {
       await commandManager.redo();
+      // Immediately update state after redo (don't wait for event)
+      setState({
+        canUndo: commandManager.canUndo(),
+        canRedo: commandManager.canRedo(),
+        undoDescription: commandManager.getUndoDescription(),
+        redoDescription: commandManager.getRedoDescription(),
+        isProcessing: false,
+      });
     } catch (error) {
       console.error('Redo failed:', error);
+      // Update state on error to reflect actual state
+      setState({
+        canUndo: commandManager.canUndo(),
+        canRedo: commandManager.canRedo(),
+        undoDescription: commandManager.getUndoDescription(),
+        redoDescription: commandManager.getRedoDescription(),
+        isProcessing: false,
+      });
       throw error;
+    } finally {
+      isProcessingRef.current = false;
     }
   }, []);
 

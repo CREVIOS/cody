@@ -10,14 +10,17 @@ interface EditorAreaProps {
   userRole?: string;
 }
 
-export function EditorArea({ isDark, projectId, user, userRole }: EditorAreaProps) {
+export function EditorArea({ isDark, projectId: projectIdProp, user, userRole }: EditorAreaProps) {
   const { 
+    projectId: projectIdFromContext,
     selectedFile, 
     currentFileContent, 
     updateCurrentContent, 
     openFiles,
     saveFile
   } = useFileSystem();
+
+  const projectId = projectIdProp || projectIdFromContext;
 
   if (selectedFile && selectedFile.type === 'file') {
     return (

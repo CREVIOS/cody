@@ -667,6 +667,35 @@ EOF
       }, 2000);
 
       // Handle data from container to client; in TTY mode, forward raw stream
+      // Backpressure protection: pause the stream if the websocket send buffer grows too large.
+      const MAX_WS_BUFFERED_AMOUNT = 2 * 1024 * 1024; // 2 MB
+      const RESUME_AT_BUFFERED_AMOUNT = 512 * 1024; // 512 KB
+      let pausedForBackpressure = false;
+      let backpressureTimer = null;
+
+      const maybePauseForBackpressure = () => {
+        if (!stream || typeof stream.pause !== 'function' || typeof stream.resume !== 'function') return;
+        if (pausedForBackpressure) return;
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (ws.bufferedAmount > MAX_WS_BUFFERED_AMOUNT) {
+          pausedForBackpressure = true;
+          try { stream.pause(); } catch {}
+          backpressureTimer = setInterval(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+              try { clearInterval(backpressureTimer); } catch {}
+              backpressureTimer = null;
+              return;
+            }
+            if (ws.bufferedAmount <= RESUME_AT_BUFFERED_AMOUNT) {
+              try { stream.resume(); } catch {}
+              pausedForBackpressure = false;
+              try { clearInterval(backpressureTimer); } catch {}
+              backpressureTimer = null;
+            }
+          }, 50);
+        }
+      };
+
       stream.on('data', (data) => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
@@ -676,7 +705,10 @@ EOF
                 type: 'terminal:output',
                 sessionId,
                 data: payload.toString('base64')
-              }));
+              }), () => {
+                // After flush attempt, check whether we should pause the stream.
+                maybePauseForBackpressure();
+              });
 
               const dataStr = payload.toString();
               if (!bannerSent && (dataStr.includes('bash-') || dataStr.includes('$ ') || dataStr.includes('developer@'))) {
@@ -696,13 +728,27 @@ EOF
       });
 
       // Handle WebSocket messages
-      ws.on('message', async (message) => {
+      ws.on('message', async (message, isBinary) => {
         try {
-          const msg = JSON.parse(message);
+          if (isBinary) {
+            // Terminal control channel is JSON/text only
+            return;
+          }
+          const raw = typeof message === 'string' ? message : Buffer.from(message).toString('utf8');
+          // Cap message size to avoid memory abuse
+          if (raw.length > 2 * 1024 * 1024) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
+            return;
+          }
+          const msg = JSON.parse(raw);
           
           switch (msg.type) {
             case 'terminal:input':
               if (msg.sessionId === sessionId && currentSession) {
+                if (typeof msg.data !== 'string' || msg.data.length > 512 * 1024) {
+                  // 512KB base64 cap per input message
+                  break;
+                }
                 const data = Buffer.from(msg.data, 'base64');
                 console.log(`⬅️  [${sessionId}] Received input (${data.length} bytes):`, JSON.stringify(data.toString()));
                 currentSession.write(data);
@@ -710,7 +756,16 @@ EOF
               break;
               
             case 'terminal:resize':
-              if (msg.sessionId === sessionId && currentSession && msg.cols && msg.rows) {
+              if (
+                msg.sessionId === sessionId &&
+                currentSession &&
+                typeof msg.cols === 'number' &&
+                typeof msg.rows === 'number' &&
+                Number.isFinite(msg.cols) &&
+                Number.isFinite(msg.rows) &&
+                msg.cols > 0 &&
+                msg.rows > 0
+              ) {
                 await currentSession.resize(msg.cols, msg.rows);
               }
               break;
@@ -741,6 +796,10 @@ EOF
       // Handle WebSocket close
       ws.on('close', () => {
         console.log(`🔌 WebSocket closed for session: ${sessionId} (currentSession exists: ${!!currentSession})`);
+        if (backpressureTimer) {
+          try { clearInterval(backpressureTimer); } catch {}
+          backpressureTimer = null;
+        }
         if (currentSession) {
           this.cleanupSession(sessionId);
         }
@@ -754,6 +813,10 @@ EOF
           code: error.code,
           stack: error.stack
         });
+        if (backpressureTimer) {
+          try { clearInterval(backpressureTimer); } catch {}
+          backpressureTimer = null;
+        }
         if (currentSession) {
           this.cleanupSession(sessionId);
         }

@@ -251,8 +251,10 @@ export class BoundedCache<K, V> {
   public set(key: K, value: V): void {
     // If at capacity, remove oldest item (first item in Map)
     if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
+      const firstKey = this.cache.keys().next().value as K | undefined;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
     }
 
     this.cache.set(key, value);

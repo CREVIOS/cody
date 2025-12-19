@@ -1,5 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
+import { BaseAPITemplate } from "./BaseAPITemplate";
 
 export interface UserProjectPermissionsResponse {
   project_id: string;
@@ -10,24 +9,33 @@ export interface UserProjectPermissionsResponse {
 }
 
 export async function getUserProjectPermissions(projectId: string, userId: string): Promise<UserProjectPermissionsResponse> {
-  try {
-    const url = `${API_BASE_URL}/api/v1/permissions/projects/${projectId}?user_id=${encodeURIComponent(userId)}`;
-    const res = await fetch(url, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!res.ok) {
-      const msg = await getErrorMessage(res);
-      throw new Error(msg);
+  class GetUserProjectPermissionsCall extends BaseAPITemplate<UserProjectPermissionsResponse> {
+    constructor(
+      private projectId: string,
+      private userId: string
+    ) {
+      super();
     }
 
-    return await res.json();
-  } catch (err) {
-    console.error("Error fetching user project permissions:", err);
-    throw err;
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/permissions/projects/${encodeURIComponent(this.projectId)}?user_id=${encodeURIComponent(this.userId)}`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      };
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error fetching user project permissions:", message);
+    }
   }
+
+  return new GetUserProjectPermissionsCall(projectId, userId).execute();
 }
 
 

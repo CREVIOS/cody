@@ -1,49 +1,39 @@
-const Minio = require('minio');
 const path = require('path');
+const MinIOStorageAdapter = require('../adapters/minioStorageAdapter');
 
 class FileSystemService {
-  constructor() {
-    // Initialize MinIO client
-    this.minioClient = new Minio.Client({
-      endPoint: process.env.MINIO_ENDPOINT || 'localhost',
-      port: parseInt(process.env.MINIO_PORT || '9000', 10), // default matches docker-compose host mapping 9000:9000
-      useSSL: process.env.MINIO_USE_SSL === 'true',
-      accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-      secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
-    });
+  constructor(storageAdapter = new MinIOStorageAdapter()) {
+    this.storage = storageAdapter;
+    // Log which adapter is being used (Adapter Pattern verification)
+    const adapterName = this.storage.constructor.name;
+    console.log(`📦 [Adapter Pattern] FileSystemService initialized with: ${adapterName}`);
+    console.log(`   Adapter type: ${adapterName === 'MinIOStorageAdapter' ? 'MinIO (Production)' : adapterName === 'MockStorageAdapter' ? 'Mock (Testing)' : 'Custom'}`);
     
-    this.bucketName = 'projects';
-    this.initializeBucket();
+    // Preserve old eager initialization behavior (best-effort, not awaited).
+    if (typeof this.storage.init === 'function') {
+      this.storage.init().catch((err) => {
+        console.error('Error initializing storage adapter:', err);
+      });
+    }
   }
 
   async initializeBucket() {
-    try {
-      const bucketExists = await this.minioClient.bucketExists(this.bucketName);
-      if (!bucketExists) {
-        const region = process.env.MINIO_REGION || 'us-east-1';
-        await this.minioClient.makeBucket(this.bucketName, region);
-        console.log(`Bucket '${this.bucketName}' created successfully`);
-      } else {
-        console.log(`Bucket '${this.bucketName}' already exists`);
-      }
-    } catch (error) {
-      console.error('Error initializing bucket:', error);
+    // Backwards-compatible method name: now delegates to adapter init().
+    if (typeof this.storage.init !== 'function') {
+      return;
     }
+    await this.storage.init();
   }
 
   // Get project structure (file tree)
   async getProjectStructure(projectId) {
     try {
-      const prefix = `${projectId}/`;
-      const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, true);
-      
-      const objects = [];
-      for await (const obj of objectsStream) {
-        objects.push(obj);
-      }
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📁 [Adapter] getProjectStructure called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}`);
+      const objects = await this.storage.listFiles(projectId, '', { recursive: true });
 
       // Convert flat structure to tree
-      return this.buildFileTree(objects, prefix);
+      return this.buildFileTree(objects, `${projectId}/`);
     } catch (error) {
       console.error('Error getting project structure:', error);
       throw error;
@@ -61,7 +51,7 @@ class FileSystemService {
 
     // Process all objects first to build the complete folder structure
     objects.forEach(obj => {
-      const relativePath = obj.name.replace(prefix, '');
+      const relativePath = obj.path != null ? String(obj.path) : String(obj.name).replace(prefix, '');
       if (!relativePath) return; // Skip empty paths
       
       const pathParts = relativePath.split('/');
@@ -109,12 +99,9 @@ class FileSystemService {
   // Create a new file
   async createFile(projectId, filePath, content = '') {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      const buffer = Buffer.from(content, 'utf8');
-      
-      await this.minioClient.putObject(this.bucketName, objectName, buffer, buffer.length, {
-        'Content-Type': 'text/plain'
-      });
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📝 [Adapter] createFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
+      await this.storage.writeFile(projectId, filePath, content, { contentType: 'text/plain' });
 
       return {
         success: true,
@@ -130,8 +117,7 @@ class FileSystemService {
   // Create a new folder (by creating a .gitkeep file inside it)
   async createFolder(projectId, folderPath) {
     try {
-      const objectName = `${projectId}/${folderPath}/.gitkeep`;
-      await this.minioClient.putObject(this.bucketName, objectName, Buffer.from(''), 0);
+      await this.storage.writeFile(projectId, `${folderPath}/.gitkeep`, '', { contentType: 'text/plain' });
 
       return {
         success: true,
@@ -147,13 +133,9 @@ class FileSystemService {
   // Read file content
   async readFile(projectId, filePath) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      const stream = await this.minioClient.getObject(this.bucketName, objectName);
-      
-      let content = '';
-      for await (const chunk of stream) {
-        content += chunk.toString();
-      }
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📖 [Adapter] readFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
+      const content = await this.storage.readFile(projectId, filePath);
 
       return {
         success: true,
@@ -169,40 +151,18 @@ class FileSystemService {
   // Update file content (Phase 6: Returns version info for versioning)
   async updateFile(projectId, filePath, content) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      const buffer = Buffer.from(content, 'utf8');
-      
-      // Save to MinIO (creates new version if versioning is enabled)
-      await this.minioClient.putObject(this.bucketName, objectName, buffer, buffer.length, {
-        'Content-Type': 'text/plain'
-      });
-
-      // Get the new version ID after save
-      let versionId = null;
-      let etag = null;
-      let lastModified = null;
-      
-      try {
-        // Wait a small amount for MinIO to process the version
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        const stat = await this.minioClient.statObject(this.bucketName, objectName);
-        versionId = stat.versionId || null;
-        etag = stat.etag || null;
-        lastModified = stat.lastModified || new Date();
-      } catch (statError) {
-        console.warn('Could not get version info after save:', statError.message);
-        // Continue anyway - save was successful
-      }
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`✏️  [Adapter] updateFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
+      const meta = await this.storage.writeFile(projectId, filePath, content, { contentType: 'text/plain' });
 
       return {
         success: true,
         message: 'File updated successfully',
         path: filePath,
-        versionId: versionId, // Phase 6: Return MinIO version ID
-        size: buffer.length,
-        etag: etag,
-        lastModified: lastModified
+        versionId: meta.versionId, // Phase 6: Return version ID (if adapter supports)
+        size: meta.size,
+        etag: meta.etag,
+        lastModified: meta.lastModified
       };
     } catch (error) {
       console.error('Error updating file:', error);
@@ -213,23 +173,9 @@ class FileSystemService {
   // Delete file or folder
   async deleteItem(projectId, itemPath) {
     try {
-      const prefix = `${projectId}/${itemPath}`;
-      
-      // Check if it's a folder by listing objects with the prefix
-      const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, true);
-      const objectsToDelete = [];
-      
-      for await (const obj of objectsStream) {
-        objectsToDelete.push(obj.name);
-      }
-
-      if (objectsToDelete.length === 0) {
-        // Try deleting as a single file
-        await this.minioClient.removeObject(this.bucketName, prefix);
-      } else {
-        // Delete multiple objects (folder)
-        await this.minioClient.removeObjects(this.bucketName, objectsToDelete);
-      }
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`🗑️  [Adapter] deleteItem called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${itemPath}`);
+      await this.storage.deleteFile(projectId, itemPath);
 
       return {
         success: true,
@@ -245,36 +191,7 @@ class FileSystemService {
   // Rename file or folder
   async renameItem(projectId, oldPath, newPath) {
     try {
-      const oldPrefix = `${projectId}/${oldPath}`;
-      const newPrefix = `${projectId}/${newPath}`;
-
-      // List all objects that start with the old path
-      const objectsStream = this.minioClient.listObjects(this.bucketName, oldPrefix, true);
-      const objectsToMove = [];
-      
-      for await (const obj of objectsStream) {
-        objectsToMove.push(obj.name);
-      }
-
-      if (objectsToMove.length === 0) {
-        throw new Error('Item not found');
-      }
-
-      // Copy objects to new location and delete old ones
-      for (const oldObjectName of objectsToMove) {
-        const relativePath = oldObjectName.replace(oldPrefix, '');
-        const newObjectName = newPrefix + relativePath;
-
-        // Copy object to new location
-        await this.minioClient.copyObject(
-          this.bucketName, 
-          newObjectName, 
-          `/${this.bucketName}/${oldObjectName}`
-        );
-      }
-
-      // Delete old objects
-      await this.minioClient.removeObjects(this.bucketName, objectsToMove);
+      await this.storage.renameItem(projectId, oldPath, newPath);
 
       return {
         success: true,
@@ -323,12 +240,10 @@ class FileSystemService {
   // Search files in project (enhanced with content search)
   async searchFiles(projectId, query) {
     try {
-      const prefix = `${projectId}/`;
-      const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, true);
-      
+      const objects = await this.storage.listFiles(projectId, '', { recursive: true });
       const matchingFiles = [];
-      for await (const obj of objectsStream) {
-        const relativePath = obj.name.replace(prefix, '');
+      for (const obj of objects) {
+        const relativePath = obj.path;
         
         // Skip .gitkeep files
         if (relativePath.endsWith('.gitkeep')) {
@@ -348,11 +263,7 @@ class FileSystemService {
         // Also search file content for text files
         if (this.isTextFile(relativePath) && obj.size < 1024 * 1024) { // Only search files < 1MB
           try {
-            const stream = await this.minioClient.getObject(this.bucketName, obj.name);
-            let content = '';
-            for await (const chunk of stream) {
-              content += chunk.toString();
-            }
+            const content = await this.storage.readFile(projectId, relativePath);
             
             if (content.toLowerCase().includes(query.toLowerCase())) {
               const lines = content.split('\n');
@@ -409,8 +320,7 @@ class FileSystemService {
   // Get file metadata
   async getFileMetadata(projectId, filePath) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      const stat = await this.minioClient.statObject(this.bucketName, objectName);
+      const stat = await this.storage.statFile(projectId, filePath);
       
       return {
         success: true,
@@ -430,32 +340,7 @@ class FileSystemService {
   // Copy file or folder
   async copyItem(projectId, sourcePath, destinationPath) {
     try {
-      const sourcePrefix = `${projectId}/${sourcePath}`;
-      const destPrefix = `${projectId}/${destinationPath}`;
-
-      // List all objects that start with the source path
-      const objectsStream = this.minioClient.listObjects(this.bucketName, sourcePrefix, true);
-      const objectsToCopy = [];
-      
-      for await (const obj of objectsStream) {
-        objectsToCopy.push(obj.name);
-      }
-
-      if (objectsToCopy.length === 0) {
-        throw new Error('Source item not found');
-      }
-
-      // Copy objects to new location
-      for (const sourceObjectName of objectsToCopy) {
-        const relativePath = sourceObjectName.replace(sourcePrefix, '');
-        const destObjectName = destPrefix + relativePath;
-
-        await this.minioClient.copyObject(
-          this.bucketName, 
-          destObjectName, 
-          `/${this.bucketName}/${sourceObjectName}`
-        );
-      }
+      await this.storage.copyItem(projectId, sourcePath, destinationPath);
 
       return {
         success: true,
@@ -493,40 +378,9 @@ class FileSystemService {
   // List all projects
   async listProjects() {
     try {
-      const objectsStream = this.minioClient.listObjects(this.bucketName, '', false);
-      const projects = new Set();
-      
-      for await (const obj of objectsStream) {
-        // For non-recursive listing, MinIO returns objects with 'prefix' property for directories
-        // and 'name' property for files at the root level
-        const objectName = obj.prefix || obj.name;
-        
-        if (objectName && typeof objectName === 'string') {
-          // Extract project ID from object name (first part before '/')
-          let projectId;
-          if (obj.prefix) {
-            // For prefixes, remove the trailing slash
-            projectId = objectName.replace(/\/$/, '');
-          } else {
-            // For files, get the first part before '/'
-            projectId = objectName.split('/')[0];
-          }
-          
-          if (projectId && projectId.trim() !== '') {
-            projects.add(projectId);
-          }
-        }
-      }
-
-      const projectList = Array.from(projects).map(projectId => ({
-        id: projectId,
-        name: projectId,
-        lastModified: new Date() // We could enhance this to get actual last modified date
-      }));
-
       return {
         success: true,
-        projects: projectList
+        projects: await this.storage.listProjects()
       };
     } catch (error) {
       console.error('Error listing projects:', error);
@@ -537,22 +391,12 @@ class FileSystemService {
   // Delete entire project
   async deleteProject(projectId) {
     try {
-      const prefix = `${projectId}/`;
-      const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, true);
-      
-      const objectsToDelete = [];
-      for await (const obj of objectsStream) {
-        objectsToDelete.push(obj.name);
-      }
-
-      if (objectsToDelete.length > 0) {
-        await this.minioClient.removeObjects(this.bucketName, objectsToDelete);
-      }
+      const result = await this.storage.deleteProject(projectId);
 
       return {
         success: true,
         message: `Project '${projectId}' deleted successfully`,
-        deletedObjects: objectsToDelete.length
+        deletedObjects: result.deleted
       };
     } catch (error) {
       console.error('Error deleting project:', error);
@@ -563,15 +407,8 @@ class FileSystemService {
   // Check if project exists
   async projectExists(projectId) {
     try {
-      const prefix = `${projectId}/`;
-      const objectsStream = this.minioClient.listObjects(this.bucketName, prefix, false);
-
-      for await (const obj of objectsStream) {
-        // If we find any object with this prefix, project exists
-        return { success: true, exists: true };
-      }
-
-      return { success: true, exists: false };
+      const exists = await this.storage.projectExists(projectId);
+      return { success: true, exists };
     } catch (error) {
       console.error('Error checking project existence:', error);
       throw error;
@@ -586,35 +423,7 @@ class FileSystemService {
    */
   async listFileVersions(projectId, filePath) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      const versions = [];
-
-      // List all versions of the object
-      const stream = this.minioClient.listObjects(
-        this.bucketName,
-        objectName,
-        false,
-        { IncludeVersion: true }
-      );
-
-      for await (const obj of stream) {
-        // Skip if this is just a prefix/folder
-        if (obj.name !== objectName) {
-          continue;
-        }
-
-        versions.push({
-          versionId: obj.versionId,
-          isLatest: obj.isLatest || false,
-          lastModified: obj.lastModified,
-          size: obj.size,
-          etag: obj.etag,
-          isDeleteMarker: obj.isDeleteMarker || false
-        });
-      }
-
-      // Sort by lastModified descending (newest first)
-      versions.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+      const versions = await this.storage.getVersions(projectId, filePath);
 
       return {
         success: true,
@@ -633,36 +442,17 @@ class FileSystemService {
    */
   async getFileVersion(projectId, filePath, versionId) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-
-      // Get the specific version from MinIO
-      const stream = await this.minioClient.getObject(
-        this.bucketName,
-        objectName,
-        { versionId: versionId }
-      );
-
-      let content = '';
-      for await (const chunk of stream) {
-        content += chunk.toString();
-      }
-
-      // Get metadata for this version
-      const stat = await this.minioClient.statObject(
-        this.bucketName,
-        objectName,
-        { versionId: versionId }
-      );
+      const data = await this.storage.getVersion(projectId, filePath, versionId);
 
       return {
         success: true,
-        content: content,
+        content: data.content,
         path: filePath,
         versionId: versionId,
         metadata: {
-          size: stat.size,
-          lastModified: stat.lastModified,
-          etag: stat.etag
+          size: data.metadata.size,
+          lastModified: data.metadata.lastModified,
+          etag: data.metadata.etag
         }
       };
     } catch (error) {
@@ -677,24 +467,7 @@ class FileSystemService {
    */
   async restoreFileVersion(projectId, filePath, versionId) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-
-      // 1. Get the content of the version to restore
-      const versionData = await this.getFileVersion(projectId, filePath, versionId);
-
-      // 2. Upload it as the current version (creates a new version)
-      const buffer = Buffer.from(versionData.content, 'utf8');
-      await this.minioClient.putObject(
-        this.bucketName,
-        objectName,
-        buffer,
-        buffer.length,
-        {
-          'Content-Type': 'text/plain',
-          'x-amz-meta-restored-from': versionId, // Mark that this was restored
-          'x-amz-meta-restored-at': new Date().toISOString()
-        }
-      );
+      await this.storage.restoreVersion(projectId, filePath, versionId);
 
       return {
         success: true,
@@ -714,13 +487,7 @@ class FileSystemService {
    */
   async deleteFileVersion(projectId, filePath, versionId) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-
-      await this.minioClient.removeObject(
-        this.bucketName,
-        objectName,
-        { versionId: versionId }
-      );
+      await this.storage.deleteVersion(projectId, filePath, versionId);
 
       return {
         success: true,
@@ -741,11 +508,8 @@ class FileSystemService {
    */
   async getCurrentVersionId(projectId, filePath) {
     try {
-      const objectName = `${projectId}/${filePath}`;
-      
-      // Use statObject to get current version directly (much faster than listing all versions)
       try {
-        const stat = await this.minioClient.statObject(this.bucketName, objectName);
+        const stat = await this.storage.statFile(projectId, filePath);
         
         // statObject returns the current version's metadata including versionId
         if (stat.versionId) {
@@ -813,12 +577,9 @@ class FileSystemService {
    */
   async getVersioningStatus() {
     try {
-      const config = await this.minioClient.getBucketVersioning(this.bucketName);
       return {
         success: true,
-        bucket: this.bucketName,
-        status: config.Status || 'Not Enabled',
-        mfaDelete: config.MFADelete || 'Disabled'
+        ...(await this.storage.getVersioningStatus())
       };
     } catch (error) {
       console.error('Error getting versioning status:', error);
@@ -831,14 +592,10 @@ class FileSystemService {
    */
   async enableVersioning() {
     try {
-      await this.minioClient.setBucketVersioning(this.bucketName, {
-        Status: 'Enabled'
-      });
-
       return {
         success: true,
-        message: `Versioning enabled on bucket '${this.bucketName}'`,
-        bucket: this.bucketName
+        message: `Versioning enabled`,
+        ...(await this.storage.enableVersioning())
       };
     } catch (error) {
       console.error('Error enabling versioning:', error);

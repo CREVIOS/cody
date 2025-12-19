@@ -59,6 +59,7 @@ export default function EnhancedTerminal({
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [isTerminalMounted, setIsTerminalMounted] = useState(false);
   const [pendingOutput, setPendingOutput] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const connectionAttemptsRef = useRef<number>(0);
   const lastConnectionErrorRef = useRef<string | null>(null);
   const isConnectingRef = useRef<boolean>(false);
@@ -216,7 +217,7 @@ export default function EnhancedTerminal({
           logLevel: 'warn',
           allowTransparency: false,
           // Disable bracketed paste mode to fix ls output issues
-          bracketedPasteMode: false
+          ignoreBracketedPasteMode: true
       });
 
       // Create addons
@@ -967,6 +968,16 @@ export default function EnhancedTerminal({
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {error && (
+        <div className={`px-3 py-2 text-xs border-b ${
+          theme === 'dark'
+            ? 'bg-red-900/20 border-red-700/40 text-red-300'
+            : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          {error}
         </div>
       )}
 

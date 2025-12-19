@@ -1,5 +1,4 @@
-import { API_BASE_URL } from "./APIConfiguration";
-import { getErrorMessage } from "./ErrorHandling";
+import { BaseAPITemplate } from "./BaseAPITemplate";
 import { InvitationNotification, Notification, PaginatedResponse } from "./TypeDefinitions";
 
 export interface NotificationQueryOptions {
@@ -17,53 +16,77 @@ export const getUserInvitationNotifications = async (
   userId: string,
   options: NotificationQueryOptions = {}
 ): Promise<InvitationNotification[]> => {
-  const params = new URLSearchParams({
-    user_id: userId,
-    notification_type: options.notification_type ?? "invitation",
-    skip: String(options.skip ?? 0),
-    limit: String(options.limit ?? 100),
-  });
+  class GetUserInvitationNotificationsCall extends BaseAPITemplate<InvitationNotification[]> {
+    protected buildURL(): string {
+      const params = new URLSearchParams({
+        user_id: userId,
+        notification_type: options.notification_type ?? "invitation",
+        skip: String(options.skip ?? 0),
+        limit: String(options.limit ?? 100),
+      });
 
-  if (options.is_read !== undefined) {
-    params.append("is_read", String(options.is_read));
-  }
-  if (options.reference_id) {
-    params.append("reference_id", options.reference_id);
+      if (options.is_read !== undefined) {
+        params.append("is_read", String(options.is_read));
+      }
+      if (options.reference_id) {
+        params.append("reference_id", options.reference_id);
+      }
+
+      return `${this.getBaseURL()}/api/v1/notifications/?${params.toString()}`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return { method: "GET" };
+    }
+
+    protected async parseResponse(response: Response): Promise<InvitationNotification[]> {
+      const data: PaginatedResponse<InvitationNotification> = await response.json();
+      return (data.items || []).map((notification) => ({
+        ...notification,
+        payload: notification.payload ?? {},
+      }));
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error fetching invitation notifications:", message);
+    }
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/notifications/?${params.toString()}`);
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response);
-    throw new Error(errorMessage);
-  }
-
-  const data: PaginatedResponse<InvitationNotification> = await response.json();
-  return (data.items || []).map((notification) => ({
-    ...notification,
-    payload: notification.payload ?? {},
-  }));
+  return new GetUserInvitationNotificationsCall().execute();
 };
 
 /**
  * Mark a notification as read.
  */
 export const markNotificationRead = async (notificationId: string): Promise<Notification> => {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/notifications/${notificationId}/mark-read`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
+  class MarkNotificationReadCall extends BaseAPITemplate<Notification> {
+    constructor(private notificationId: string) {
+      super();
     }
-  );
 
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response);
-    throw new Error(errorMessage);
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/api/v1/notifications/${this.notificationId}/mark-read`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+      };
+    }
+
+    protected async parseResponse(response: Response): Promise<Notification> {
+      const updated: Notification = await response.json();
+      return {
+        ...updated,
+        payload: updated.payload ?? {},
+      };
+    }
+
+    protected async onError(message: string): Promise<void> {
+      console.error("Error marking notification read:", message);
+    }
   }
 
-  const updated: Notification = await response.json();
-  return {
-    ...updated,
-    payload: updated.payload ?? {},
-  };
+  return new MarkNotificationReadCall(notificationId).execute();
 };

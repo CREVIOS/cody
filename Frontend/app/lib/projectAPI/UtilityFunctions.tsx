@@ -1,25 +1,40 @@
-import { API_BASE_URL } from "./APIConfiguration";
 import { ProjectInvitation } from "./TypeDefinitions";
+import { BaseAPITemplateSilentFail } from "./BaseAPITemplate";
 
 /**
  * Test backend connection using health endpoint
  */
 export const testBackendConnection = async (): Promise<boolean> => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/health`, {
-        signal: AbortSignal.timeout(3000) // 3 second timeout
-      });
+  class TestBackendConnectionCall extends BaseAPITemplateSilentFail<boolean> {
+    protected buildURL(): string {
+      return `${this.getBaseURL()}/health`;
+    }
+
+    protected buildOptions(): RequestInit {
+      return {
+        method: "GET",
+        // 3 second timeout
+        signal: AbortSignal.timeout(3000),
+      };
+    }
+
+    protected async parseResponse(response: Response): Promise<boolean> {
+      // For /health we only care whether it's OK
       return response.ok;
-    } catch (error) {
-      // Network errors are expected when backend is down - log at debug level
-      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        console.debug('Backend health check failed: Server is not available');
-      } else {
-        console.debug('Backend health check failed:', error);
-      }
+    }
+
+    protected getFallbackValue(): boolean {
       return false;
     }
-  };
+
+    protected async onError(message: string): Promise<void> {
+      // Keep noise low; this is often expected in dev when backend is down
+      console.debug("Backend health check failed:", message);
+    }
+  }
+
+  return new TestBackendConnectionCall().execute();
+};
   
   /**
    * Check if an invitation is valid (not expired and pending)

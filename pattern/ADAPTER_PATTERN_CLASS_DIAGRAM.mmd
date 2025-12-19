@@ -1,0 +1,120 @@
+classDiagram
+    class StorageAdapter {
+        <<abstract>>
+        +async init()
+        +async readFile(projectId, filePath, options)
+        +async writeFile(projectId, filePath, content, options)
+        +async deleteFile(projectId, pathOrPrefix)
+        +async listFiles(projectId, prefix, options)
+        +async statFile(projectId, filePath, options)
+        +async copyItem(projectId, sourcePath, destinationPath)
+        +async renameItem(projectId, oldPath, newPath)
+        +async listProjects()
+        +async deleteProject(projectId)
+        +async projectExists(projectId)
+        +async getVersions(projectId, filePath)
+        +async getVersion(projectId, filePath, versionId)
+        +async restoreVersion(projectId, filePath, versionId)
+        +async deleteVersion(projectId, filePath, versionId)
+        +async getVersioningStatus()
+        +async enableVersioning()
+    }
+
+    class MinIOStorageAdapter {
+        -bucketName: string
+        -minioClient: Minio.Client
+        +constructor(options)
+        -_objectName(projectId, filePath): string
+        +async init()
+        +async readFile(projectId, filePath, options)
+        +async writeFile(projectId, filePath, content, options)
+        +async deleteFile(projectId, pathOrPrefix)
+        +async listFiles(projectId, prefix, options)
+        +async statFile(projectId, filePath, options)
+        +async copyItem(projectId, sourcePath, destinationPath)
+        +async renameItem(projectId, oldPath, newPath)
+        +async listProjects()
+        +async deleteProject(projectId)
+        +async projectExists(projectId)
+        +async getVersions(projectId, filePath)
+        +async getVersion(projectId, filePath, versionId)
+        +async restoreVersion(projectId, filePath, versionId)
+        +async deleteVersion(projectId, filePath, versionId)
+        +async getVersioningStatus()
+        +async enableVersioning()
+    }
+
+    class MockStorageAdapter {
+        -projects: Map~string, Map~string, object~~
+        +constructor()
+        -_getProject(projectId): Map
+        -_getEntry(projectId, filePath): object
+        +async readFile(projectId, filePath, options)
+        +async writeFile(projectId, filePath, content)
+        +async deleteFile(projectId, pathOrPrefix)
+        +async listFiles(projectId, prefix, options)
+        +async statFile(projectId, filePath, options)
+        +async copyItem(projectId, sourcePath, destinationPath)
+        +async renameItem(projectId, oldPath, newPath)
+        +async listProjects()
+        +async deleteProject(projectId)
+        +async projectExists(projectId)
+        +async getVersions(projectId, filePath)
+        +async getVersion(projectId, filePath, versionId)
+        +async restoreVersion(projectId, filePath, versionId)
+        +async deleteVersion(projectId, filePath, versionId)
+        +async getVersioningStatus()
+        +async enableVersioning()
+    }
+
+    class FileSystemService {
+        -storage: StorageAdapter
+        +constructor(storageAdapter)
+        +async initializeBucket()
+        +async getProjectStructure(projectId)
+        +buildFileTree(objects, prefix)
+        +async createFile(projectId, filePath, content)
+        +async createFolder(projectId, folderPath)
+        +async readFile(projectId, filePath)
+        +async updateFile(projectId, filePath, content)
+        +async deleteItem(projectId, itemPath)
+        +async renameItem(projectId, oldPath, newPath)
+        +async initializeProject(projectId)
+        +async searchFiles(projectId, query)
+        +isTextFile(filePath): boolean
+        +async getFileMetadata(projectId, filePath)
+        +async copyItem(projectId, sourcePath, destinationPath)
+        +async moveItem(projectId, sourcePath, destinationPath)
+        +async listProjects()
+        +async deleteProject(projectId)
+        +async projectExists(projectId)
+        +async listFileVersions(projectId, filePath)
+        +async getFileVersion(projectId, filePath, versionId)
+        +async restoreFileVersion(projectId, filePath, versionId)
+        +async deleteFileVersion(projectId, filePath, versionId)
+        +async getCurrentVersionId(projectId, filePath)
+        +async getVersioningStatus()
+        +async enableVersioning()
+    }
+
+    class MinioClient {
+        <<external>>
+        +getObject(bucket, objectName, options)
+        +putObject(bucket, objectName, stream, size, meta)
+        +removeObject(bucket, objectName, options)
+        +listObjects(bucket, prefix, recursive, options)
+        +statObject(bucket, objectName, options)
+        +copyObject(bucket, destObject, sourceObject)
+        +bucketExists(bucketName)
+        +makeBucket(bucketName, region)
+        +getBucketVersioning(bucketName)
+        +setBucketVersioning(bucketName, config)
+    }
+
+    StorageAdapter <|-- MinIOStorageAdapter : implements
+    StorageAdapter <|-- MockStorageAdapter : implements
+    FileSystemService o-- StorageAdapter : uses (dependency injection)
+    MinIOStorageAdapter ..> MinioClient : uses
+    MockStorageAdapter : in-memory storage
+    MinIOStorageAdapter : MinIO object storage
+

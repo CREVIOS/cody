@@ -270,14 +270,14 @@ export function usePermissions({ roleId, projectId, userId }: UsePermissionsProp
     hasAnyPermission,
     hasAllPermissions,
     getPermissionDetails,
-    refreshPermissions: () => {
+    refreshPermissions: async () => {
       // Clear cache and force refresh
       const cacheKey = getCacheKey(projectId, userId);
       if (cacheKey) {
         permissionsCache.delete(cacheKey);
         lastFetchedKey.current = '';
       }
-      fetchPermissions();
+      await fetchPermissions();
     },
   };
 }

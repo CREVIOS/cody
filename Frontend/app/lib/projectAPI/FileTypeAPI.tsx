@@ -1,5 +1,4 @@
-import { API_BASE_URL } from './APIConfiguration';
-import { getErrorMessage } from './ErrorHandling';
+import { BaseAPITemplateSilentFail } from "./BaseAPITemplate";
 import { PaginatedResponse } from './TypeDefinitions';
 
 // File Type interface
@@ -21,43 +20,70 @@ let fileTypesCache: FileType[] | null = null;
 export const FileTypeAPI = {
   // Get all file types
   async getAllFileTypes(): Promise<FileType[]> {
-    try {
-      // Return cached result if available
-      if (fileTypesCache) {
-        return fileTypesCache;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/api/v1/file-types/?limit=100`);
-
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
-      }
-
-      const data: PaginatedResponse<FileType> = await response.json();
-      fileTypesCache = data.items;
-      return data.items;
-    } catch (error) {
-      console.error('Failed to fetch file types:', error);
-      return [];
+    // Return cached result if available
+    if (fileTypesCache) {
+      return fileTypesCache;
     }
+
+    class GetAllFileTypesCall extends BaseAPITemplateSilentFail<FileType[]> {
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/file-types/?limit=100`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
+      }
+
+      protected async parseResponse(response: Response): Promise<FileType[]> {
+        const data: PaginatedResponse<FileType> = await response.json();
+        return data.items || [];
+      }
+
+      protected onSuccess(data: FileType[]): void {
+        fileTypesCache = data;
+      }
+
+      protected getFallbackValue(): FileType[] {
+        return [];
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Failed to fetch file types:", message);
+      }
+    }
+
+    return new GetAllFileTypesCall().execute();
   },
 
   // Get a specific file type by ID
   async getFileTypeById(fileTypeId: string): Promise<FileType | null> {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/file-types/${fileTypeId}`);
-
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new Error(errorMessage);
+    class GetFileTypeByIdCall extends BaseAPITemplateSilentFail<FileType | null> {
+      constructor(private fileTypeId: string) {
+        super();
       }
 
-      return await response.json();
-    } catch (error) {
-      console.error('Failed to fetch file type:', error);
-      return null;
+      protected buildURL(): string {
+        return `${this.getBaseURL()}/api/v1/file-types/${this.fileTypeId}`;
+      }
+
+      protected buildOptions(): RequestInit {
+        return { method: "GET" };
+      }
+
+      protected async parseResponse(response: Response): Promise<FileType | null> {
+        return response.json();
+      }
+
+      protected getFallbackValue(): FileType | null {
+        return null;
+      }
+
+      protected async onError(message: string): Promise<void> {
+        console.error("Failed to fetch file type:", message);
+      }
     }
+
+    return new GetFileTypeByIdCall(fileTypeId).execute();
   },
 
   // Get file type by extension
