@@ -104,6 +104,7 @@ export const listUsers = async (): Promise<User[]> => {
     if (!ownerRole) {
       throw new Error("Owner role not found in the system");
     }
+    const ownerRoleId = ownerRole.role_id;
 
     type RawUserProjectsResponse = {
       owned_projects?: Project[];
@@ -139,7 +140,7 @@ export const listUsers = async (): Promise<User[]> => {
           // Handle owned projects
           ...(data.owned_projects || []).map((project: Project) => ({
             ...project,
-            role_id: ownerRole.role_id,
+            role_id: ownerRoleId,
           })),
           // Handle member projects
           ...(data.member_projects || []).map((memberProject) => {
@@ -397,7 +398,7 @@ export const listUsers = async (): Promise<User[]> => {
     try {
       // Extract username from email if not provided in metadata
       // Ensure username is unique by appending a suffix if needed
-      let username = metadata?.username || email.split('@')[0];
+      const username = metadata?.username || email.split('@')[0];
       
       // Create user with placeholder password (auth handles authentication)
       const userData: UserCreateData = {

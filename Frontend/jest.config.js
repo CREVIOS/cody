@@ -23,8 +23,8 @@ const customJestConfig = {
     '!app/**/*.test.{js,jsx,ts,tsx}',
     '!app/**/*.spec.{js,jsx,ts,tsx}',
   ],
+  modulePathIgnorePatterns: ['<rootDir>/.next/'],
 }
 
 // createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
 module.exports = createJestConfig(customJestConfig)
-

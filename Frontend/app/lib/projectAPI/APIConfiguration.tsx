@@ -7,8 +7,10 @@ const getApiBaseUrl = (): string => {
   }
 
   if (typeof window !== 'undefined') {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:8000`;
+    // Browser default: use relative URLs so Next.js rewrites can route to the API backend.
+    // This prevents CORS issues and avoids hard-coding a port (8000) which may not be reachable
+    // for other users (e.g. behind a reverse proxy / different deployment topology).
+    return '';
   }
 
   // Server-side fallback

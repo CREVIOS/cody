@@ -63,6 +63,10 @@ export default function ProjectCreateModal({
       setError("Project name is required");
       return;
     }
+    if (!activeUserId) {
+      setError("You must be signed in to create a project.");
+      return;
+    }
 
     try {
       setIsCreating(true);

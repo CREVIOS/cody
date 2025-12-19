@@ -31,7 +31,7 @@ export class SaveFileCommand extends BaseCommand {
 
   constructor(
     userId: string,
-    private projectId: string,
+    projectId: string,
     private filePath: string,
     private newContent: string, // New content being saved
     private previousContentBeforeSave: string | null, // Content that was in editor BEFORE save
@@ -361,4 +361,3 @@ export class SaveFileCommand extends BaseCommand {
     };
   }
 }
-

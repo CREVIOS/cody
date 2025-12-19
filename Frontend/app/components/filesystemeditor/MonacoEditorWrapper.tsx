@@ -4,7 +4,7 @@ import { useCollaborativeEditor } from "../../hooks/use-collaborative-editor";
 import { RemoteCursors, injectRemoteCursorStyles } from "../collaboration/RemoteCursors";
 import { CollaborativeUserAvatars } from "../collaboration/CollaborativeUserList";
 import { Editor } from '@monaco-editor/react';
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 // Using any to avoid depending on monaco-editor type package
 import { useRealtimeCursors } from '@/hooks/use-realtime-cursors';
 
@@ -74,9 +74,16 @@ export function MonacoEditorWrapper({
   onWsStatusChange,
 }: MonacoEditorWrapperProps) {
   const editorRef = useRef<any | null>(null);
+  const [editorForKey, setEditorForKey] = useState<{ key: string; editor: any | null }>({
+    key: '',
+    editor: null,
+  });
+  const viewStatesRef = useRef<Map<string, any>>(new Map());
+  const editorKey = docKey ?? roomName;
+  const effectiveEditor = editorForKey.key === editorKey ? editorForKey.editor : null;
 
   // Realtime cursors / locking (top-level hook usage)
-  const { isEditor, activeEditor, inactivitySeconds, lockEvent } = useRealtimeCursors({
+  const { inactivitySeconds, lockEvent } = useRealtimeCursors({
     roomName,
     username,
     userId,
@@ -179,7 +186,7 @@ export function MonacoEditorWrapper({
   const [collabState, collabActions] = useCollaborativeEditor(
     collaboration?.enabled && canEditWithLock
       ? {
-          editor: editorRef.current,
+          editor: effectiveEditor,
           docId: collaboration.docId,
           projectId: collaboration.projectId,
           filePath: collaboration.filePath,
@@ -206,29 +213,19 @@ export function MonacoEditorWrapper({
     }
   }, [collaboration?.enabled, collabActions, onCollaborationReady]);
 
-  // Keep Yjs doc content aligned with the selected file's actual content on file switches.
-  // This prevents a newly opened file (including empty ones) from inheriting text from
-  // a previously opened file. On every docId change we hard-reset the CRDT doc to match
-  // the backend content for that file.
-  const lastDocIdRef = useRef<string | null>(null);
+  // Preserve per-file cursor/scroll position when switching between files.
+  // We store view state by `editorKey` and restore it on mount/model swap.
   useEffect(() => {
-    if (!collaboration?.enabled || !collabActions) return;
-    const docId = collaboration.docId;
-    if (!docId) return;
-
-    const previousDocId = lastDocIdRef.current;
-    lastDocIdRef.current = docId;
-
-    // Only run when we first see this docId or when switching to a different docId
-    if (previousDocId === docId) return;
-
-    const initial = content ?? '';
-
-    // Always reset the CRDT document to the file's current content on doc switch.
-    // This guarantees strict per-file isolation, at the cost of discarding any
-    // stale or conflicting local CRDT state for that docId.
-    collabActions.setContent?.(initial);
-  }, [collaboration?.enabled, collaboration?.docId, collabActions, content]);
+    return () => {
+      const ed = editorRef.current;
+      if (!ed || !editorKey) return;
+      try {
+        viewStatesRef.current.set(editorKey, ed.saveViewState());
+      } catch {
+        // ignore
+      }
+    };
+  }, [editorKey]);
 
   // Phase 7: Report WebSocket status to parent for debug panel
   useEffect(() => {
@@ -271,8 +268,20 @@ export function MonacoEditorWrapper({
     }
   }, [collaboration?.enabled]);
 
-  const handleEditorDidMount = (editor: any, monaco: any) => {
+  const handleEditorDidMount = useCallback((editor: any, monaco: any) => {
     editorRef.current = editor;
+    setEditorForKey({ key: editorKey, editor });
+    
+    // Restore view state for this file, if available
+    const saved = editorKey ? viewStatesRef.current.get(editorKey) : null;
+    if (saved) {
+      try {
+        editor.restoreViewState(saved);
+      } catch {
+        // ignore
+      }
+    }
+    editor.focus();
     
     // Add custom keybindings for enhanced functionality
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
@@ -315,7 +324,7 @@ export function MonacoEditorWrapper({
     });
 
     // Hook usage moved to top-level; mount handler only sets ref and keybindings
-  };
+  }, [editorKey]);
 
   return (
     <div className="flex-1 relative flex flex-col min-w-0 overflow-hidden">
@@ -359,12 +368,14 @@ export function MonacoEditorWrapper({
       </div>
       <div className="flex-1 min-w-0 min-h-0 overflow-hidden" style={{ transition: 'opacity 0.2s ease' }}>
         <Editor
+          key={editorKey}
+          path={editorKey}
           height="100%"
           width="100%"
           theme={isDark ? "vs-dark" : "light"}
           language={language}
           value={collaboration?.enabled ? undefined : content}
-          onChange={collaboration?.enabled ? undefined : onChange}
+          onChange={onChange}
           onMount={handleEditorDidMount}
           loading={<div className="flex items-center justify-center h-full text-[#cccccc]">Loading editor...</div>}
         options={{

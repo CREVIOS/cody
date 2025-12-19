@@ -134,7 +134,22 @@ async function initializeServices() {
       gcEnabled: true,
       roomCleanupInterval: 60 * 1000, // 1 minute
       roomIdleTimeout: 5 * 60 * 1000, // 5 minutes
-      pubSubBridge: collabPubSub
+      pubSubBridge: collabPubSub,
+      // Production-grade: seed new file docs from the actual file content ON THE SERVER.
+      // This prevents "double content" when two users open the same file concurrently
+      // and both clients try to insert the initial content into an empty CRDT doc.
+      initialContentProvider: async ({ projectId, filePath }) => {
+        if (!projectId || !filePath) return null;
+        try {
+          const result = await fileSystemService.readFile(projectId, filePath);
+          if (result && result.success && typeof result.content === 'string') {
+            return result.content;
+          }
+        } catch (err) {
+          console.warn('[Collaboration] Failed to load initial content for doc', { projectId, filePath, error: err?.message || String(err) });
+        }
+        return null;
+      }
     });
 
     // Initialize version retention manager with default strategy
@@ -1598,6 +1613,23 @@ function handleFileCollabConnection(ws, projectId, connectionId, url) {
       code: 'MISSING_FILE_PATH'
     }));
     ws.close(1008, 'File path required');
+    return;
+  }
+
+  // Basic path validation: prevent traversal / null byte.
+  // File paths are treated as logical project paths; they must not escape via "..".
+  const normalizedPath = String(filePath).replace(/\\/g, '/');
+  if (
+    normalizedPath.length > 4096 ||
+    normalizedPath.includes('\0') ||
+    normalizedPath.split('/').some((seg) => seg === '..')
+  ) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Invalid file path',
+      code: 'INVALID_FILE_PATH'
+    }));
+    ws.close(1008, 'Invalid file path');
     return;
   }
 

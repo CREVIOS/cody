@@ -68,71 +68,56 @@ describe('FileSystemService', () => {
 
   describe('getProjectStructure', () => {
     it('should return project structure successfully', async () => {
-      const mockObjects = [
-        { name: 'project1/file1.txt', size: 100, lastModified: new Date() }
-      ];
-      
-      // Mock async iterator
-      const mockAsyncIterator = {
-        [Symbol.asyncIterator]: async function* () {
-          for (const obj of mockObjects) {
-            yield obj;
-          }
-        }
-      };
-
-      mockMinioClient.listObjects.mockReturnValue(mockAsyncIterator);
+      const listFilesSpy = jest.spyOn(mockStorage, 'listFiles').mockResolvedValue([
+        { path: 'file1.txt', size: 100, lastModified: new Date() }
+      ]);
 
       const result = await fileSystemService.getProjectStructure('project1');
 
-      expect(mockMinioClient.listObjects).toHaveBeenCalledWith('projects', 'project1/', true);
+      expect(listFilesSpy).toHaveBeenCalledWith('project1', '', { recursive: true });
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('file1.txt');
     });
 
     it('should handle errors when getting project structure', async () => {
-      mockMinioClient.listObjects.mockImplementation(() => {
-        throw new Error('MinIO error');
-      });
+      jest.spyOn(mockStorage, 'listFiles').mockRejectedValue(new Error('Storage error'));
 
-      await expect(fileSystemService.getProjectStructure('project1')).rejects.toThrow('MinIO error');
+      await expect(fileSystemService.getProjectStructure('project1')).rejects.toThrow('Storage error');
     });
   });
 
   describe('createFile', () => {
     it('should create file successfully', async () => {
-      mockMinioClient.putObject.mockResolvedValue();
+      const writeSpy = jest.spyOn(mockStorage, 'writeFile').mockResolvedValue({
+        versionId: '1',
+        etag: 'etag',
+        lastModified: new Date(),
+        size: 11
+      });
 
       const result = await fileSystemService.createFile('project1', 'test.txt', 'Hello World');
 
-      expect(mockMinioClient.putObject).toHaveBeenCalledWith(
-        'projects',
-        'project1/test.txt',
-        expect.any(Buffer),
-        11,
-        { 'Content-Type': 'text/plain' }
-      );
+      expect(writeSpy).toHaveBeenCalledWith('project1', 'test.txt', 'Hello World', { contentType: 'text/plain' });
       expect(result.success).toBe(true);
       expect(result.path).toBe('test.txt');
     });
 
     it('should create file with empty content by default', async () => {
-      mockMinioClient.putObject.mockResolvedValue();
+      const writeSpy = jest.spyOn(mockStorage, 'writeFile').mockResolvedValue({
+        versionId: '1',
+        etag: 'etag',
+        lastModified: new Date(),
+        size: 0
+      });
 
       const result = await fileSystemService.createFile('project1', 'empty.txt');
 
-      expect(mockMinioClient.putObject).toHaveBeenCalledWith(
-        'projects',
-        'project1/empty.txt',
-        expect.any(Buffer),
-        0,
-        { 'Content-Type': 'text/plain' }
-      );
+      expect(writeSpy).toHaveBeenCalledWith('project1', 'empty.txt', '', { contentType: 'text/plain' });
       expect(result.success).toBe(true);
     });
 
     it('should handle file creation errors', async () => {
-      mockMinioClient.putObject.mockRejectedValue(new Error('Upload failed'));
+      jest.spyOn(mockStorage, 'writeFile').mockRejectedValue(new Error('Upload failed'));
 
       await expect(fileSystemService.createFile('project1', 'test.txt', 'content')).rejects.toThrow('Upload failed');
     });
@@ -140,22 +125,22 @@ describe('FileSystemService', () => {
 
   describe('createFolder', () => {
     it('should create folder successfully', async () => {
-      mockMinioClient.putObject.mockResolvedValue();
+      const writeSpy = jest.spyOn(mockStorage, 'writeFile').mockResolvedValue({
+        versionId: '1',
+        etag: 'etag',
+        lastModified: new Date(),
+        size: 0
+      });
 
       const result = await fileSystemService.createFolder('project1', 'newfolder');
 
-      expect(mockMinioClient.putObject).toHaveBeenCalledWith(
-        'projects',
-        'project1/newfolder/.gitkeep',
-        expect.any(Buffer),
-        0
-      );
+      expect(writeSpy).toHaveBeenCalledWith('project1', 'newfolder/.gitkeep', '', { contentType: 'text/plain' });
       expect(result.success).toBe(true);
       expect(result.path).toBe('newfolder');
     });
 
     it('should handle folder creation errors', async () => {
-      mockMinioClient.putObject.mockRejectedValue(new Error('Folder creation failed'));
+      jest.spyOn(mockStorage, 'writeFile').mockRejectedValue(new Error('Folder creation failed'));
 
       await expect(fileSystemService.createFolder('project1', 'newfolder')).rejects.toThrow('Folder creation failed');
     });
@@ -164,24 +149,18 @@ describe('FileSystemService', () => {
   describe('readFile', () => {
     it('should read file content successfully', async () => {
       const mockContent = 'File content';
-      const mockStream = {
-        [Symbol.asyncIterator]: async function* () {
-          yield Buffer.from(mockContent);
-        }
-      };
-
-      mockMinioClient.getObject.mockResolvedValue(mockStream);
+      const readSpy = jest.spyOn(mockStorage, 'readFile').mockResolvedValue(mockContent);
 
       const result = await fileSystemService.readFile('project1', 'test.txt');
 
-      expect(mockMinioClient.getObject).toHaveBeenCalledWith('projects', 'project1/test.txt');
+      expect(readSpy).toHaveBeenCalledWith('project1', 'test.txt');
       expect(result.success).toBe(true);
       expect(result.content).toBe(mockContent);
       expect(result.path).toBe('test.txt');
     });
 
     it('should handle file reading errors', async () => {
-      mockMinioClient.getObject.mockRejectedValue(new Error('File not found'));
+      jest.spyOn(mockStorage, 'readFile').mockRejectedValue(new Error('File not found'));
 
       await expect(fileSystemService.readFile('project1', 'nonexistent.txt')).rejects.toThrow('File not found');
     });
@@ -189,23 +168,19 @@ describe('FileSystemService', () => {
 
   describe('updateFile', () => {
     it('should update file successfully', async () => {
-      mockMinioClient.putObject.mockResolvedValue();
+      const meta = { versionId: '2', etag: 'etag2', lastModified: new Date(), size: 15 };
+      const writeSpy = jest.spyOn(mockStorage, 'writeFile').mockResolvedValue(meta);
 
       const result = await fileSystemService.updateFile('project1', 'test.txt', 'Updated content');
 
-      expect(mockMinioClient.putObject).toHaveBeenCalledWith(
-        'projects',
-        'project1/test.txt',
-        expect.any(Buffer),
-        15,
-        { 'Content-Type': 'text/plain' }
-      );
+      expect(writeSpy).toHaveBeenCalledWith('project1', 'test.txt', 'Updated content', { contentType: 'text/plain' });
       expect(result.success).toBe(true);
       expect(result.path).toBe('test.txt');
+      expect(result.versionId).toBe(meta.versionId);
     });
 
     it('should handle file update errors', async () => {
-      mockMinioClient.putObject.mockRejectedValue(new Error('Update failed'));
+      jest.spyOn(mockStorage, 'writeFile').mockRejectedValue(new Error('Update failed'));
 
       await expect(fileSystemService.updateFile('project1', 'test.txt', 'content')).rejects.toThrow('Update failed');
     });
@@ -213,92 +188,43 @@ describe('FileSystemService', () => {
 
   describe('deleteItem', () => {
     it('should delete single file successfully', async () => {
-      const mockObjects = [
-        { name: 'project1/test.txt' }
-      ];
-      
-      const mockAsyncIterator = {
-        [Symbol.asyncIterator]: async function* () {
-          for (const obj of mockObjects) {
-            yield obj;
-          }
-        }
-      };
-
-      mockMinioClient.listObjects.mockReturnValue(mockAsyncIterator);
-      mockMinioClient.removeObjects.mockResolvedValue();
+      const delSpy = jest.spyOn(mockStorage, 'deleteFile').mockResolvedValue({ deleted: 1 });
 
       const result = await fileSystemService.deleteItem('project1', 'test.txt');
 
-      expect(mockMinioClient.removeObjects).toHaveBeenCalledWith('projects', ['project1/test.txt']);
+      expect(delSpy).toHaveBeenCalledWith('project1', 'test.txt');
       expect(result.success).toBe(true);
     });
 
     it('should delete folder with multiple files successfully', async () => {
-      const mockObjects = [
-        { name: 'project1/folder/file1.txt' },
-        { name: 'project1/folder/file2.txt' }
-      ];
-      
-      const mockAsyncIterator = {
-        [Symbol.asyncIterator]: async function* () {
-          for (const obj of mockObjects) {
-            yield obj;
-          }
-        }
-      };
-
-      mockMinioClient.listObjects.mockReturnValue(mockAsyncIterator);
-      mockMinioClient.removeObjects.mockResolvedValue();
+      const delSpy = jest.spyOn(mockStorage, 'deleteFile').mockResolvedValue({ deleted: 2 });
 
       const result = await fileSystemService.deleteItem('project1', 'folder');
 
-      expect(mockMinioClient.removeObjects).toHaveBeenCalledWith('projects', [
-        'project1/folder/file1.txt',
-        'project1/folder/file2.txt'
-      ]);
+      expect(delSpy).toHaveBeenCalledWith('project1', 'folder');
       expect(result.success).toBe(true);
     });
 
     it('should handle deletion errors', async () => {
-      mockMinioClient.listObjects.mockImplementation(() => {
-        throw new Error('List failed');
-      });
+      jest.spyOn(mockStorage, 'deleteFile').mockRejectedValue(new Error('Delete failed'));
 
-      await expect(fileSystemService.deleteItem('project1', 'test.txt')).rejects.toThrow('List failed');
+      await expect(fileSystemService.deleteItem('project1', 'test.txt')).rejects.toThrow('Delete failed');
     });
   });
 
   describe('projectExists', () => {
     it('should return true if project exists', async () => {
-      const mockObjects = [
-        { name: 'project1/file.txt' }
-      ];
-      
-      const mockAsyncIterator = {
-        [Symbol.asyncIterator]: async function* () {
-          for (const obj of mockObjects) {
-            yield obj;
-          }
-        }
-      };
-
-      mockMinioClient.listObjects.mockReturnValue(mockAsyncIterator);
+      const existsSpy = jest.spyOn(mockStorage, 'projectExists').mockResolvedValue(true);
 
       const result = await fileSystemService.projectExists('project1');
 
+      expect(existsSpy).toHaveBeenCalledWith('project1');
       expect(result.success).toBe(true);
       expect(result.exists).toBe(true);
     });
 
     it('should return false if project does not exist', async () => {
-      const mockAsyncIterator = {
-        [Symbol.asyncIterator]: async function* () {
-          // Empty iterator
-        }
-      };
-
-      mockMinioClient.listObjects.mockReturnValue(mockAsyncIterator);
+      jest.spyOn(mockStorage, 'projectExists').mockResolvedValue(false);
 
       const result = await fileSystemService.projectExists('nonexistent');
 
@@ -307,9 +233,7 @@ describe('FileSystemService', () => {
     });
 
     it('should handle errors when checking project existence', async () => {
-      mockMinioClient.listObjects.mockImplementation(() => {
-        throw new Error('Connection error');
-      });
+      jest.spyOn(mockStorage, 'projectExists').mockRejectedValue(new Error('Connection error'));
 
       await expect(fileSystemService.projectExists('project1')).rejects.toThrow('Connection error');
     });

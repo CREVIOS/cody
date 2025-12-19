@@ -267,6 +267,9 @@ async function testCommandStateManagement() {
 
 // Run all tests
 async function runAllTests() {
+  testsPassed = 0;
+  testsFailed = 0;
+
   console.log('\n');
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║       COMMAND PATTERN TEST SUITE                          ║');
@@ -289,14 +292,29 @@ async function runAllTests() {
     console.log(`📊 Total Tests: ${testsPassed + testsFailed}`);
     console.log(`🎯 Success Rate: ${((testsPassed / (testsPassed + testsFailed)) * 100).toFixed(2)}%`);
     console.log('\n✅ ALL COMMAND PATTERN TESTS PASSED!\n');
-
-    process.exit(0);
+    return { testsPassed, testsFailed };
   } catch (error) {
     console.error('\n❌ TEST SUITE FAILED');
     console.error(error);
-    process.exit(1);
+    throw error;
   }
 }
 
-// Run tests
-runAllTests().catch(console.error);
+describe('RestoreVersionCommand (command pattern)', () => {
+  it('passes the command-pattern suite', async () => {
+    const result = await runAllTests();
+    expect(result.testsFailed).toBe(0);
+  });
+});
+
+// Allow running directly via Node/ts-node for ad-hoc debugging.
+if (require.main === module) {
+  runAllTests()
+    .then((r) => {
+      console.log(`Done: ${r.testsPassed} passed, ${r.testsFailed} failed`);
+    })
+    .catch((e) => {
+      console.error(e);
+      process.exitCode = 1;
+    });
+}

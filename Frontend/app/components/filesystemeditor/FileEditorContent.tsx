@@ -9,6 +9,8 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { useFileLock } from '@/hooks/useFileLock';
 import { useCommandManager } from '@/hooks/useCommandManager';
 import { API_BASE_URL } from '@/lib/projectAPI/APIConfiguration';
+import { SaveFileCommand } from '@/lib/commands/SaveFileCommand';
+import { getFileVersionContent, saveFileContent } from '@/lib/projectAPI/FileVersionsAPI';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -23,7 +25,7 @@ interface OpenFileContent {
 interface FileEditorContentProps {
   selectedFile: FileSystemItem;
   currentFileContent: string;
-  updateCurrentContent: (content: string) => void;
+  updateCurrentContent: (path: string, content: string) => void;
   saveFile: (path: string, content: string) => void;
   openFiles: Map<string, OpenFileContent>;
   isDark: boolean;
@@ -115,6 +117,28 @@ export function FileEditorContent({
       setLanguage(detectedLanguage);
     }
   }, [selectedFile]);
+
+  // Normalize file path (server treats paths as logical project paths using forward slashes).
+  const normalizedPath = useMemo(() => selectedFile?.path?.replace(/\\/g, '/') ?? '', [selectedFile?.path]);
+
+  // Ensure a stable user id so collaboration always connects (even if user is missing due to edge cases).
+  const effectiveUserId = useMemo(() => {
+    if (user?.user_id) return user.user_id;
+    if (typeof window === 'undefined') return '';
+    const key = 'cody-anon-user-id';
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const created = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    window.localStorage.setItem(key, created);
+    return created;
+  }, [user?.user_id]);
+
+  const effectiveUserName = useMemo(() => {
+    return user?.username || user?.email || 'User';
+  }, [user?.username, user?.email]);
+
+  const collabProjectId = realtimeKey?.projectId || projectId || '';
+  const collaborationEnabled = !collabDisabled && !!collabProjectId && !!normalizedPath && !!effectiveUserId;
 
   // COMMENTED OUT: Lock request/release disabled (CRDT-only mode)
   // // Phase 5: Request lock when file opens
@@ -223,7 +247,7 @@ export function FileEditorContent({
 
   const handleEditorChange = (value: string | undefined) => {
     // CRDT-only mode: Always allow changes - no permission checks
-    updateCurrentContent(value || "");
+    updateCurrentContent(normalizedPath, value || "");
   };
 
   // Command manager for undo/redo
@@ -231,13 +255,17 @@ export function FileEditorContent({
 
   const handleSave = useCallback(async () => {
     // CRDT-only mode: Always allow save - no permission or lock checks
-    if (!selectedFile || !projectId || !user?.user_id) return;
+    if (!selectedFile || !projectId) return;
+    if (!user?.user_id) {
+      alert('You must be logged in to save.');
+      return;
+    }
     
     try {
       // Phase 6 Step 2: Get CRDT snapshot if collaboration is enabled
       let contentToSave = currentFileContent;
       
-      if (realtimeKey && collaborationActionsRef.current?.getSnapshot) {
+      if (collaborationActionsRef.current?.getSnapshot) {
         // Get snapshot from Y.Doc (Phase 6: Use CRDT snapshot)
         const snapshot = collaborationActionsRef.current.getSnapshot();
         if (snapshot !== undefined && snapshot !== null) {
@@ -245,10 +273,6 @@ export function FileEditorContent({
           console.log('[Save] Using Y.Doc snapshot for save:', snapshot.length, 'chars');
         }
       }
-      
-      // Phase 6 Step 2: Use SaveFileCommand with new API
-      const { SaveFileCommand } = await import('@/lib/commands/SaveFileCommand');
-      const { saveFileContent } = await import('@/lib/projectAPI/FileVersionsAPI');
       
       // Create save service that uses the new API
       const saveService = {
@@ -286,7 +310,6 @@ export function FileEditorContent({
         },
         getFileVersion: async (projId: string, filePath: string, versionId: string) => {
           // Phase 6: Use new version content endpoint
-          const { getFileVersionContent } = await import('@/lib/projectAPI/FileVersionsAPI');
           const result = await getFileVersionContent(versionId, projId);
           return { success: true, content: result.content };
         },
@@ -305,7 +328,7 @@ export function FileEditorContent({
             // Phase 6 Step 6: Update Y.Doc directly with restored content
             collaborationActionsRef.current?.setContent?.(content);
             // Also update UI
-            updateCurrentContent(content);
+            updateCurrentContent(normalizedPath, content);
             console.log('[Save] Updated Y.Doc and UI with restored version content');
           }
         : undefined;
@@ -319,13 +342,13 @@ export function FileEditorContent({
       const saveCommand = new SaveFileCommand(
         user.user_id,
         projectId,
-        selectedFile.path,
+        normalizedPath,
         contentToSave,
         currentFileContent, // Previous content before save
         saveServiceWithYDoc,
         (updatedContent: string) => {
           // Update UI with saved content
-          updateCurrentContent(updatedContent);
+          updateCurrentContent(normalizedPath, updatedContent);
         }
       );
       
@@ -345,7 +368,7 @@ export function FileEditorContent({
       // Phase 7: Dev-only logging
       if (process.env.NODE_ENV === 'development') {
         console.log('[Phase 7] Save succeeded:', {
-          filePath: selectedFile.path,
+          filePath: normalizedPath,
           contentLength: contentToSave.length,
           timestamp: new Date().toISOString(),
         });
@@ -353,7 +376,7 @@ export function FileEditorContent({
       
       // Also call the original saveFile for FileSystemContext integration
       // This updates the openFiles state in the context
-      await saveFile(selectedFile.path, contentToSave);
+      await saveFile(normalizedPath, contentToSave);
       
     } catch (error) {
       console.error('Save failed:', error);
@@ -375,7 +398,7 @@ export function FileEditorContent({
       // Phase 7: Dev-only logging
       if (process.env.NODE_ENV === 'development') {
         console.error('[Phase 7] Save error:', {
-          filePath: selectedFile.path,
+          filePath: normalizedPath,
           error: error instanceof Error ? error.message : String(error),
           timestamp: new Date().toISOString(),
         });
@@ -384,7 +407,7 @@ export function FileEditorContent({
       // Show user-friendly error message
       alert(errorMessage);
     }
-  }, [selectedFile, currentFileContent, saveFile, realtimeKey, projectId, user?.user_id, updateCurrentContent, openFiles]);
+  }, [selectedFile, projectId, currentFileContent, normalizedPath, saveFile, updateCurrentContent, user?.user_id]);
 
   const handleUndo = useCallback(async () => {
     // CRDT-only mode: Remove permission check - always allow undo
@@ -481,14 +504,14 @@ export function FileEditorContent({
   }, [handleSave, handleUndo, handleRedo, canEdit, canUndo, canRedo]);
 
   const isModified = () => {
-    const openFile = openFiles.get(selectedFile.path);
+    const openFile = openFiles.get(normalizedPath);
     if (!openFile) return false;
     // Check if content differs from saved content
     return openFile.isDirty || currentFileContent !== (openFile.savedContent || openFile.content);
   };
 
   const isSaving = () => {
-    const openFile = openFiles.get(selectedFile.path);
+    const openFile = openFiles.get(normalizedPath);
     return openFile?.isSaving || false;
   };
 
@@ -596,7 +619,7 @@ export function FileEditorContent({
       )} */}
 
       {/* Phase 7: WebSocket offline warning */}
-      {realtimeKey && wsStatus === 'disconnected' && (
+      {collaborationEnabled && wsStatus === 'disconnected' && (
         <div className={`px-3 py-1.5 text-xs border-b flex items-center gap-2 shrink-0 ${
           isDark 
             ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-300' 
@@ -612,28 +635,25 @@ export function FileEditorContent({
         onChange={handleEditorChange}
         isDark={isDark}
         roomName={projectId || 'default'}
-        username={user?.username || 'User'}
-        userId={user?.user_id || ''}
-        docKey={selectedFile.path}
+        username={effectiveUserName}
+        userId={effectiveUserId}
+        docKey={normalizedPath}
         forceReadOnly={false}
         lockState={null}
         lockStatusMessage={undefined}
         collaboration={
-          // CRDT-only mode: Enable collaboration regardless of permissions
-          // Always enable CRDT collaboration - no permission checks
-          !collabDisabled && realtimeKey
+          // Production-grade: collaboration must not depend on realtime-key (permissions endpoint).
+          // If realtime-key fetch fails (CORS/proxy/temporary API outage), users should STILL sync edits.
+          collaborationEnabled
             ? {
                 enabled: true,
-                // Use per-file docId so each file has its own collaboration room.
-                // Match the server's getFileDocId(projectId, filePath) = `file:${projectId}:${filePath}`
-                docId: `file:${realtimeKey.projectId}:${selectedFile.path}`,
-                projectId: realtimeKey.projectId,
-                // CRITICAL: Use the actual file path for WebSocket connection, not the fileId UUID
-                // The server expects the real file path for file-collab connections
-                filePath: selectedFile.path,
+                // Match SBackend: getFileDocId(projectId, filePath) = `file:${projectId}:${filePath}`
+                docId: `file:${collabProjectId}:${normalizedPath}`,
+                projectId: collabProjectId,
+                filePath: normalizedPath,
                 user: {
-                  id: user?.user_id || '',
-                  name: user?.username || user?.email || 'User',
+                  id: effectiveUserId,
+                  name: effectiveUserName,
                 },
                 wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
                 offlineSupport: true,
@@ -658,19 +678,18 @@ export function FileEditorContent({
         lockState={null}
         lastSavedVersionId={lastSavedVersionId}
         lastSavedAt={lastSavedAt}
-        isCollaborative={!!realtimeKey}
+        isCollaborative={collaborationEnabled}
         wsStatus={wsStatus}
         onReloadVersion={async (versionId: string) => {
           // Phase 7 Step 6: Force reload version (dev tool)
           if (!projectId || !collaborationActionsRef.current?.setContent) return;
           
           try {
-            const { getFileVersionContent } = await import('@/lib/projectAPI/FileVersionsAPI');
             const result = await getFileVersionContent(versionId, projectId);
             
             // Update Y.Doc with version content
             collaborationActionsRef.current.setContent(result.content);
-            updateCurrentContent(result.content);
+            updateCurrentContent(normalizedPath, result.content);
             
             console.log('[Phase 7] Reloaded version:', versionId);
           } catch (error) {

@@ -5,6 +5,7 @@ const awarenessProtocol = require('y-protocols/awareness');
 const messageAwareness = 3;
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { createLogger } = require('./logger');
 
@@ -14,16 +15,36 @@ const UPDATE_BATCH_INTERVAL_MS = 50;
 const AWARENESS_THROTTLE_MS = 50;
 const WS_BACKPRESSURE_THRESHOLD = 1_000_000; // 1 MB buffered
 const WS_MAX_QUEUE = 500; // Max queued messages per client
+const WS_MAX_MESSAGE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap per frame
+const INITIAL_DOC_MAX_CHARS = 5 * 1024 * 1024; // 5M chars safety cap for initial file load
+
+function storageKeyForDocId(docId) {
+  return crypto.createHash('sha256').update(String(docId)).digest('hex');
+}
+
+function parseFileDocId(docId) {
+  const s = String(docId || '');
+  if (!s.startsWith('file:')) return null;
+  const rest = s.slice('file:'.length);
+  const idx = rest.indexOf(':');
+  if (idx <= 0) return null;
+  const projectId = rest.slice(0, idx);
+  const filePath = rest.slice(idx + 1);
+  if (!filePath) return null;
+  return { projectId, filePath };
+}
 
 class CollaborationRoom extends EventEmitter {
   constructor(docId, persistencePath, options = {}) {
     super();
     this.docId = docId;
+    this.storageKey = storageKeyForDocId(docId);
     this.persistencePath = persistencePath;
     this.doc = new Y.Doc();
     this.textName = options.textName || 'monaco';
     this.awareness = new awarenessProtocol.Awareness(this.doc);
     this.pubSubBridge = options.pubSubBridge || null;
+    this.initialContentProvider = options.initialContentProvider || null;
     this.connections = new Map(); // clientId -> { ws, user, rateLimitTracker }
     this.updateLog = []; // Array of Uint8Array updates
     this.lastSnapshot = Date.now();
@@ -50,10 +71,20 @@ class CollaborationRoom extends EventEmitter {
     // Setup listeners
     this.setupDocumentListeners();
 
-    // Load persisted state
-    this.loadFromDisk().catch(err => {
-      this.logger.error('Failed to load persisted state', err);
-    });
+    // Load persisted state BEFORE allowing any client sync/updates.
+    // IMPORTANT: loadFromDisk applies updates with origin 'persistence' and we do NOT broadcast those;
+    // if a client syncs before this finishes, it may see an empty doc and then cause duplicate inserts.
+    this._ready = false;
+    this.readyPromise = (async () => {
+      try {
+        await this.loadFromDisk();
+        await this.initializeFromSourceIfEmpty();
+      } catch (err) {
+        this.logger.error('Failed to load persisted state', err);
+      } finally {
+        this._ready = true;
+      }
+    })();
 
     // Metrics
     this.metrics = {
@@ -67,6 +98,21 @@ class CollaborationRoom extends EventEmitter {
     };
 
     this.logger.event('room_created', { config: this.config });
+  }
+
+  getStorageDocPath() {
+    return path.join(this.persistencePath, this.storageKey);
+  }
+
+  getLegacyDocPathIfSafe() {
+    // Legacy on-disk layout used docId directly as a directory name.
+    // This is unsafe if docId contains path separators or traversal sequences,
+    // so only allow it if it resolves within persistencePath.
+    const root = path.resolve(this.persistencePath);
+    const legacyResolved = path.resolve(this.persistencePath, this.docId);
+    if (legacyResolved === root) return null;
+    if (!legacyResolved.startsWith(root + path.sep)) return null;
+    return legacyResolved;
   }
 
   setupDocumentListeners() {
@@ -116,38 +162,8 @@ class CollaborationRoom extends EventEmitter {
 
     this.logger.metric('active_connections', this.connections.size, 'count');
 
-    // Seed awareness so other clients see the user immediately
-    // NOTE: We store user awareness state keyed by clientId (connection ID)
-    // The client's doc.clientID is different from our connectionId
-    try {
-      // Ensure awareness is initialized
-      if (!this.awareness) {
-        this.logger.warn('Awareness not initialized, reinitializing', { clientId });
-        this.awareness = new awarenessProtocol.Awareness(this.doc);
-      }
-
-      // Store user state in awareness states map directly
-      // Note: We cannot use setLocalState here because that's only for the local client
-      // Instead, we track user info separately and broadcast awareness updates
-      // The awareness state will be set when the client sends its first awareness update
-
-      // For now, just broadcast any existing awareness states to the new client
-      this.sendAwarenessToClient(ws);
-    } catch (err) {
-      this.logger.warn('Failed to setup initial awareness for client', {
-        clientId,
-        error: err.message
-      });
-    }
-
-    // Send initial sync
-    this.sendSyncStep1(ws);
-
-    // Send current awareness state (only if properly initialized)
-    this.sendAwarenessToClient(ws);
-
-    // Setup message handler
-    ws.on('message', (message) => this.handleMessage(clientId, message));
+    // Setup message handler ASAP (clients may send sync immediately on open)
+    ws.on('message', (message, isBinary) => this.handleMessage(clientId, message, isBinary));
 
     // Setup close handler
     ws.on('close', () => this.removeConnection(clientId));
@@ -159,6 +175,77 @@ class CollaborationRoom extends EventEmitter {
     });
 
     this.emit('connection', { clientId, userInfo });
+
+    // Wait for persistence load before doing ANY protocol sync/awareness.
+    // This prevents clients from syncing against an empty doc while persisted content is still loading.
+    void this.readyPromise.then(() => {
+      // Client might have disconnected while we were loading
+      if (!this.connections.has(clientId)) return;
+      if (ws.readyState !== ws.OPEN) return;
+
+      // Seed awareness so other clients see the user immediately
+      // NOTE: We store user awareness state keyed by clientId (connection ID)
+      // The client's doc.clientID is different from our connectionId
+      try {
+        // Ensure awareness is initialized
+        if (!this.awareness) {
+          this.logger.warn('Awareness not initialized, reinitializing', { clientId });
+          this.awareness = new awarenessProtocol.Awareness(this.doc);
+        }
+
+        // For now, just send any existing awareness states to the new client
+        this.sendAwarenessToClient(ws);
+      } catch (err) {
+        this.logger.warn('Failed to setup initial awareness for client', {
+          clientId,
+          error: err.message
+        });
+      }
+
+      // Send initial sync
+      this.sendSyncStep1(ws);
+
+      // Send current awareness state (only if properly initialized)
+      this.sendAwarenessToClient(ws);
+    });
+  }
+
+  async initializeFromSourceIfEmpty() {
+    try {
+      if (typeof this.initialContentProvider !== 'function') return;
+
+      const yText = this.doc.getText(this.textName);
+      const current = yText.toString();
+      if (current && current.length > 0) return;
+
+      const parsed = parseFileDocId(this.docId);
+      if (!parsed) return;
+
+      const initial = await this.initialContentProvider({
+        docId: this.docId,
+        projectId: parsed.projectId,
+        filePath: parsed.filePath,
+      });
+
+      if (typeof initial !== 'string' || initial.length === 0) return;
+      if (initial.length > INITIAL_DOC_MAX_CHARS) {
+        this.logger.warn('Initial content too large, skipping init', { length: initial.length });
+        return;
+      }
+
+      // Re-check emptiness in case another initializer ran.
+      const currentAfter = yText.toString();
+      if (currentAfter && currentAfter.length > 0) return;
+
+      // Insert with a distinct origin so it's persisted. Clients will receive it via sync.
+      this.doc.transact(() => {
+        yText.insert(0, initial);
+      }, 'init');
+
+      this.logger.info('Initialized doc from source', { projectId: parsed.projectId, filePath: parsed.filePath, length: initial.length });
+    } catch (err) {
+      this.logger.warn('Failed to initialize doc from source', { error: err && err.message ? err.message : String(err) });
+    }
   }
 
   /**
@@ -232,8 +319,18 @@ class CollaborationRoom extends EventEmitter {
   /**
    * Handle incoming WebSocket message with rate limiting
    */
-  async handleMessage(clientId, data) {
+  async handleMessage(clientId, data, isBinary) {
     try {
+      // Ensure persisted state is loaded before handling any protocol messages.
+      // This avoids applying client updates against an empty doc and then later loading persisted state.
+      await this.readyPromise;
+
+      // Collaboration channels expect binary Yjs frames. Ignore any non-binary frames
+      // (e.g. JSON debug payloads) to avoid crashing decode.
+      if (isBinary === false) {
+        return;
+      }
+
       // Check rate limit
       if (!this.checkRateLimit(clientId)) {
         // Send rate limit error to client
@@ -250,7 +347,24 @@ class CollaborationRoom extends EventEmitter {
         return; // Drop the message
       }
 
-      const message = new Uint8Array(data);
+      const message = data instanceof Uint8Array ? data : new Uint8Array(data);
+      if (!message || message.byteLength < 2) {
+        // Drop empty / malformed frames (prevents lib0 decoding errors)
+        return;
+      }
+      if (message.byteLength > WS_MAX_MESSAGE_BYTES) {
+        this.metrics.rateLimitViolations++;
+        const conn = this.connections.get(clientId);
+        if (conn && conn.ws.readyState === conn.ws.OPEN) {
+          conn.ws.send(JSON.stringify({
+            type: 'error',
+            code: 'MESSAGE_TOO_LARGE',
+            message: `Message too large. Max ${WS_MAX_MESSAGE_BYTES} bytes.`,
+            timestamp: Date.now()
+          }));
+        }
+        return;
+      }
       this.metrics.bytesIn += message.byteLength;
 
       const decoder = decoding.createDecoder(message);
@@ -277,6 +391,12 @@ class CollaborationRoom extends EventEmitter {
           this.logger.warn('Unknown message type', { messageType });
       }
     } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      // lib0 decoding throws "Unexpected end of array" for truncated frames; treat as protocol noise.
+      if (msg.includes('Unexpected end of array') || msg.includes('Unexpected end')) {
+        this.metrics.decodeErrors = (this.metrics.decodeErrors || 0) + 1;
+        return;
+      }
       this.logger.error('Error handling message', err, { clientId });
     }
   }
@@ -638,7 +758,7 @@ class CollaborationRoom extends EventEmitter {
    * Persist a single update to disk
    */
   async persistUpdate(update) {
-    const updatePath = path.join(this.persistencePath, this.docId, 'updates');
+    const updatePath = path.join(this.getStorageDocPath(), 'updates');
     await fs.mkdir(updatePath, { recursive: true });
 
     const timestamp = Date.now();
@@ -652,7 +772,7 @@ class CollaborationRoom extends EventEmitter {
    * Create and save a snapshot
    */
   async createSnapshot() {
-    const snapshotPath = path.join(this.persistencePath, this.docId, 'snapshots');
+    const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
     await fs.mkdir(snapshotPath, { recursive: true });
 
     // Create state vector and snapshot
@@ -693,33 +813,46 @@ class CollaborationRoom extends EventEmitter {
    * Load document state from disk
    */
   async loadFromDisk() {
-    const docPath = path.join(this.persistencePath, this.docId);
+    const primaryDocPath = this.getStorageDocPath();
+    const legacyDocPath = this.getLegacyDocPathIfSafe();
+    const candidates = legacyDocPath ? [primaryDocPath, legacyDocPath] : [primaryDocPath];
 
     try {
-      const snapshotPath = path.join(docPath, 'snapshots');
-      const snapshots = await fs.readdir(snapshotPath);
-      const snapshotFiles = snapshots
-        .filter(f => f.endsWith('.snapshot'))
-        .sort()
-        .reverse();
-
-      if (snapshotFiles.length > 0) {
-        const latestSnapshot = snapshotFiles[0];
-        const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
+      for (const docPath of candidates) {
         try {
-          Y.applyUpdate(this.doc, snapshotData, 'persistence');
-          this.logger.info('Loaded snapshot', { snapshot: latestSnapshot });
-          const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-          this.lastSnapshot = snapshotTimestamp;
-          await this.loadUpdatesAfter(snapshotTimestamp);
+          const snapshotPath = path.join(docPath, 'snapshots');
+          const snapshots = await fs.readdir(snapshotPath);
+          const snapshotFiles = snapshots
+            .filter(f => f.endsWith('.snapshot'))
+            .sort()
+            .reverse();
+
+          if (snapshotFiles.length > 0) {
+            const latestSnapshot = snapshotFiles[0];
+            const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
+            try {
+              Y.applyUpdate(this.doc, snapshotData, 'persistence');
+              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
+              const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
+              this.lastSnapshot = snapshotTimestamp;
+              await this.loadUpdatesAfter(snapshotTimestamp, docPath);
+              return;
+            } catch (err) {
+              this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message, docPath });
+            }
+          }
+
+          // Fallback: attempt to load updates without snapshot
+          await this.loadUpdatesAfter(0, docPath);
+          // If we loaded anything from legacy path, we’ll start writing future updates/snapshots
+          // to the new hashed directory automatically.
           return;
         } catch (err) {
-          this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message });
+          // Try the next candidate
+          if (err && err.code === 'ENOENT') continue;
+          throw err;
         }
       }
-
-      // Fallback: attempt to load updates without snapshot
-      await this.loadUpdatesAfter(0);
     } catch (err) {
       if (err.code !== 'ENOENT') {
         this.logger.warn('Failed to read snapshots, continuing without persistence', { error: err.message });
@@ -732,9 +865,9 @@ class CollaborationRoom extends EventEmitter {
   /**
    * Load updates created after a specific timestamp
    */
-  async loadUpdatesAfter(timestamp) {
+  async loadUpdatesAfter(timestamp, docPath = this.getStorageDocPath()) {
     try {
-      const updatePath = path.join(this.persistencePath, this.docId, 'updates');
+      const updatePath = path.join(docPath, 'updates');
       const updates = await fs.readdir(updatePath);
 
       const relevantUpdates = updates
@@ -767,7 +900,7 @@ class CollaborationRoom extends EventEmitter {
    */
   async cleanupOldSnapshots(keepCount = 10) {
     try {
-      const snapshotPath = path.join(this.persistencePath, this.docId, 'snapshots');
+      const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
       const files = await fs.readdir(snapshotPath);
 
       const snapshotFiles = files

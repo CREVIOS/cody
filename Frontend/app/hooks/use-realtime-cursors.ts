@@ -22,6 +22,7 @@ type UseRealtimeArgs = {
   throttleMs?: number;
   userId?: string;
   docKey?: string;
+  staleTimeout?: number;
 };
 
 type PresenceMeta = {
@@ -105,9 +106,13 @@ export const useRealtimeCursors = ({
   throttleMs = 50,
   userId: externalUserId,
   docKey: docKeyArg,
+  staleTimeout = 5000,
 }: UseRealtimeArgs) => {
-  const docKeyRef = useRef<string>(docKeyArg ?? roomName);
-  const scopeKey = `${roomName}::${docKeyRef.current}`;
+  const docKey = docKeyArg ?? roomName;
+  const docKeyRef = useRef<string>(docKey);
+  docKeyRef.current = docKey;
+
+  const scopeKey = `${roomName}::${docKey}`;
   const [userId] = useState<string>(() => getPerTabId(scopeKey, externalUserId));
 
   const [cursors, setCursors] = useState<Record<string, CursorEventPayload>>({});
@@ -129,12 +134,13 @@ export const useRealtimeCursors = ({
   );
   const enableEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const cursorCleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selfMetaRef = useRef<PresenceMeta>({
     userId,
     username,
     startedAt: Date.now(),
-    docKey: docKeyRef.current,
+    docKey,
   });
 
   const leaderSinceRef = useRef<number>(0);
@@ -164,11 +170,11 @@ export const useRealtimeCursors = ({
         user: { id: userId, name: username },
         color: colorRef.current,
         timestamp: Date.now(),
-        docKey: docKeyRef.current,
+        docKey,
       };
       channelRef.current?.send({ type: 'broadcast', event: EVENT_CURSOR, payload });
     },
-    [userId, username]
+    [userId, username, docKey]
   );
 
   const onMouseMove = useCallback(
@@ -179,7 +185,7 @@ export const useRealtimeCursors = ({
   function computeLeaderAndQueue(state: Record<string, PresenceMeta[]>) {
     const everyoneAllDocs: PresenceMeta[] = Object.values(state).flat();
     const everyone = everyoneAllDocs.filter(
-      (m) => m.docKey === docKeyRef.current
+      (m) => m.docKey === docKey
     );
     if (!everyone.length) return { leaderId: null, queue: [] };
     const sorted = [...everyone].sort(
@@ -282,7 +288,7 @@ export const useRealtimeCursors = ({
         userId,
         username,
         startedAt: Date.now(),
-        docKey: docKeyRef.current,
+        docKey,
       };
       selfMetaRef.current = presenceMeta;
       await channel.track(presenceMeta);
@@ -302,6 +308,24 @@ export const useRealtimeCursors = ({
   };
   window.addEventListener('beforeunload', onBeforeUnload);
 
+  const scheduleCursorCleanup = () => {
+    if (cursorCleanupTimeoutRef.current) clearTimeout(cursorCleanupTimeoutRef.current);
+    cursorCleanupTimeoutRef.current = setTimeout(() => {
+      setCursors((prev) => {
+        const now = Date.now();
+        const next = { ...prev };
+        for (const [id, cursor] of Object.entries(next)) {
+          if (now - cursor.timestamp > staleTimeout) {
+            delete next[id];
+          }
+        }
+        return next;
+      });
+      scheduleCursorCleanup();
+    }, staleTimeout);
+  };
+  scheduleCursorCleanup();
+
   return () => {
     window.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('keydown', onKey);
@@ -309,9 +333,10 @@ export const useRealtimeCursors = ({
     window.removeEventListener('keyup', onKey);
     window.removeEventListener('beforeunload', onBeforeUnload);
     if (enableEditTimerRef.current) clearTimeout(enableEditTimerRef.current);
+    if (cursorCleanupTimeoutRef.current) clearTimeout(cursorCleanupTimeoutRef.current);
     channel.unsubscribe();
   };
-}, [roomName, userId, username, onMouseMove, markActivity]);
+}, [roomName, userId, username, onMouseMove, markActivity, docKey, staleTimeout]);
 
 // -------------------------------------------------------
 // Inactivity Tracker

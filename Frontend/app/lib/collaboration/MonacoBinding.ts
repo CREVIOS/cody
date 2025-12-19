@@ -1,5 +1,4 @@
 import { Y } from './yjsSingleton';
-import type * as Monaco from 'monaco-editor';
 
 // Extend EventTarget for corruption events
 if (typeof EventTarget === 'undefined') {
@@ -22,7 +21,7 @@ interface MonacoBindingOptions {
   /**
    * Monaco editor instance
    */
-  editor: Monaco.editor.IStandaloneCodeEditor;
+  editor: any;
 
   /**
    * Yjs Text type to sync with
@@ -36,18 +35,18 @@ interface MonacoBindingOptions {
 }
 
 export class MonacoBinding extends EventTarget {
-  private editor: Monaco.editor.IStandaloneCodeEditor;
-  private model: Monaco.editor.ITextModel;
+  private editor: any;
+  private model: any;
   private yText: Y.Text;
   private awareness: any;
 
-  private _modelContentChangedListener: Monaco.IDisposable | null = null;
+  private _modelContentChangedListener: any | null = null;
   private _textObserver: ((event: Y.YTextEvent, transaction: Y.Transaction) => void) | null = null;
-  private _cursorListener: Monaco.IDisposable | null = null;
-  private _selectionListener: Monaco.IDisposable | null = null;
+  private _cursorListener: any | null = null;
+  private _selectionListener: any | null = null;
 
   private _muxCounter = 0; // Counter-based feedback loop prevention (more robust than boolean)
-  private _savedViewState: Monaco.editor.ICodeEditorViewState | null = null;
+  private _savedViewState: any | null = null;
   private _isCorrupted = false; // Flag to prevent any processing on corrupted documents
 
   constructor(options: MonacoBindingOptions) {
@@ -186,7 +185,7 @@ export class MonacoBinding extends EventTarget {
    * Monaco changes → Yjs operations
    */
   private _setupMonacoToYjs() {
-    this._modelContentChangedListener = this.model.onDidChangeContent((event) => {
+    this._modelContentChangedListener = this.model.onDidChangeContent((event: any) => {
       // STOP ALL PROCESSING if document is corrupted
       if (this._isCorrupted) {
         return;
@@ -200,7 +199,7 @@ export class MonacoBinding extends EventTarget {
       // Additional safety check: verify the change is actually from user input
       // If the change has no actual modifications, skip it
       const hasRealChanges = event.changes.some(
-        (change) => change.text.length > 0 || change.rangeLength > 0
+        (change: any) => change.text.length > 0 || change.rangeLength > 0
       );
       if (!hasRealChanges) {
         return;
@@ -209,7 +208,7 @@ export class MonacoBinding extends EventTarget {
       // Predict resulting length to catch runaway loops early
       const currentLength = this.yText.length;
       let predictedLength = currentLength;
-      for (const change of event.changes) {
+      for (const change of event.changes as any[]) {
         predictedLength -= change.rangeLength;
         predictedLength += change.text.length;
       }
@@ -231,7 +230,7 @@ export class MonacoBinding extends EventTarget {
           // Apply changes in reverse order (end to start) to maintain correct offsets
           const sortedChanges = [...event.changes].sort((a, b) => b.rangeOffset - a.rangeOffset);
           
-          for (const change of sortedChanges) {
+          for (const change of sortedChanges as any[]) {
             const offset = change.rangeOffset;
             const deleteLength = change.rangeLength;
             const insertText = change.text;
@@ -388,7 +387,7 @@ export class MonacoBinding extends EventTarget {
    */
   private _setupAwareness() {
     // Track local cursor/selection
-    this._cursorListener = this.editor.onDidChangeCursorPosition((event) => {
+    this._cursorListener = this.editor.onDidChangeCursorPosition((event: any) => {
       // Skip if we're applying remote changes
       if (this._muxCounter > 0) return;
 
@@ -403,7 +402,7 @@ export class MonacoBinding extends EventTarget {
       });
     });
 
-    this._selectionListener = this.editor.onDidChangeCursorSelection((event) => {
+    this._selectionListener = this.editor.onDidChangeCursorSelection((event: any) => {
       // Skip if we're applying remote changes
       if (this._muxCounter > 0) return;
 
@@ -476,7 +475,7 @@ export class MonacoBinding extends EventTarget {
  * Create a Monaco binding with Yjs
  */
 export function createMonacoBinding(
-  editor: Monaco.editor.IStandaloneCodeEditor,
+  editor: any,
   yText: Y.Text,
   awareness?: any
 ): MonacoBinding {

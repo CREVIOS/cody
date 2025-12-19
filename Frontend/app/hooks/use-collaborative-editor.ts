@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Y } from '../lib/collaboration/yjsSingleton';
-import type * as Monaco from 'monaco-editor';
 import { MonacoBinding } from '../lib/collaboration/MonacoBinding';
 import { WebSocketProvider, ConnectionStatus } from '../lib/collaboration/WebSocketProvider';
 import type { Awareness } from 'y-protocols/awareness';
@@ -25,7 +24,7 @@ export interface CollaborativeEditorOptions {
   /**
    * Monaco editor instance
    */
-  editor: Monaco.editor.IStandaloneCodeEditor | null;
+  editor: any | null;
 
   /**
    * Document/file ID
@@ -171,6 +170,8 @@ export function useCollaborativeEditor(
   const undoManagerRef = useRef<CollaborativeUndoManager | null>(null);
   const currentDocIdRef = useRef<string | null>(null);
   const initialContentAppliedRef = useRef<boolean>(false);
+  const wsSyncedRef = useRef<boolean>(false);
+  const offlineReadyRef = useRef<boolean>(false);
   
   // Guards against infinite initialization loops
   const initializingRef = useRef<boolean>(false);
@@ -335,9 +336,37 @@ export function useCollaborativeEditor(
       console.log('[Collaboration] Initializing for docId:', docId);
     }
 
-    // Defer applying initialContent until after IndexedDB sync to avoid double-inserting
-    // (previous sessions may have persisted the same content already)
+    // Defer applying initialContent until AFTER server sync to avoid double-inserting.
+    // If another peer already initialized the doc, applying initial content locally will
+    // create duplicated text (both inserts are "valid" concurrent CRDT operations).
     initialContentAppliedRef.current = false;
+    wsSyncedRef.current = false;
+    offlineReadyRef.current = false;
+
+    const maybeApplyInitialContent = (reason: string) => {
+      try {
+        if (initialContentAppliedRef.current) return;
+        if ((initialContent ?? null) === null) return;
+        if (!wsSyncedRef.current) return;
+        if (!offlineReadyRef.current) return;
+
+        const current = yText.toString();
+        if (current && current.length > 0) {
+          if (logging) {
+            console.log('[Collaboration] Skipped initial content:', reason, '- document already has data');
+          }
+          return;
+        }
+
+        yText.insert(0, initialContent as string);
+        initialContentAppliedRef.current = true;
+        if (logging) {
+          console.log('[Collaboration] Applied initial content:', reason, '-', (initialContent as string).length, 'chars');
+        }
+      } catch (e) {
+        console.error('[Collaboration] Failed to apply initial content:', reason, e);
+      }
+    };
 
     // Setup IndexedDB persistence (if enabled)
     let indexedDBProvider: IndexedDBProvider | null = null;
@@ -369,43 +398,20 @@ export function useCollaborativeEditor(
           console.error('[Collaboration] Error validating document after IndexedDB load:', e);
         }
 
-        // Apply initial content only if document is still empty after sync
-        if (!initialContentAppliedRef.current && (initialContent ?? null) !== null) {
-          try {
-            const current = yText.toString();
-            if (!current || current.length === 0) {
-              yText.insert(0, initialContent as string);
-              initialContentAppliedRef.current = true;
-              if (logging) {
-                console.log('[Collaboration] Loaded initial content post-IndexedDB sync:', (initialContent as string).length, 'chars');
-              }
-            } else if (logging) {
-              console.log('[Collaboration] Skipped initial content: document already had data after IndexedDB sync');
-            }
-          } catch (e) {
-            console.error('[Collaboration] Failed to apply initial content after sync:', e);
-          }
-        }
+        offlineReadyRef.current = true;
         setState((prev) => ({ ...prev, offlineReady: true }));
+        maybeApplyInitialContent('indexeddb-synced');
       }).catch((error) => {
         console.error('[Collaboration] Error loading from IndexedDB:', error);
+        offlineReadyRef.current = true;
         setState((prev) => ({ ...prev, offlineReady: true }));
+        maybeApplyInitialContent('indexeddb-error');
       });
     }
     else {
-      // Offline persistence disabled — safe to apply initial content immediately
-      if (!initialContentAppliedRef.current && (initialContent ?? null) !== null) {
-        const currentYText = yText.toString();
-        if (!currentYText || currentYText.length === 0) {
-          yText.insert(0, initialContent as string);
-          initialContentAppliedRef.current = true;
-          if (logging) {
-            console.log('[Collaboration] Loaded initial content (no IndexedDB):', (initialContent as string).length, 'chars');
-          }
-        } else if (logging) {
-          console.log('[Collaboration] Skipped initial content (no IndexedDB): document already had data');
-        }
-      }
+      // Offline persistence disabled
+      offlineReadyRef.current = true;
+      setState((prev) => ({ ...prev, offlineReady: true }));
     }
 
     // Setup WebSocket provider
@@ -535,6 +541,8 @@ export function useCollaborativeEditor(
     // Listen to sync
     const handleSync = () => {
       setState((prev) => ({ ...prev, synced: true }));
+      wsSyncedRef.current = true;
+      maybeApplyInitialContent('ws-synced');
       
       // Phase 7: Dev-only logging
       if (logging && process.env.NODE_ENV === 'development') {
@@ -633,7 +641,6 @@ export function useCollaborativeEditor(
       // It will be updated when a new docId is provided
     };
   // Note: initialContent is accessed via ref to prevent re-initialization when content reference changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options.editor, options.docId, options.user?.id, options.wsUrl, options.offlineSupport, options.logging]);
 
   // Actions

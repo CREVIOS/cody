@@ -207,9 +207,9 @@ async function testTaggedVersionsStrategy() {
   const mockService = new MockFileSystemService();
   const versions = mockService.getMockVersions();
 
-  // Add tags to some versions
-  versions[1].tag = 'v1.0.0';
-  versions[3].tag = 'v0.9.0';
+  // Mark some versions as "important" using the metadata flags this strategy checks
+  versions[1].metaData = { 'x-amz-meta-tagged': 'true' };
+  versions[3].metaData = { 'x-amz-meta-milestone': 'v0.9.0' };
 
   const toKeep = strategy.filterVersionsToKeep(versions);
 
@@ -361,6 +361,9 @@ async function testLatestVersionAlwaysKept() {
 
 // Run all tests
 async function runAllTests() {
+  testsPassed = 0;
+  testsFailed = 0;
+
   console.log('\n');
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║       STRATEGY PATTERN TEST SUITE                        ║');
@@ -385,14 +388,29 @@ async function runAllTests() {
     console.log(`📊 Total Tests: ${testsPassed + testsFailed}`);
     console.log(`🎯 Success Rate: ${((testsPassed / (testsPassed + testsFailed)) * 100).toFixed(2)}%`);
     console.log('\n✅ ALL STRATEGY PATTERN TESTS PASSED!\n');
-
-    process.exit(0);
+    return { testsPassed, testsFailed };
   } catch (error) {
     console.error('\n❌ TEST SUITE FAILED');
     console.error(error);
-    process.exit(1);
+    throw error;
   }
 }
 
-// Run tests
-runAllTests().catch(console.error);
+describe('Version Retention Strategies (strategy pattern)', () => {
+  it('passes the strategy suite', async () => {
+    const result = await runAllTests();
+    expect(result.testsFailed).toBe(0);
+  });
+});
+
+// Allow running directly via Node for ad-hoc debugging.
+if (require.main === module) {
+  runAllTests()
+    .then((r) => {
+      console.log(`Done: ${r.testsPassed} passed, ${r.testsFailed} failed`);
+    })
+    .catch((e) => {
+      console.error(e);
+      process.exitCode = 1;
+    });
+}
