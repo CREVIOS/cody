@@ -18,6 +18,7 @@ export class CommandManager {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
   private maxStackSize = 100; // Prevent memory leaks
+  private isProcessing = false; // Prevent concurrent operations
 
   /**
    * Execute a command and add it to the undo stack
@@ -29,18 +30,21 @@ export class CommandManager {
     try {
       await command.execute();
 
-      // Add to undo stack
-      this.undoStack.push(command);
+      // Only add to undo stack if the command can be undone
+      // This prevents adding commands that will fail on undo
+      if (command.canUndo()) {
+        this.undoStack.push(command);
 
-      // Clear redo stack (new action invalidates redo history)
-      this.redoStack = [];
+        // Clear redo stack (new action invalidates redo history)
+        this.redoStack = [];
 
-      // Limit stack size to prevent memory leaks
-      if (this.undoStack.length > this.maxStackSize) {
-        this.undoStack.shift(); // Remove oldest command
+        // Limit stack size to prevent memory leaks
+        if (this.undoStack.length > this.maxStackSize) {
+          this.undoStack.shift(); // Remove oldest command
+        }
       }
 
-      // Emit event for UI update
+      // Emit event for UI update (even if command can't be undone)
       this.emitStateChange();
 
     } catch (error) {
@@ -55,26 +59,36 @@ export class CommandManager {
    * @throws Error if nothing to undo or undo fails
    */
   async undo(): Promise<void> {
-    const command = this.undoStack.pop();
-    if (!command) {
-      throw new Error('Nothing to undo');
+    // Prevent concurrent operations
+    if (this.isProcessing) {
+      throw new Error('Another operation is in progress');
     }
 
-    if (!command.canUndo()) {
-      // Put it back on the stack
-      this.undoStack.push(command);
-      throw new Error(`Command "${command.getDescription()}" cannot be undone`);
-    }
-
+    this.isProcessing = true;
     try {
-      await command.undo();
-      this.redoStack.push(command);
-      this.emitStateChange();
-    } catch (error) {
-      // Put command back on undo stack if undo fails
-      this.undoStack.push(command);
-      console.error('Undo failed:', error);
-      throw error;
+      const command = this.undoStack.pop();
+      if (!command) {
+        throw new Error('Nothing to undo');
+      }
+
+      if (!command.canUndo()) {
+        // Put it back on the stack
+        this.undoStack.push(command);
+        throw new Error(`Command "${command.getDescription()}" cannot be undone`);
+      }
+
+      try {
+        await command.undo();
+        this.redoStack.push(command);
+        this.emitStateChange();
+      } catch (error) {
+        // Put command back on undo stack if undo fails
+        this.undoStack.push(command);
+        console.error('Undo failed:', error);
+        throw error;
+      }
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -84,20 +98,30 @@ export class CommandManager {
    * @throws Error if nothing to redo or redo fails
    */
   async redo(): Promise<void> {
-    const command = this.redoStack.pop();
-    if (!command) {
-      throw new Error('Nothing to redo');
+    // Prevent concurrent operations
+    if (this.isProcessing) {
+      throw new Error('Another operation is in progress');
     }
 
+    this.isProcessing = true;
     try {
-      await command.redo();
-      this.undoStack.push(command);
-      this.emitStateChange();
-    } catch (error) {
-      // Put command back on redo stack if redo fails
-      this.redoStack.push(command);
-      console.error('Redo failed:', error);
-      throw error;
+      const command = this.redoStack.pop();
+      if (!command) {
+        throw new Error('Nothing to redo');
+      }
+
+      try {
+        await command.redo();
+        this.undoStack.push(command);
+        this.emitStateChange();
+      } catch (error) {
+        // Put command back on redo stack if redo fails
+        this.redoStack.push(command);
+        console.error('Redo failed:', error);
+        throw error;
+      }
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -167,16 +191,6 @@ export class CommandManager {
   private emitStateChange(): void {
     const canUndo = this.canUndo();
     const canRedo = this.canRedo();
-    
-    // Debug logging
-    console.log('[CommandManager] State changed:', {
-      undoStackLength: this.undoStack.length,
-      redoStackLength: this.redoStack.length,
-      canUndo,
-      canRedo,
-      undoDescription: this.getUndoDescription(),
-      redoDescription: this.getRedoDescription()
-    });
 
     eventBus.publish({
       type: EventType.PERMISSION_CHANGED, // Reusing existing event type

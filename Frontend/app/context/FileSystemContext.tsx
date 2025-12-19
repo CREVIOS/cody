@@ -542,7 +542,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     }
   }, [projectId, baseUrl, openFiles]);
 
-  const saveFile = useCallback(async (path: string, content: string) => {
+  const saveFile = useCallback(async (path: string, content: string, skipCommand: boolean = false) => {
     if (!projectId) return;
     
     // Check if content actually changed - don't create duplicate versions
@@ -579,6 +579,35 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         }
         return newMap;
       });
+
+      // If skipCommand is true, just update state without creating a command
+      // This is used when a SaveFileCommand was already created elsewhere (e.g., in handleSave)
+      if (skipCommand) {
+        // Just update the state to reflect that the file was saved
+        setOpenFiles(prev => {
+          const newMap = new Map(prev);
+          const openFile = newMap.get(path);
+          if (openFile) {
+            newMap.set(path, { 
+              ...openFile,
+              savedContent: content, // Update saved content
+              isDirty: false,
+              isSaving: false
+            });
+          }
+          return newMap;
+        });
+        lastSavedContent.current = content;
+        
+        // Notify peers via watcher channel for instant updates
+        const ws = watcherWsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'file:changed', path, content }));
+          } catch {}
+        }
+        return; // Exit early - no command creation needed
+      }
 
       // Create file system service adapter for SaveFileCommand
       const saveFileService = {
@@ -734,10 +763,10 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
         lastSavedContent.current = newContent;
       };
 
-      // Get the content that was in the editor BEFORE this save
+      // Get the previous saved content (what was saved before this save)
       // This is what we'll restore to when undoing
       const openFile = openFiles.get(path);
-      const previousContentBeforeSave = openFile?.content || null;
+      const previousContentBeforeSave = openFile?.savedContent || null;
 
       // Execute save using command pattern (enables undo/redo)
       // Pass the previous content so we can restore to it on undo
@@ -1180,7 +1209,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       clearTimeout(autoSaveTimeoutRef.current);
     }
 
-    // Set new timeout for auto-save (3 seconds of inactivity)
+    // Set new timeout for auto-save (10 seconds of inactivity)
     autoSaveTimeoutRef.current = setTimeout(async () => {
       // Check again before saving
       const currentOpenFile = openFiles.get(selectedFile.path);
@@ -1200,7 +1229,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       } finally {
         isSavingRef.current = false;
       }
-    }, 3000); // 3 seconds of inactivity
+    }, 10000); // 10 seconds of inactivity
 
     return () => {
       if (autoSaveTimeoutRef.current) {

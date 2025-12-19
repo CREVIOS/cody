@@ -8,6 +8,7 @@ import { getUserInvitationNotifications } from "@/lib/projectAPI/NotificationsAP
 import NotificationModal from "@/components/notification/NotificationModal";
 import ProjectCreateModal from "@/components/ProjectCreateModal";
 import ProfileModal from "@/components/ProfileModal";
+import SettingsModal from "@/components/SettingsModal";
 import { TopBar } from "./TopBar";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationButton } from "./NotificationButton";
@@ -41,6 +42,7 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProjectCreateModal, setShowProjectCreateModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [currentUser, setCurrentUser] = useState<User>(user);
 
   // Update currentUser when user prop changes
@@ -59,8 +61,7 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
   };
 
   const handleSettingsClick = () => {
-    // Placeholder for settings functionality
-    console.log('Settings clicked');
+    setShowSettingsModal(true);
   };
 
   const handleLogoutClick = () => {
@@ -290,6 +291,13 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
         onClose={() => setShowProfileModal(false)}
         user={currentUser}
         onProfileUpdated={handleProfileUpdated}
+        theme={theme}
+      />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
         theme={theme}
       />
     </div>

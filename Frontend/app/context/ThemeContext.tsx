@@ -12,11 +12,12 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  // Initialize with a consistent default for SSR
+  // Always start with "dark" on both server and client to avoid hydration mismatch
+  // The script in layout.tsx will apply the correct theme class before React hydrates
   const [theme, setTheme] = useState<Theme>("dark");
   const [mounted, setMounted] = useState(false);
 
-  // Only access localStorage after component mounts (client-side only)
+  // Load theme from localStorage after mount
   useEffect(() => {
     setMounted(true);
     const storedTheme = localStorage.getItem("theme") as Theme | null;
@@ -25,13 +26,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Persist theme to localStorage when it changes
+  // Apply theme class immediately and persist to localStorage when it changes
   useEffect(() => {
+    // Apply theme class immediately (even before mounted)
+    document.documentElement.classList.remove("light", "dark");
+    document.documentElement.classList.add(theme);
+    
+    // Persist to localStorage only after mount
     if (mounted) {
       localStorage.setItem("theme", theme);
-      // Apply theme class to document for styling
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.classList.add(theme);
     }
   }, [theme, mounted]);
 

@@ -4,6 +4,11 @@ const MinIOStorageAdapter = require('../adapters/minioStorageAdapter');
 class FileSystemService {
   constructor(storageAdapter = new MinIOStorageAdapter()) {
     this.storage = storageAdapter;
+    // Log which adapter is being used (Adapter Pattern verification)
+    const adapterName = this.storage.constructor.name;
+    console.log(`📦 [Adapter Pattern] FileSystemService initialized with: ${adapterName}`);
+    console.log(`   Adapter type: ${adapterName === 'MinIOStorageAdapter' ? 'MinIO (Production)' : adapterName === 'MockStorageAdapter' ? 'Mock (Testing)' : 'Custom'}`);
+    
     // Preserve old eager initialization behavior (best-effort, not awaited).
     if (typeof this.storage.init === 'function') {
       this.storage.init().catch((err) => {
@@ -23,6 +28,8 @@ class FileSystemService {
   // Get project structure (file tree)
   async getProjectStructure(projectId) {
     try {
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📁 [Adapter] getProjectStructure called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}`);
       const objects = await this.storage.listFiles(projectId, '', { recursive: true });
 
       // Convert flat structure to tree
@@ -92,6 +99,8 @@ class FileSystemService {
   // Create a new file
   async createFile(projectId, filePath, content = '') {
     try {
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📝 [Adapter] createFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
       await this.storage.writeFile(projectId, filePath, content, { contentType: 'text/plain' });
 
       return {
@@ -124,6 +133,8 @@ class FileSystemService {
   // Read file content
   async readFile(projectId, filePath) {
     try {
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`📖 [Adapter] readFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
       const content = await this.storage.readFile(projectId, filePath);
 
       return {
@@ -140,6 +151,8 @@ class FileSystemService {
   // Update file content (Phase 6: Returns version info for versioning)
   async updateFile(projectId, filePath, content) {
     try {
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`✏️  [Adapter] updateFile called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${filePath}`);
       const meta = await this.storage.writeFile(projectId, filePath, content, { contentType: 'text/plain' });
 
       return {
@@ -160,6 +173,8 @@ class FileSystemService {
   // Delete file or folder
   async deleteItem(projectId, itemPath) {
     try {
+      // Adapter Pattern: Using storage adapter interface
+      console.log(`🗑️  [Adapter] deleteItem called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${itemPath}`);
       await this.storage.deleteFile(projectId, itemPath);
 
       return {

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
+import { ThemeToggle } from "@/components/welcomepage/ThemeToggle";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -16,7 +17,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const { signUp } = useAuth();
   const router = useRouter();
-  const { theme } = useTheme();
+  const { theme, toggleTheme } = useTheme();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,8 +55,13 @@ export default function SignupPage() {
     : "w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white border-gray-300 text-[#2D2D2D]";
 
   return (
-    <div className={`min-h-screen flex items-center justify-center p-8 ${backgroundClass}`}>
-      <div className={`w-full max-w-md p-8 rounded-xl border shadow-lg ${cardClass}`}>
+    <div className={`min-h-screen flex items-center justify-center p-8 relative ${backgroundClass}`} suppressHydrationWarning>
+      {/* Theme Toggle - Top Right */}
+      <div className="absolute top-8 right-8" suppressHydrationWarning>
+        <ThemeToggle theme={theme} onToggle={toggleTheme} />
+      </div>
+
+      <div className={`w-full max-w-md p-8 rounded-xl border shadow-lg ${cardClass}`} suppressHydrationWarning>
         <button
           onClick={() => router.push("/")}
           className="mb-4 text-sm text-indigo-600 hover:text-indigo-700 underline flex items-center gap-1"
@@ -120,7 +126,7 @@ export default function SignupPage() {
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               className={inputClass}
-              placeholder="John Doe"
+              placeholder="Enter your full name"
             />
           </div>
 

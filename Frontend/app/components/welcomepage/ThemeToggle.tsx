@@ -13,6 +13,7 @@ export function ThemeToggle({ theme, onToggle }: ThemeToggleProps) {
         theme === "dark" ? "bg-[#2A2A2E]/50" : "bg-white/50"
       }`}
       title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      suppressHydrationWarning
     >
       {theme === "dark" ? (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">

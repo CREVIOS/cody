@@ -10,6 +10,9 @@ import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
 import { usePermissions } from '@/hooks/usePermissions';
 import { User } from '@/lib/projectAPI/TypeDefinitions';
+import CreateFileDialog from './CreateFileDialog';
+import CreateFolderDialog from './CreateFolderDialog';
+import DeleteConfirmDialog from './DeleteConfirmDialog';
 
 interface FileTreeProps {
   className?: string;
@@ -45,6 +48,11 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
   const [searchResults, setSearchResults] = useState<FileSystemItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  
+  // Dialog states
+  const [createFileDialog, setCreateFileDialog] = useState<{ isOpen: boolean; basePath: string }>({ isOpen: false, basePath: '' });
+  const [createFolderDialog, setCreateFolderDialog] = useState<{ isOpen: boolean; basePath: string }>({ isOpen: false, basePath: '' });
+  const [deleteDialog, setDeleteDialog] = useState<{ isOpen: boolean; item: FileSystemItem | null }>({ isOpen: false, item: null });
 
   const isDark = theme === 'dark';
 
@@ -117,25 +125,15 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
       case 'rename':
         break;
       case 'delete':
-        if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
-          await deleteItem(item.path);
-        }
+        setDeleteDialog({ isOpen: true, item });
         break;
       case 'newFile':
-        const fileName = prompt('Enter file name:');
-        if (fileName) {
-          const basePath = item.path === '' ? '' : (item.type === 'folder' ? item.path : item.path.split('/').slice(0, -1).join('/'));
-          const filePath = basePath ? `${basePath}/${fileName}` : fileName;
-          await createFile(filePath);
-        }
+        const basePath = item.path === '' ? '' : (item.type === 'folder' ? item.path : item.path.split('/').slice(0, -1).join('/'));
+        setCreateFileDialog({ isOpen: true, basePath });
         break;
       case 'newFolder':
-        const folderName = prompt('Enter folder name:');
-        if (folderName) {
-          const basePath = item.path === '' ? '' : (item.type === 'folder' ? item.path : item.path.split('/').slice(0, -1).join('/'));
-          const folderPath = basePath ? `${basePath}/${folderName}` : folderName;
-          await createFolder(folderPath);
-        }
+        const folderBasePath = item.path === '' ? '' : (item.type === 'folder' ? item.path : item.path.split('/').slice(0, -1).join('/'));
+        setCreateFolderDialog({ isOpen: true, basePath: folderBasePath });
         break;
       case 'copyPath':
         if (navigator.clipboard) {
@@ -158,42 +156,32 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
 
   const handleCreateFile = async () => {
     if (!canEdit) return;
-    const fileName = prompt('Enter file name:');
-    if (fileName) {
-      let basePath = '';
-      if (selectedFile) {
-        if (selectedFile.type === 'folder') {
-          basePath = selectedFile.path;
-        } else {
-          const pathParts = selectedFile.path.split('/');
-          pathParts.pop();
-          basePath = pathParts.join('/');
-        }
+    let basePath = '';
+    if (selectedFile) {
+      if (selectedFile.type === 'folder') {
+        basePath = selectedFile.path;
+      } else {
+        const pathParts = selectedFile.path.split('/');
+        pathParts.pop();
+        basePath = pathParts.join('/');
       }
-      
-      const filePath = basePath ? `${basePath}/${fileName}` : fileName;
-      await createFile(filePath);
     }
+    setCreateFileDialog({ isOpen: true, basePath });
   };
 
   const handleCreateFolder = async () => {
     if (!canEdit) return;
-    const folderName = prompt('Enter folder name:');
-    if (folderName) {
-      let basePath = '';
-      if (selectedFile) {
-        if (selectedFile.type === 'folder') {
-          basePath = selectedFile.path;
-        } else {
-          const pathParts = selectedFile.path.split('/');
-          pathParts.pop();
-          basePath = pathParts.join('/');
-        }
+    let basePath = '';
+    if (selectedFile) {
+      if (selectedFile.type === 'folder') {
+        basePath = selectedFile.path;
+      } else {
+        const pathParts = selectedFile.path.split('/');
+        pathParts.pop();
+        basePath = pathParts.join('/');
       }
-      
-      const folderPath = basePath ? `${basePath}/${folderName}` : folderName;
-      await createFolder(folderPath);
     }
+    setCreateFolderDialog({ isOpen: true, basePath });
   };
 
   const handleEmptySpaceClick = useCallback((e: React.MouseEvent) => {
@@ -302,6 +290,41 @@ export default function EnhancedFileTree({ className = '', user, userRoleId }: F
           canEdit={canEdit}
         />
       )}
+
+      {/* Create File Dialog */}
+      <CreateFileDialog
+        isOpen={createFileDialog.isOpen}
+        onClose={() => setCreateFileDialog({ isOpen: false, basePath: '' })}
+        onSubmit={async (fileName) => {
+          const filePath = createFileDialog.basePath ? `${createFileDialog.basePath}/${fileName}` : fileName;
+          await createFile(filePath);
+        }}
+        basePath={createFileDialog.basePath}
+      />
+
+      {/* Create Folder Dialog */}
+      <CreateFolderDialog
+        isOpen={createFolderDialog.isOpen}
+        onClose={() => setCreateFolderDialog({ isOpen: false, basePath: '' })}
+        onSubmit={async (folderName) => {
+          const folderPath = createFolderDialog.basePath ? `${createFolderDialog.basePath}/${folderName}` : folderName;
+          await createFolder(folderPath);
+        }}
+        basePath={createFolderDialog.basePath}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteConfirmDialog
+        isOpen={deleteDialog.isOpen}
+        onClose={() => setDeleteDialog({ isOpen: false, item: null })}
+        onConfirm={async () => {
+          if (deleteDialog.item) {
+            await deleteItem(deleteDialog.item.path);
+          }
+        }}
+        itemName={deleteDialog.item?.name || ''}
+        itemType={deleteDialog.item?.type || 'file'}
+      />
     </div>
   );
 }

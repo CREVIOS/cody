@@ -70,7 +70,7 @@ export async function saveFileContent(
     }
 
     protected async onError(message: string): Promise<void> {
-      console.error("Error saving file content:", message);
+      // Error handling - no logging
     }
   }
 
@@ -105,7 +105,7 @@ export async function getFileVersionContent(
     }
 
     protected async onError(message: string): Promise<void> {
-      console.error("Error getting file version content:", message);
+      // Error handling - no logging
     }
   }
 
@@ -177,7 +177,7 @@ export async function listFileVersions(
     }
 
     protected async onError(message: string): Promise<void> {
-      console.error("Error listing file versions:", message);
+      // Error handling - no logging
     }
   }
 

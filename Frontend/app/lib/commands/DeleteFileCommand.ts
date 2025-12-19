@@ -56,15 +56,15 @@ export class DeleteFileCommand extends BaseCommand {
   }
 
   protected async doUndo(): Promise<void> {
-    if (!this.deletedContent) {
-      throw new Error('Cannot undo: deleted content not stored');
-    }
-
-    // Recreate the file with original content
+    // If content wasn't stored (e.g., file didn't exist or read failed),
+    // create an empty file as a fallback
+    const contentToRestore = this.deletedContent ?? '';
+    
+    // Recreate the file with original content (or empty if not stored)
     await this.fileSystemService.createFile(
       this.projectId,
       this.filePath,
-      this.deletedContent
+      contentToRestore
     );
   }
 
@@ -73,8 +73,9 @@ export class DeleteFileCommand extends BaseCommand {
   }
 
   canUndo(): boolean {
-    // Can undo only if we successfully stored the content
-    return this.deletedContent !== undefined;
+    // Can always undo delete - if content wasn't stored, we'll restore an empty file
+    // This prevents errors when undo is attempted after a failed read
+    return true;
   }
 
   serialize(): CommandData {

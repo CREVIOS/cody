@@ -38,10 +38,11 @@ export function FileInfoBar({
   isRequestingLock = false,
 }: FileInfoBarProps) {
   const { selectFile, openFile } = useFileSystem();
-  const { canUndo, canRedo, undoDescription, redoDescription, undo, redo } = useCommandManager();
+  const { canUndo, canRedo, undoDescription, redoDescription, undo, redo, isProcessing } = useCommandManager();
 
   const handleUndo = async () => {
-    if (!canEdit || !canUndo) return;
+    // Check both state and processing flag to prevent multiple clicks
+    if (!canEdit || !canUndo || isProcessing) return;
     try {
       await undo();
     } catch (error) {
@@ -50,7 +51,8 @@ export function FileInfoBar({
   };
 
   const handleRedo = async () => {
-    if (!canEdit || !canRedo) return;
+    // Check both state and processing flag to prevent multiple clicks
+    if (!canEdit || !canRedo || isProcessing) return;
     try {
       await redo();
     } catch (error) {
@@ -232,7 +234,7 @@ export function FileInfoBar({
               {/* Undo button */}
               <button
                 onClick={handleUndo}
-                disabled={!canUndo}
+                disabled={!canUndo || isProcessing}
                 title={undoDescription || "Nothing to undo (Ctrl+Z)"}
                 data-testid="file-undo-button"
                 className={`p-1.5 rounded transition-colors duration-150 ${
@@ -254,7 +256,7 @@ export function FileInfoBar({
               {/* Redo button */}
               <button
                 onClick={handleRedo}
-                disabled={!canRedo}
+                disabled={!canRedo || isProcessing}
                 title={redoDescription || "Nothing to redo (Ctrl+Y)"}
                 data-testid="file-redo-button"
                 className={`p-1.5 rounded transition-colors duration-150 ${

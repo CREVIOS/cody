@@ -244,6 +244,47 @@ const filePersistTimers = new Map(); // key => timeout handle
 const fileOperationQueues = new Map(); // key => promise chain
 
 // Health check with detailed status
+// Adapter Pattern Debug Endpoint - Verify adapter is working
+app.get('/api/debug/adapter', asyncHandler(async (req, res) => {
+  try {
+    const adapterInfo = {
+      adapterType: fileSystemService?.storage?.constructor?.name || 'Unknown',
+      adapterMethods: fileSystemService?.storage ? Object.getOwnPropertyNames(Object.getPrototypeOf(fileSystemService.storage)).filter(m => m !== 'constructor') : [],
+      hasInit: typeof fileSystemService?.storage?.init === 'function',
+      isMinIO: fileSystemService?.storage?.constructor?.name === 'MinIOStorageAdapter',
+      isMock: fileSystemService?.storage?.constructor?.name === 'MockStorageAdapter',
+      timestamp: new Date().toISOString()
+    };
+    
+    // Try to get versioning status if available
+    if (typeof fileSystemService?.storage?.getVersioningStatus === 'function') {
+      try {
+        adapterInfo.versioningStatus = await fileSystemService.storage.getVersioningStatus();
+      } catch (err) {
+        adapterInfo.versioningStatus = { error: err.message };
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Adapter Pattern Status',
+      adapter: adapterInfo,
+      pattern: {
+        name: 'Adapter Pattern',
+        type: 'Structural Design Pattern',
+        description: 'Allows FileSystemService to work with different storage backends (MinIO, S3, Azure, etc.) through a unified interface',
+        currentAdapter: adapterInfo.adapterType,
+        interchangeable: true
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}));
+
 app.get('/api/health', asyncHandler(async (req, res) => {
   const health = {
     status: 'healthy',

@@ -46,7 +46,7 @@ export interface FileSystemContextType {
   createFile: (path: string, content?: string) => Promise<void>;
   createFolder: (path: string) => Promise<void>;
   openFile: (item: FileSystemItem) => Promise<void>;
-  saveFile: (path: string, content: string) => Promise<void>;
+  saveFile: (path: string, content: string, skipCommand?: boolean) => Promise<void>;
   deleteItem: (path: string) => Promise<void>;
   renameItem: (oldPath: string, newPath: string) => Promise<void>;
   copyItem: (sourcePath: string, destinationPath: string) => Promise<void>;
