@@ -1,70 +1,29 @@
 const FileSystemService = require('../services/fileSystemService');
-
-// Mock MinIO client
-jest.mock('minio', () => {
-  return {
-    Client: jest.fn().mockImplementation(() => ({
-      bucketExists: jest.fn(),
-      makeBucket: jest.fn(),
-      listObjects: jest.fn(),
-      putObject: jest.fn(),
-      getObject: jest.fn(),
-      removeObject: jest.fn(),
-      removeObjects: jest.fn(),
-      copyObject: jest.fn(),
-      statObject: jest.fn()
-    }))
-  };
-});
+const MockStorageAdapter = require('../adapters/mockStorageAdapter');
 
 describe('FileSystemService', () => {
   let fileSystemService;
-  let mockMinioClient;
+  let mockStorage;
 
   beforeEach(() => {
     // Clear all mocks before each test
     jest.clearAllMocks();
     
-    fileSystemService = new FileSystemService();
-    mockMinioClient = fileSystemService.minioClient;
+    mockStorage = new MockStorageAdapter();
+    fileSystemService = new FileSystemService(mockStorage);
   });
 
   describe('constructor', () => {
-    it('should initialize with correct MinIO configuration', () => {
-      expect(fileSystemService.bucketName).toBe('projects');
-      expect(mockMinioClient).toBeDefined();
+    it('should initialize with injected storage adapter', () => {
+      expect(fileSystemService.storage).toBe(mockStorage);
     });
   });
 
   describe('initializeBucket', () => {
-    beforeEach(() => {
-      jest.clearAllMocks();
-    });
-
-    it('should create bucket if it does not exist', async () => {
-      mockMinioClient.bucketExists.mockResolvedValue(false);
-      mockMinioClient.makeBucket.mockResolvedValue();
-
+    it('should delegate to adapter init when present', async () => {
+      const spy = jest.spyOn(mockStorage, 'init').mockResolvedValue();
       await fileSystemService.initializeBucket();
-
-      expect(mockMinioClient.bucketExists).toHaveBeenCalledWith('projects');
-      expect(mockMinioClient.makeBucket).toHaveBeenCalledWith('projects', 'us-east-1');
-    });
-
-    it('should not create bucket if it already exists', async () => {
-      mockMinioClient.bucketExists.mockResolvedValue(true);
-
-      await fileSystemService.initializeBucket();
-
-      expect(mockMinioClient.bucketExists).toHaveBeenCalledWith('projects');
-      expect(mockMinioClient.makeBucket).not.toHaveBeenCalled();
-    });
-
-    it('should handle bucket initialization errors', async () => {
-      mockMinioClient.bucketExists.mockRejectedValue(new Error('Connection failed'));
-      
-      // Should not throw, just log error
-      await expect(fileSystemService.initializeBucket()).resolves.toBeUndefined();
+      expect(spy).toHaveBeenCalledTimes(1);
     });
   });
 

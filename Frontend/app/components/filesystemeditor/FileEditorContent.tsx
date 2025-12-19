@@ -53,6 +53,8 @@ export function FileEditorContent({
   user,
   userRole,
 }: FileEditorContentProps) {
+  // Allow disabling CRDT collaboration entirely (single-user / debug mode)
+  const collabDisabled = process.env.NEXT_PUBLIC_DISABLE_COLLAB === '1';
   const [language, setLanguage] = useState("javascript");
   const [realtimeKey, setRealtimeKey] = useState<RealtimeKeyMetadata | null>(null);
   const [realtimeKeyLoading, setRealtimeKeyLoading] = useState(false);
@@ -619,11 +621,12 @@ export function FileEditorContent({
         collaboration={
           // CRDT-only mode: Enable collaboration regardless of permissions
           // Always enable CRDT collaboration - no permission checks
-          realtimeKey
+          !collabDisabled && realtimeKey
             ? {
                 enabled: true,
-                // Use consistent docId format that matches server expectations
-                docId: `file:${realtimeKey.projectId}:${realtimeKey.fileId}`,
+                // Use per-file docId so each file has its own collaboration room.
+                // Match the server's getFileDocId(projectId, filePath) = `file:${projectId}:${filePath}`
+                docId: `file:${realtimeKey.projectId}:${selectedFile.path}`,
                 projectId: realtimeKey.projectId,
                 // CRITICAL: Use the actual file path for WebSocket connection, not the fileId UUID
                 // The server expects the real file path for file-collab connections

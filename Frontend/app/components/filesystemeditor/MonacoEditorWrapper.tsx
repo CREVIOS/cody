@@ -206,6 +206,30 @@ export function MonacoEditorWrapper({
     }
   }, [collaboration?.enabled, collabActions, onCollaborationReady]);
 
+  // Keep Yjs doc content aligned with the selected file's actual content on file switches.
+  // This prevents a newly opened file (including empty ones) from inheriting text from
+  // a previously opened file. On every docId change we hard-reset the CRDT doc to match
+  // the backend content for that file.
+  const lastDocIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!collaboration?.enabled || !collabActions) return;
+    const docId = collaboration.docId;
+    if (!docId) return;
+
+    const previousDocId = lastDocIdRef.current;
+    lastDocIdRef.current = docId;
+
+    // Only run when we first see this docId or when switching to a different docId
+    if (previousDocId === docId) return;
+
+    const initial = content ?? '';
+
+    // Always reset the CRDT document to the file's current content on doc switch.
+    // This guarantees strict per-file isolation, at the cost of discarding any
+    // stale or conflicting local CRDT state for that docId.
+    collabActions.setContent?.(initial);
+  }, [collaboration?.enabled, collaboration?.docId, collabActions, content]);
+
   // Phase 7: Report WebSocket status to parent for debug panel
   useEffect(() => {
     if (!collaboration?.enabled || !onWsStatusChange) {
