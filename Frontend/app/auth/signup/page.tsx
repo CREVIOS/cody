@@ -56,8 +56,13 @@ export default function SignupPage() {
 
   return (
     <div className={`min-h-screen flex items-center justify-center p-8 relative ${backgroundClass}`} suppressHydrationWarning>
-      {/* Theme Toggle - Top Right */}
-      <div className="absolute top-8 right-8" suppressHydrationWarning>
+      {/* Logo and Theme Toggle - Top Left */}
+      <div className="absolute top-8 left-8 flex items-center gap-4" suppressHydrationWarning>
+        <img 
+          src="/logo.png" 
+          alt="CodeCollab Platform Logo" 
+          className="h-12 md:h-16 w-auto object-contain"
+        />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
 

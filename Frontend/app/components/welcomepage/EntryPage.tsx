@@ -214,7 +214,14 @@ export default function EntryPage({ onNewProject, onOpenProject, user, onLogout 
   return (
     <div className={`min-h-screen flex flex-col ${backgroundClass}`}>
       <TopBar borderClass={borderClass}>
-        <ThemeToggle theme={theme} onToggle={toggleTheme} />
+        <div className="flex items-center gap-4">
+          <img 
+            src="/logo.png" 
+            alt="CodeCollab Platform Logo" 
+            className="h-12 md:h-16 w-auto object-contain"
+          />
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+        </div>
 
         <div className="flex items-center gap-2">
           <NotificationButton

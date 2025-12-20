@@ -59,15 +59,22 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
 
   return (
     <div className={`min-h-screen flex flex-col items-center justify-center p-8 relative ${backgroundClass}`}>
-      {/* Theme Toggle - Top Right */}
-      <div className="absolute top-8 right-8">
+      {/* Theme Toggle - Top Left */}
+      <div className="absolute top-8 left-8">
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
 
       {/* App Name */}
       <div className="text-center mb-12">
+        <div className="mb-6 flex justify-center">
+          <img 
+            src="/logo.png" 
+            alt="CodeCollab Platform Logo" 
+            className="h-40 md:h-56 w-auto object-contain"
+          />
+        </div>
         <h1 
-          className="text-6xl md:text-7xl font-bold mb-4"
+          className="text-5xl md:text-6xl font-bold mb-4"
           style={{ textShadow: titleShadow }}
         >
           CodeCollab Platform
@@ -130,30 +137,16 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
               ×
             </button>
             
-            <h2 className="text-3xl font-bold mb-6 text-center">About codecollab platform</h2>
-            
             <div className="space-y-6">
+              <h2 className="text-3xl font-bold mb-6 text-center">About CodeCollab Platform</h2>
               <section>
-                <h3 className="text-xl font-semibold mb-3 text-indigo-400">Introduction</h3>
                 <p className={`leading-relaxed ${theme === "dark" ? "text-gray-300" : "text-gray-700"}`}>
-                  Welcome to <strong>codecollab platform</strong> (also known as <strong>cody</strong>), 
+                  Welcome to <strong>CodeCollab Platform</strong> (also known as <strong>Cody</strong>), 
                   a powerful collaborative coding environment designed for teams to work together seamlessly. 
-                  Our platform provides real-time collaboration, file management, version control, and 
-                  integrated development tools all in one place.
+                  Experience real-time collaborative code editing with live cursors, 
+                  integrated file system management, project-based organization with role-based access control, 
+                  and terminal integration for seamless development workflow.
                 </p>
-              </section>
-
-              <section>
-                <h3 className="text-xl font-semibold mb-3 text-indigo-400">Features</h3>
-                <ul className={`list-disc list-inside space-y-2 ${theme === "dark" ? "text-gray-300" : "text-gray-700"}`}>
-                  <li>Real-time collaborative code editing with live cursors</li>
-                  <li>Integrated file system management</li>
-                  <li>Version control and file history tracking</li>
-                  <li>Project-based organization with role-based access control</li>
-                  <li>Terminal integration for seamless development workflow</li>
-                  <li>Team collaboration with invitations and notifications</li>
-                  <li>Dark and light theme support</li>
-                </ul>
               </section>
 
               <section>
@@ -184,6 +177,7 @@ export default function UserSelection({ onSelectUser }: UserSelectionProps) {
                   </div>
                 </div>
               </section>
+
             </div>
           </div>
         </div>
