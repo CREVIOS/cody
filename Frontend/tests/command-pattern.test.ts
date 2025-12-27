@@ -5,8 +5,8 @@
  * Run with: npx ts-node Frontend/app/lib/commands/__tests__/command-pattern.test.ts
  */
 
-import { RestoreVersionCommand, VersionService, FileVersion } from '../RestoreVersionCommand';
-import { CommandManager } from '../CommandManager';
+import { RestoreVersionCommand, VersionService, FileVersion } from '../app/lib/commands/RestoreVersionCommand';
+import { CommandManager } from '../app/lib/commands/CommandManager';
 
 // Mock VersionService for testing
 class MockVersionService implements VersionService {

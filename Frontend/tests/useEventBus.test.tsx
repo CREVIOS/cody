@@ -13,8 +13,8 @@ import {
   useEventOnce,
   useEventHistory,
   useSubscriberCount,
-} from "../useEventBus";
-import { EventBus, EventType, type FileEvent, type UserPresenceEvent } from "../EventBus";
+} from "../app/lib/events/useEventBus";
+import { EventBus, EventType, type FileEvent, type UserPresenceEvent } from "../app/lib/events/EventBus";
 
 describe("useEventBus Hook", () => {
   let eventBus: EventBus;

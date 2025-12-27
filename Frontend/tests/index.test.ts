@@ -21,7 +21,7 @@ import {
   useEventOnce,
   useEventHistory,
   useSubscriberCount,
-} from "../index";
+} from "../app/lib/events/index";
 
 describe("index.ts exports", () => {
   describe("EventBus exports", () => {

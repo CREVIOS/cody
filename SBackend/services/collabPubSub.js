@@ -15,7 +15,7 @@ class CollabPubSub {
   constructor(instanceId, logger = console) {
     this.instanceId = instanceId;
     this.logger = logger;
-    this.channel = DEFAULT_CHANNEL;
+    this.channel = process.env.COLLAB_REDIS_CHANNEL || DEFAULT_CHANNEL;
     this.enabled = false;
     this.publisher = null;
     this.subscriber = null;

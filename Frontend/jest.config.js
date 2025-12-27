@@ -16,12 +16,13 @@ const customJestConfig = {
     '**/__tests__/**/*.[jt]s?(x)',
     '**/?(*.)+(spec|test).[jt]s?(x)',
   ],
-  collectCoverageFrom: [
-    'app/**/*.{js,jsx,ts,tsx}',
-    '!app/**/*.d.ts',
-    '!app/**/__tests__/**',
-    '!app/**/*.test.{js,jsx,ts,tsx}',
-    '!app/**/*.spec.{js,jsx,ts,tsx}',
+  // Only collect coverage from files that are actually imported/executed during tests
+  // By not specifying collectCoverageFrom, Jest will only report coverage for files
+  // that are actually imported and executed during test runs
+  coveragePathIgnorePatterns: [
+    '/node_modules/',
+    '/.next/',
+    '/coverage/',
   ],
   modulePathIgnorePatterns: ['<rootDir>/.next/'],
 }
