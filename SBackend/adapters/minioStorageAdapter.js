@@ -81,24 +81,42 @@ class MinIOStorageAdapter extends StorageAdapter {
     return { versionId, etag, lastModified, size: buffer.length };
   }
 
-  async deleteFile(projectId, pathOrPrefix) {
+  async deleteFile(projectId, pathOrPrefix, options = {}) {
     const prefix = this._objectName(projectId, pathOrPrefix);
-    const stream = this.minioClient.listObjects(this.bucketName, prefix, true);
+    const purge = options && options.purge === true;
+    const listOpts = purge ? { IncludeVersion: true } : undefined;
+    const stream = this.minioClient.listObjects(this.bucketName, prefix, true, listOpts);
 
-    const objectNames = [];
+    const objectEntries = [];
     for await (const obj of stream) {
       if (obj && obj.name) {
-        objectNames.push(obj.name);
+        objectEntries.push({ name: obj.name, versionId: obj.versionId });
       }
     }
 
-    if (objectNames.length === 0) {
+    if (objectEntries.length === 0) {
+      if (purge) {
+        return { deleted: 0 };
+      }
       await this.minioClient.removeObject(this.bucketName, prefix);
       return { deleted: 1 };
     }
 
-    await this.minioClient.removeObjects(this.bucketName, objectNames);
-    return { deleted: objectNames.length };
+    if (purge) {
+      let deleted = 0;
+      for (const entry of objectEntries) {
+        if (entry.versionId) {
+          await this.minioClient.removeObject(this.bucketName, entry.name, { versionId: entry.versionId });
+        } else {
+          await this.minioClient.removeObject(this.bucketName, entry.name);
+        }
+        deleted += 1;
+      }
+      return { deleted };
+    }
+
+    await this.minioClient.removeObjects(this.bucketName, objectEntries.map((entry) => entry.name));
+    return { deleted: objectEntries.length };
   }
 
   async listFiles(projectId, prefix = '', options = {}) {
@@ -201,19 +219,31 @@ class MinIOStorageAdapter extends StorageAdapter {
     }));
   }
 
-  async deleteProject(projectId) {
+  async deleteProject(projectId, options = {}) {
     const prefix = this._objectName(projectId, '');
-    const stream = this.minioClient.listObjects(this.bucketName, prefix, true);
-    const objectNames = [];
+    const purge = options && options.purge === true;
+    const listOpts = purge ? { IncludeVersion: true } : undefined;
+    const stream = this.minioClient.listObjects(this.bucketName, prefix, true, listOpts);
+    const objectEntries = [];
     for await (const obj of stream) {
-      if (obj && obj.name) objectNames.push(obj.name);
+      if (obj && obj.name) objectEntries.push({ name: obj.name, versionId: obj.versionId });
     }
 
-    if (objectNames.length > 0) {
-      await this.minioClient.removeObjects(this.bucketName, objectNames);
+    if (objectEntries.length > 0) {
+      if (purge) {
+        for (const entry of objectEntries) {
+          if (entry.versionId) {
+            await this.minioClient.removeObject(this.bucketName, entry.name, { versionId: entry.versionId });
+          } else {
+            await this.minioClient.removeObject(this.bucketName, entry.name);
+          }
+        }
+      } else {
+        await this.minioClient.removeObjects(this.bucketName, objectEntries.map((entry) => entry.name));
+      }
     }
 
-    return { deleted: objectNames.length };
+    return { deleted: objectEntries.length };
   }
 
   async projectExists(projectId) {
@@ -294,5 +324,4 @@ class MinIOStorageAdapter extends StorageAdapter {
 }
 
 module.exports = MinIOStorageAdapter;
-
 

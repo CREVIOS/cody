@@ -171,11 +171,11 @@ class FileSystemService {
   }
 
   // Delete file or folder
-  async deleteItem(projectId, itemPath) {
+  async deleteItem(projectId, itemPath, options = {}) {
     try {
       // Adapter Pattern: Using storage adapter interface
       console.log(`🗑️  [Adapter] deleteItem called - Adapter: ${this.storage.constructor.name}, Project: ${projectId}, Path: ${itemPath}`);
-      await this.storage.deleteFile(projectId, itemPath);
+      await this.storage.deleteFile(projectId, itemPath, options);
 
       return {
         success: true,
@@ -389,9 +389,9 @@ class FileSystemService {
   }
 
   // Delete entire project
-  async deleteProject(projectId) {
+  async deleteProject(projectId, options = {}) {
     try {
-      const result = await this.storage.deleteProject(projectId);
+      const result = await this.storage.deleteProject(projectId, options);
 
       return {
         success: true,
@@ -413,6 +413,34 @@ class FileSystemService {
       console.error('Error checking project existence:', error);
       throw error;
     }
+  }
+
+  async ensureVersioningEnabled(options = {}) {
+    const autoEnable = options && options.autoEnable === true;
+    if (typeof this.storage.getVersioningStatus !== 'function') {
+      return { enabled: false, status: null, reason: 'Versioning status unsupported by adapter' };
+    }
+
+    const status = await this.storage.getVersioningStatus();
+    if (status && status.status === 'Enabled') {
+      return { enabled: true, status };
+    }
+
+    if (autoEnable && typeof this.storage.enableVersioning === 'function') {
+      await this.storage.enableVersioning();
+      const updated = await this.storage.getVersioningStatus();
+      if (updated && updated.status === 'Enabled') {
+        return { enabled: true, status: updated, autoEnabled: true };
+      }
+    }
+
+    const error = new Error(
+      `Versioning is not enabled for bucket '${status?.bucket || 'unknown'}'. ` +
+      `Run /api/versioning/enable or SBackend/scripts/enable-versioning.js to enable it.`
+    );
+    error.code = 'VERSIONING_DISABLED';
+    error.details = status;
+    throw error;
   }
 
   // ==================== VERSION MANAGEMENT ====================

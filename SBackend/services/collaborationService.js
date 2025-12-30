@@ -13,13 +13,54 @@ const RATE_LIMIT_WINDOW_MS = 1000;
 const RATE_LIMIT_MAX_MESSAGES = 50;
 const UPDATE_BATCH_INTERVAL_MS = 50;
 const AWARENESS_THROTTLE_MS = 50;
+const CLIENT_PING_INTERVAL_MS = 25_000;
+const CLIENT_IDLE_TIMEOUT_MS = 60_000;
 const WS_BACKPRESSURE_THRESHOLD = 1_000_000; // 1 MB buffered
 const WS_MAX_QUEUE = 500; // Max queued messages per client
 const WS_MAX_MESSAGE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap per frame
 const INITIAL_DOC_MAX_CHARS = 5 * 1024 * 1024; // 5M chars safety cap for initial file load
 
+function decodeAwarenessUpdateClientIds(update) {
+  const decoder = decoding.createDecoder(update);
+  const len = decoding.readVarUint(decoder);
+  const present = [];
+  const removed = [];
+
+  for (let i = 0; i < len; i++) {
+    const clientID = decoding.readVarUint(decoder);
+    decoding.readVarUint(decoder); // clock
+    let state = null;
+    try {
+      state = JSON.parse(decoding.readVarString(decoder));
+    } catch {
+      state = {};
+    }
+    if (state === null) {
+      removed.push(clientID);
+    } else {
+      present.push(clientID);
+    }
+  }
+
+  return { present, removed };
+}
+
 function storageKeyForDocId(docId) {
   return crypto.createHash('sha256').update(String(docId)).digest('hex');
+}
+
+function parseSnapshotTimestamp(filename) {
+  const match = /^(\d+)/.exec(filename);
+  if (!match) return null;
+  const ts = Number(match[1]);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function parseUpdateTimestamp(filename) {
+  const match = /^(\d+)/.exec(filename);
+  if (!match) return null;
+  const ts = Number(match[1]);
+  return Number.isFinite(ts) ? ts : null;
 }
 
 function parseFileDocId(docId) {
@@ -46,6 +87,7 @@ class CollaborationRoom extends EventEmitter {
     this.pubSubBridge = options.pubSubBridge || null;
     this.initialContentProvider = options.initialContentProvider || null;
     this.connections = new Map(); // clientId -> { ws, user, rateLimitTracker }
+    this.connectionAwareness = new Map(); // clientId -> Set(awareness clientIDs)
     this.updateLog = []; // Array of Uint8Array updates
     this.lastSnapshot = Date.now();
 
@@ -67,6 +109,7 @@ class CollaborationRoom extends EventEmitter {
     this.batchTimer = null;
     this.pendingAwarenessClients = new Set();
     this.awarenessTimer = null;
+    this.heartbeatTimer = null;
 
     // Setup listeners
     this.setupDocumentListeners();
@@ -98,6 +141,8 @@ class CollaborationRoom extends EventEmitter {
     };
 
     this.logger.event('room_created', { config: this.config });
+
+    this.startHeartbeat();
   }
 
   getStorageDocPath() {
@@ -150,7 +195,9 @@ class CollaborationRoom extends EventEmitter {
       ws,
       user: userInfo,
       rateLimitTracker,
-      sendQueue: []
+      sendQueue: [],
+      lastActivityAt: Date.now(),
+      lastPingAt: 0
     });
     this.metrics.totalConnections++;
 
@@ -164,6 +211,12 @@ class CollaborationRoom extends EventEmitter {
 
     // Setup message handler ASAP (clients may send sync immediately on open)
     ws.on('message', (message, isBinary) => this.handleMessage(clientId, message, isBinary));
+    ws.on('pong', () => {
+      const conn = this.connections.get(clientId);
+      if (conn) {
+        conn.lastActivityAt = Date.now();
+      }
+    });
 
     // Setup close handler
     ws.on('close', () => this.removeConnection(clientId));
@@ -261,12 +314,16 @@ class CollaborationRoom extends EventEmitter {
 
     this.connections.delete(clientId);
 
-    // Remove awareness state for the disconnecting client
-    awarenessProtocol.removeAwarenessStates(
-      this.awareness,
-      [clientId],
-      'client disconnected'
-    );
+    // Remove awareness states for all clientIDs associated with this connection
+    const awarenessClients = this.connectionAwareness.get(clientId);
+    if (awarenessClients && awarenessClients.size > 0) {
+      awarenessProtocol.removeAwarenessStates(
+        this.awareness,
+        Array.from(awarenessClients),
+        'client disconnected'
+      );
+    }
+    this.connectionAwareness.delete(clientId);
 
     this.logger.event('client_left', {
       clientId,
@@ -324,6 +381,11 @@ class CollaborationRoom extends EventEmitter {
       // Ensure persisted state is loaded before handling any protocol messages.
       // This avoids applying client updates against an empty doc and then later loading persisted state.
       await this.readyPromise;
+
+      const conn = this.connections.get(clientId);
+      if (conn) {
+        conn.lastActivityAt = Date.now();
+      }
 
       // Collaboration channels expect binary Yjs frames. Ignore any non-binary frames
       // (e.g. JSON debug payloads) to avoid crashing decode.
@@ -503,6 +565,25 @@ class CollaborationRoom extends EventEmitter {
       update,
       clientId
     );
+
+    const { present, removed } = decodeAwarenessUpdateClientIds(update);
+    if (present.length > 0 || removed.length > 0) {
+      let clientSet = this.connectionAwareness.get(clientId);
+      if (!clientSet) {
+        clientSet = new Set();
+        this.connectionAwareness.set(clientId, clientSet);
+      }
+
+      for (const id of present) {
+        clientSet.add(id);
+      }
+      for (const id of removed) {
+        clientSet.delete(id);
+      }
+      if (clientSet.size === 0) {
+        this.connectionAwareness.delete(clientId);
+      }
+    }
 
     if (this.pubSubBridge?.enabled) {
       this.publishAwareness(update, clientId);
@@ -762,7 +843,8 @@ class CollaborationRoom extends EventEmitter {
     await fs.mkdir(updatePath, { recursive: true });
 
     const timestamp = Date.now();
-    const filename = `${timestamp}.update`;
+    const nonce = crypto.randomBytes(4).toString('hex');
+    const filename = `${timestamp}-${nonce}.update`;
     const filepath = path.join(updatePath, filename);
 
     await fs.writeFile(filepath, update);
@@ -780,7 +862,8 @@ class CollaborationRoom extends EventEmitter {
     const snapshot = Y.encodeStateAsUpdate(this.doc);
 
     const timestamp = Date.now();
-    const filename = `${timestamp}.snapshot`;
+    const nonce = crypto.randomBytes(4).toString('hex');
+    const filename = `${timestamp}-${nonce}.snapshot`;
     const filepath = path.join(snapshotPath, filename);
 
     await fs.writeFile(filepath, snapshot);
@@ -824,16 +907,17 @@ class CollaborationRoom extends EventEmitter {
           const snapshots = await fs.readdir(snapshotPath);
           const snapshotFiles = snapshots
             .filter(f => f.endsWith('.snapshot'))
-            .sort()
-            .reverse();
+            .map((file) => ({ file, ts: parseSnapshotTimestamp(file) }))
+            .filter((entry) => entry.ts !== null)
+            .sort((a, b) => b.ts - a.ts);
 
           if (snapshotFiles.length > 0) {
-            const latestSnapshot = snapshotFiles[0];
+            const latestSnapshot = snapshotFiles[0].file;
             const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
             try {
               Y.applyUpdate(this.doc, snapshotData, 'persistence');
               this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
-              const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
+              const snapshotTimestamp = snapshotFiles[0].ts || 0;
               this.lastSnapshot = snapshotTimestamp;
               await this.loadUpdatesAfter(snapshotTimestamp, docPath);
               return;
@@ -872,10 +956,15 @@ class CollaborationRoom extends EventEmitter {
 
       const relevantUpdates = updates
         .filter(f => f.endsWith('.update'))
-        .filter(f => parseInt(f.split('.')[0]) > timestamp)
-        .sort();
+        .map((file) => ({ file, ts: parseUpdateTimestamp(file) }))
+        .filter((entry) => entry.ts !== null && entry.ts > timestamp)
+        .sort((a, b) => {
+          if (a.ts !== b.ts) return a.ts - b.ts;
+          return a.file.localeCompare(b.file);
+        });
 
-      for (const updateFile of relevantUpdates) {
+      for (const entry of relevantUpdates) {
+        const updateFile = entry.file;
         const updateData = await fs.readFile(path.join(updatePath, updateFile));
         try {
           Y.applyUpdate(this.doc, updateData, 'persistence');
@@ -905,13 +994,15 @@ class CollaborationRoom extends EventEmitter {
 
       const snapshotFiles = files
         .filter(f => f.endsWith('.snapshot'))
-        .sort()
-        .reverse();
+        .map((file) => ({ file, ts: parseSnapshotTimestamp(file) }))
+        .filter((entry) => entry.ts !== null)
+        .sort((a, b) => b.ts - a.ts);
 
       if (snapshotFiles.length > keepCount) {
         const toDelete = snapshotFiles.slice(keepCount);
 
-        for (const file of toDelete) {
+        for (const entry of toDelete) {
+          const file = entry.file;
           const baseName = file.replace('.snapshot', '');
           await fs.unlink(path.join(snapshotPath, file)).catch(() => {});
           await fs.unlink(path.join(snapshotPath, `${baseName}.meta.json`)).catch(() => {});
@@ -964,6 +1055,10 @@ class CollaborationRoom extends EventEmitter {
       clearTimeout(this.batchTimer);
       this.flushUpdateBatch();
     }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
 
     // Disconnect all clients
     for (const [clientId, { ws }] of this.connections) {
@@ -982,6 +1077,37 @@ class CollaborationRoom extends EventEmitter {
     this.doc.destroy();
 
     this.logger.info('Room closed');
+  }
+
+  startHeartbeat() {
+    if (this.heartbeatTimer) return;
+
+    this.heartbeatTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [clientId, conn] of this.connections) {
+        const { ws } = conn;
+        if (ws.readyState !== ws.OPEN) continue;
+
+        if (now - conn.lastPingAt >= CLIENT_PING_INTERVAL_MS) {
+          try {
+            ws.ping();
+            conn.lastPingAt = now;
+          } catch (err) {
+            this.logger.warn('Failed to ping client', { clientId, error: err.message });
+          }
+        }
+
+        if (now - conn.lastActivityAt >= CLIENT_IDLE_TIMEOUT_MS) {
+          this.logger.warn('Disconnecting idle client', { clientId });
+          try {
+            ws.terminate();
+          } catch {
+            // ignore
+          }
+          this.removeConnection(clientId);
+        }
+      }
+    }, Math.min(CLIENT_PING_INTERVAL_MS, 10_000));
   }
 }
 

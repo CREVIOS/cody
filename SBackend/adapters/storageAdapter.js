@@ -43,9 +43,10 @@ class StorageAdapter {
    * Delete a file or a prefix (folder).
    * @param {string} projectId
    * @param {string} pathOrPrefix
+   * @param {{ purge?: boolean }=} options
    * @returns {Promise<{ deleted: number }>}
    */
-  async deleteFile(projectId, pathOrPrefix) {
+  async deleteFile(projectId, pathOrPrefix, options) {
     throw new Error('Not implemented');
   }
 
@@ -104,9 +105,10 @@ class StorageAdapter {
   /**
    * Delete all objects for a project.
    * @param {string} projectId
+   * @param {{ purge?: boolean }=} options
    * @returns {Promise<{ deleted: number }>}
    */
-  async deleteProject(projectId) {
+  async deleteProject(projectId, options) {
     throw new Error('Not implemented');
   }
 
@@ -178,5 +180,4 @@ class StorageAdapter {
 }
 
 module.exports = StorageAdapter;
-
 

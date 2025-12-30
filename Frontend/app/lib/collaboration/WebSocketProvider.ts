@@ -712,11 +712,17 @@ export class WebSocketProvider extends EventTarget {
 
     this.dispatchEvent(new Event('disconnect'));
 
-    // Don't reconnect on authentication errors (code 1008) or intentional closes (code 1000)
-    if (event.code === 1008 || event.code === 1000) {
-      this.log('Connection closed intentionally - not reconnecting');
+    // Don't reconnect on authentication/policy errors
+    if (event.code === 1008) {
+      this.log('Connection closed due to policy violation - not reconnecting');
       this.reconnectEnabled = false;
       this.dispatchEvent(new Event('reconnect-failed'));
+      return;
+    }
+
+    // Respect manual disconnects
+    if (!this.reconnectEnabled) {
+      this.log('Reconnection disabled - not reconnecting');
       return;
     }
 

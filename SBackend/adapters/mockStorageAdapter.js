@@ -74,7 +74,7 @@ class MockStorageAdapter extends StorageAdapter {
     return { versionId, etag, lastModified: now, size };
   }
 
-  async deleteFile(projectId, pathOrPrefix) {
+  async deleteFile(projectId, pathOrPrefix, _options = {}) {
     const proj = this.projects.get(projectId);
     if (!proj) return { deleted: 0 };
 
@@ -186,7 +186,7 @@ class MockStorageAdapter extends StorageAdapter {
     }));
   }
 
-  async deleteProject(projectId) {
+  async deleteProject(projectId, _options = {}) {
     const proj = this.projects.get(projectId);
     const deleted = proj ? proj.size : 0;
     this.projects.delete(projectId);
@@ -257,5 +257,4 @@ class MockStorageAdapter extends StorageAdapter {
 }
 
 module.exports = MockStorageAdapter;
-
 

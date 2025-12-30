@@ -126,6 +126,20 @@ async function initializeServices() {
     console.log('🚀 Initializing services...');
 
     fileSystemService = new FileSystemService();
+    await fileSystemService.initializeBucket();
+
+    const requireVersioning =
+      String(process.env.SBACKEND_REQUIRE_VERSIONING || 'true').toLowerCase() !== 'false';
+    const autoEnableVersioning =
+      String(process.env.SBACKEND_AUTO_ENABLE_VERSIONING || 'false').toLowerCase() === 'true';
+
+    if (requireVersioning) {
+      const status = await fileSystemService.ensureVersioningEnabled({ autoEnable: autoEnableVersioning });
+      if (status && status.autoEnabled) {
+        console.log('✅ Versioning auto-enabled for object storage bucket');
+      }
+    }
+
     outputManager = new OutputManager();
     containerService = new ContainerService(fileSystemService);
     collaborationService = new CollaborationService('./data/collaboration', {
@@ -390,6 +404,7 @@ app.get('/projects/:projectId/invitations', validateProjectId, asyncHandler(asyn
 
 app.delete('/api/projects/:projectId', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId } = req.params;
+  const purge = String(req.query.purge || '').toLowerCase() === 'true';
   
   // Stop any running containers first
   try {
@@ -407,7 +422,7 @@ app.delete('/api/projects/:projectId', validateProjectId, asyncHandler(async (re
     });
   }
 
-  const result = await fileSystemService.deleteProject(projectId);
+  const result = await fileSystemService.deleteProject(projectId, { purge });
   res.json(result);
 }));
 
@@ -542,6 +557,7 @@ app.put('/api/projects/:projectId/files/update', validateProjectId, asyncHandler
 app.delete('/api/projects/:projectId/items/delete', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId } = req.params;
   const { path: itemPath } = req.body;
+  const purge = String(req.body?.purge || '').toLowerCase() === 'true';
   
   if (!itemPath) {
     return res.status(400).json({ 
@@ -550,7 +566,7 @@ app.delete('/api/projects/:projectId/items/delete', validateProjectId, asyncHand
     });
   }
 
-  const result = await fileSystemService.deleteItem(projectId, itemPath);
+  const result = await fileSystemService.deleteItem(projectId, itemPath, { purge });
   res.json(result);
 }));
 
@@ -1632,17 +1648,21 @@ function handleCollaborationConnection(ws, projectId, connectionId, url) {
 
   room.addConnection(connectionId, ws, userInfo);
 
-  const confirmMessage = JSON.stringify({
-    type: 'collaboration:connected',
-    docId,
-    userId,
-    connectionId,
-    timestamp: Date.now()
-  });
+  void room.readyPromise
+    .catch(() => {})
+    .finally(() => {
+      const confirmMessage = JSON.stringify({
+        type: 'collaboration:connected',
+        docId,
+        userId,
+        connectionId,
+        timestamp: Date.now()
+      });
 
-  if (ws.readyState === ws.OPEN) {
-    ws.send(confirmMessage);
-  }
+      if (ws.readyState === ws.OPEN) {
+        ws.send(confirmMessage);
+      }
+    });
 }
 
 function handleFileCollabConnection(ws, projectId, connectionId, url) {
@@ -1695,18 +1715,22 @@ function handleFileCollabConnection(ws, projectId, connectionId, url) {
 
   room.addConnection(connectionId, ws, userInfo);
 
-  const confirmMessage = JSON.stringify({
-    type: 'file-collab:connected',
-    docId,
-    filePath,
-    userId,
-    connectionId,
-    timestamp: Date.now()
-  });
+  void room.readyPromise
+    .catch(() => {})
+    .finally(() => {
+      const confirmMessage = JSON.stringify({
+        type: 'file-collab:connected',
+        docId,
+        filePath,
+        userId,
+        connectionId,
+        timestamp: Date.now()
+      });
 
-  if (ws.readyState === ws.OPEN) {
-    ws.send(confirmMessage);
-  }
+      if (ws.readyState === ws.OPEN) {
+        ws.send(confirmMessage);
+      }
+    });
 }
 
 function generateRandomColor() {
