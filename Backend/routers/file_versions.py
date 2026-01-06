@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/file-versions", tags=["file-versions"])
 
+@router.post("", response_model=schemas.FileVersion, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.FileVersion, status_code=status.HTTP_201_CREATED)
 async def create_file_version(
     version_in: schemas.FileVersionCreate,
@@ -41,6 +42,7 @@ async def create_file_version(
     
     return await crud.crud_file_version.create(db, obj_in=version_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.FileVersion])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.FileVersion])
 async def read_file_versions(
     skip: int = Query(0, ge=0),

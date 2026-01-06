@@ -18,6 +18,7 @@ import { useCollaborativeEditor } from '@/hooks/use-collaborative-editor';
 import { createSnapshotManager } from './SnapshotManager';
 import { createErrorHandler, CRDTErrorType } from './ErrorHandler';
 import { RemoteCursors, injectRemoteCursorStyles } from '@/components/collaboration/RemoteCursors';
+import { getWsBaseUrl } from '@/lib/config/endpoints';
 
 interface CRDTExampleProps {
   docId: string;
@@ -30,7 +31,7 @@ export function CRDTExample({
   docId,
   userId,
   userName,
-  wsUrl = 'ws://localhost:3001',
+  wsUrl = getWsBaseUrl(),
 }: CRDTExampleProps) {
   const editorRef = useRef<any>(null);
   const [content, setContent] = useState('// Start editing...\n');
@@ -246,4 +247,3 @@ export function CRDTExample({
     </div>
   );
 }
-

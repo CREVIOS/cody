@@ -10,6 +10,7 @@ from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/project-members", tags=["project-members"])
 
+@router.post("", response_model=schemas.ProjectMember, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.ProjectMember, status_code=status.HTTP_201_CREATED)
 async def create_project_member(
     member_in: schemas.ProjectMemberCreate,
@@ -65,6 +66,7 @@ async def create_project_member(
     
     return await crud.crud_project_member.create(db, obj_in=member_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.ProjectMember])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.ProjectMember])
 async def read_project_members(
     skip: int = Query(0, ge=0),

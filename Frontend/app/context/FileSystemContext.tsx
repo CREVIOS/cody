@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { FileSystemItem, FileSystemContextType, SearchResult } from '@/types/fileSystem';
 import { ProjectPersistenceService, ProjectSession } from '@/lib/projectPersistence';
+import { getFileSystemBaseUrl, getWsBaseUrl } from '@/lib/config/endpoints';
 import { commandManager, DeleteFileCommand, RenameFileCommand, MoveFileCommand, CopyFileCommand, SaveFileCommand, CreateFileCommand, CreateFolderCommand, DuplicateFileCommand } from '@/lib/commands';
 import { useAuth } from './AuthContext';
 
@@ -37,9 +38,9 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
   const [currentProjectName, setCurrentProjectName] = useState<string>(projectName);
   
   // File system operations are handled by SBackend (Node.js server on port 3001)
-  // Use a dedicated FILE_SYSTEM_URL so we don't accidentally point at the Python API backend
-  // This avoids 404s when NEXT_PUBLIC_API_URL is set to the FastAPI service.
-  const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+  // Default to relative paths so Next.js rewrites can proxy to the file system backend,
+  // while still allowing explicit overrides via NEXT_PUBLIC_FILE_SYSTEM_URL.
+  const baseUrl = getFileSystemBaseUrl();
   const lastSavedContent = useRef<string>('');
   const watcherWsRef = useRef<WebSocket | null>(null);
   const selectedFilePathRef = useRef<string | null>(null);
@@ -164,7 +165,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
     }
 
     try {
-      const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+      const wsBase = getWsBaseUrl();
       const url = new URL(wsBase);
       url.searchParams.set('type', 'watcher');
       url.searchParams.set('projectId', projectId);
@@ -766,7 +767,7 @@ export function FileSystemProvider({ children, projectId, projectName = '' }: Fi
       // Get the previous saved content (what was saved before this save)
       // This is what we'll restore to when undoing
       const openFile = openFiles.get(path);
-      const previousContentBeforeSave = openFile?.savedContent || null;
+      const previousContentBeforeSave = openFile?.savedContent ?? null;
 
       // Execute save using command pattern (enables undo/redo)
       // Pass the previous content so we can restore to it on undo

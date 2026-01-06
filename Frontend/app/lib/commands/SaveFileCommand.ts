@@ -278,7 +278,7 @@ export class SaveFileCommand extends BaseCommand {
       throw new Error(`Command already executed: ${this.getDescription()}`);
     }
     
-    if (!this.savedContent) {
+    if (this.savedContent === null || this.savedContent === undefined) {
       throw new Error('Cannot redo: saved content not available');
     }
 

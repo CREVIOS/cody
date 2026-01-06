@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/file-types", tags=["file-types"])
 
+@router.post("", response_model=schemas.FileType, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.FileType, status_code=status.HTTP_201_CREATED)
 async def create_file_type(
     file_type_in: schemas.FileTypeCreate,
@@ -23,6 +24,7 @@ async def create_file_type(
     
     return await crud.crud_file_type.create(db, obj_in=file_type_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.FileType])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.FileType])
 async def read_file_types(
     skip: int = Query(0, ge=0),

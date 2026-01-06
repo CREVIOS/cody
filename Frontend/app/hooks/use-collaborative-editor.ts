@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Y } from '../lib/collaboration/yjsSingleton';
 import { MonacoBinding } from '../lib/collaboration/MonacoBinding';
 import { WebSocketProvider, ConnectionStatus } from '../lib/collaboration/WebSocketProvider';
+import { getWsBaseUrl } from '../lib/config/endpoints';
 import type { Awareness } from 'y-protocols/awareness';
 import { IndexedDBProvider } from '../lib/collaboration/IndexedDBProvider';
 import { CollaborativeUndoManager } from '../lib/collaboration/UndoManager';
@@ -420,7 +421,7 @@ export function useCollaborativeEditor(
       projectId,
       filePath,
       channelType: 'file-collab',
-      url: wsUrl || process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
+      url: wsUrl || getWsBaseUrl(),
       user: {
         id: user.id,
         name: user.name,
@@ -438,6 +439,7 @@ export function useCollaborativeEditor(
       editor,
       yText,
       awareness: wsProvider.awareness,
+      logging: !!logging,
     });
 
     monacoBindingRef.current = monacoBinding;

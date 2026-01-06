@@ -48,10 +48,8 @@ export const listUsers = async (): Promise<User[]> => {
 
       protected buildURL(): string {
         const baseUrl = this.getBaseURL();
-        if (!baseUrl) {
-          throw new Error("API_BASE_URL is not configured");
-        }
-        return `${baseUrl}/api/v1/users`;
+        // When API_BASE_URL is empty in the browser, use relative URL for Next.js rewrites.
+        return baseUrl ? `${baseUrl}/api/v1/users` : `/api/v1/users`;
       }
 
       protected buildOptions(): RequestInit {

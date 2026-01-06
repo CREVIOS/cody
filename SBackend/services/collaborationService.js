@@ -18,6 +18,29 @@ const WS_MAX_QUEUE = 500; // Max queued messages per client
 const WS_MAX_MESSAGE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap per frame
 const INITIAL_DOC_MAX_CHARS = 5 * 1024 * 1024; // 5M chars safety cap for initial file load
 
+function decodeAwarenessClientIds(update) {
+  const clients = [];
+  try {
+    const decoder = decoding.createDecoder(update);
+    const len = decoding.readVarUint(decoder);
+    for (let i = 0; i < len; i++) {
+      const clientId = decoding.readVarUint(decoder);
+      decoding.readVarUint(decoder); // clock
+      const stateJson = decoding.readVarString(decoder);
+      let state = null;
+      try {
+        state = JSON.parse(stateJson);
+      } catch {
+        state = null;
+      }
+      clients.push({ clientId, state });
+    }
+  } catch {
+    // Ignore malformed awareness updates
+  }
+  return clients;
+}
+
 function storageKeyForDocId(docId) {
   return crypto.createHash('sha256').update(String(docId)).digest('hex');
 }
@@ -150,7 +173,8 @@ class CollaborationRoom extends EventEmitter {
       ws,
       user: userInfo,
       rateLimitTracker,
-      sendQueue: []
+      sendQueue: [],
+      controlledAwarenessIds: new Set()
     });
     this.metrics.totalConnections++;
 
@@ -259,14 +283,17 @@ class CollaborationRoom extends EventEmitter {
       clearInterval(conn.flushTimer);
     }
 
-    this.connections.delete(clientId);
+    // Remove awareness states owned by this connection
+    const awarenessIds = Array.from(conn.controlledAwarenessIds || []);
+    if (awarenessIds.length > 0) {
+      awarenessProtocol.removeAwarenessStates(
+        this.awareness,
+        awarenessIds,
+        'client disconnected'
+      );
+    }
 
-    // Remove awareness state for the disconnecting client
-    awarenessProtocol.removeAwarenessStates(
-      this.awareness,
-      [clientId],
-      'client disconnected'
-    );
+    this.connections.delete(clientId);
 
     this.logger.event('client_left', {
       clientId,
@@ -496,7 +523,20 @@ class CollaborationRoom extends EventEmitter {
    * Handle awareness update (presence)
    */
   handleAwareness(clientId, decoder) {
+    const conn = this.connections.get(clientId);
+    if (!conn) return;
+
     const update = decoding.readVarUint8Array(decoder);
+    const entries = decodeAwarenessClientIds(update);
+    if (entries.length > 0) {
+      for (const entry of entries) {
+        if (entry.state === null) {
+          conn.controlledAwarenessIds.delete(entry.clientId);
+        } else {
+          conn.controlledAwarenessIds.add(entry.clientId);
+        }
+      }
+    }
 
     awarenessProtocol.applyAwarenessUpdate(
       this.awareness,

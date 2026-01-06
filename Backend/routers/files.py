@@ -45,6 +45,7 @@ class FileContentUpdate(BaseModel):
 
 router = APIRouter(prefix="/files", tags=["files"])
 
+@router.post("", response_model=schemas.File, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.File, status_code=status.HTTP_201_CREATED)
 async def create_file(
     file_in: schemas.FileCreate,
@@ -115,6 +116,7 @@ async def create_file(
 
     return await crud.crud_file.create(db, obj_in=file_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.File])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.File])
 async def read_files(
     skip: int = Query(0, ge=0),

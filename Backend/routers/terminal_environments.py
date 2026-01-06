@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/terminal-environments", tags=["terminal-environments"])
 
+@router.post("", response_model=schemas.TerminalEnvironment, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.TerminalEnvironment, status_code=status.HTTP_201_CREATED)
 async def create_terminal_environment(
     env_in: schemas.TerminalEnvironmentCreate,
@@ -16,6 +17,7 @@ async def create_terminal_environment(
     # TerminalEnvironment doesn't have environment_name, so no name check needed
     return await crud.crud_terminal_environment.create(db, obj_in=env_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.TerminalEnvironment])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.TerminalEnvironment])
 async def read_terminal_environments(
     skip: int = Query(0, ge=0),
