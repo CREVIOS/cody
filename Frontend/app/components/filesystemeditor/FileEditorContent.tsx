@@ -11,6 +11,7 @@ import { useCommandManager } from '@/hooks/useCommandManager';
 import { API_BASE_URL } from '@/lib/projectAPI/APIConfiguration';
 import { SaveFileCommand } from '@/lib/commands/SaveFileCommand';
 import { getFileVersionContent, saveFileContent } from '@/lib/projectAPI/FileVersionsAPI';
+import { getFileSystemBaseUrl, getWsBaseUrl } from '@/lib/config/endpoints';
 
 interface OpenFileContent {
   item: FileSystemItem;
@@ -61,6 +62,7 @@ export function FileEditorContent({
   const [realtimeKey, setRealtimeKey] = useState<RealtimeKeyMetadata | null>(null);
   const [realtimeKeyLoading, setRealtimeKeyLoading] = useState(false);
   const [realtimeKeyError, setRealtimeKeyError] = useState<string | null>(null);
+  const fileSystemBaseUrl = getFileSystemBaseUrl();
   
   // Phase 7: Track last saved version for debug panel
   const [lastSavedVersionId, setLastSavedVersionId] = useState<string | null>(null);
@@ -290,7 +292,7 @@ export function FileEditorContent({
       const saveService = {
         getCurrentVersionId: async (projId: string, filePath: string) => {
           // Get current version ID from SBackend before saving
-          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          const baseUrl = fileSystemBaseUrl;
           try {
             const response = await fetch(`${baseUrl}/api/projects/${projId}/files/current-version?path=${encodeURIComponent(filePath)}`);
             if (!response.ok) {
@@ -325,7 +327,7 @@ export function FileEditorContent({
         },
         restoreFileVersion: async (projId: string, filePath: string, versionId: string) => {
           // Use SBackend restore endpoint
-          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          const baseUrl = fileSystemBaseUrl;
           const response = await fetch(`${baseUrl}/api/projects/${projId}/files/restore`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -352,7 +354,7 @@ export function FileEditorContent({
           }
           
           // MinIO version ID - use SBackend endpoint directly
-          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          const baseUrl = fileSystemBaseUrl;
           const response = await fetch(
             `${baseUrl}/api/projects/${projId}/files/version/${encodeURIComponent(versionId)}?path=${encodeURIComponent(filePath)}`
           );
@@ -364,7 +366,7 @@ export function FileEditorContent({
           return { success: true, content: data.content };
         },
         readFile: async (projId: string, filePath: string) => {
-          const baseUrl = process.env.NEXT_PUBLIC_FILE_SYSTEM_URL || 'http://localhost:3001';
+          const baseUrl = fileSystemBaseUrl;
           const response = await fetch(`${baseUrl}/api/projects/${projId}/files/read?path=${encodeURIComponent(filePath)}`);
           const data = await response.json();
           if (!data.success) throw new Error(data.error || 'Failed to read file');
@@ -391,7 +393,7 @@ export function FileEditorContent({
       // Get the previous saved content (what was saved before this save)
       // This is what we'll restore to when undoing
       const openFile = openFiles.get(normalizedPath);
-      const previousSavedContent = openFile?.savedContent || null;
+      const previousSavedContent = openFile?.savedContent ?? null;
       
       const saveCommand = new SaveFileCommand(
         user.user_id,
@@ -443,7 +445,7 @@ export function FileEditorContent({
       // Show user-friendly error message
       alert(errorMessage);
     }
-  }, [selectedFile, projectId, currentFileContent, normalizedPath, saveFile, updateCurrentContent, user?.user_id]);
+  }, [selectedFile, projectId, currentFileContent, normalizedPath, saveFile, updateCurrentContent, user?.user_id, fileSystemBaseUrl]);
 
   const handleUndo = useCallback(async () => {
     // CRDT-only mode: Remove permission check - always allow undo
@@ -667,7 +669,7 @@ export function FileEditorContent({
                   id: effectiveUserId,
                   name: effectiveUserName,
                 },
-                wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001',
+                wsUrl: getWsBaseUrl(),
                 offlineSupport: true,
               }
             : undefined

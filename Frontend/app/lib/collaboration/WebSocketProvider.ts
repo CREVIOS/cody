@@ -2,6 +2,7 @@ import { Y } from './yjsSingleton';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import { encoding, decoding } from 'lib0';
+import { getWsBaseUrl } from '../config/endpoints';
 
 /** Local message type for awareness envelope (sync uses 0-2 in y-protocols/sync) */
 const messageAwareness = 3;
@@ -51,7 +52,7 @@ export interface WebSocketProviderOptions {
   };
 
   /**
-   * WebSocket URL (default: ws://localhost:3001)
+   * WebSocket URL (default: same host on port 3001)
    */
   url?: string;
 
@@ -156,7 +157,7 @@ export class WebSocketProvider extends EventTarget {
       color: user.color || this.generateRandomColor(),
     };
 
-    this.url = options.url || 'ws://localhost:3001';
+    this.url = options.url || getWsBaseUrl();
     this.logging = options.logging !== false;
 
     // Setup awareness

@@ -9,6 +9,7 @@ from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/directories", tags=["directories"])
 
+@router.post("", response_model=schemas.Directory, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.Directory, status_code=status.HTTP_201_CREATED)
 async def create_directory(
     directory_in: schemas.DirectoryCreate,
@@ -45,6 +46,7 @@ async def create_directory(
     
     return await crud.crud_directory.create(db, obj_in=directory_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.Directory])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.Directory])
 async def read_directories(
     skip: int = Query(0, ge=0),

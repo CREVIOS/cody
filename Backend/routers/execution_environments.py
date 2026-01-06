@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/execution-environments", tags=["execution-environments"])
 
+@router.post("", response_model=schemas.ExecutionEnvironment, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.ExecutionEnvironment, status_code=status.HTTP_201_CREATED)
 async def create_execution_environment(
     env_in: schemas.ExecutionEnvironmentCreate,
@@ -23,6 +24,7 @@ async def create_execution_environment(
     
     return await crud.crud_execution_environment.create(db, obj_in=env_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.ExecutionEnvironment])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.ExecutionEnvironment])
 async def read_execution_environments(
     skip: int = Query(0, ge=0),

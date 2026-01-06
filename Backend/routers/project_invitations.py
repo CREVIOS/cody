@@ -13,6 +13,7 @@ from services.permission_enforcer import evaluate_user_permission
 
 router = APIRouter(prefix="/project-invitations", tags=["project-invitations"])
 
+@router.post("", response_model=schemas.ProjectInvitation, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.ProjectInvitation, status_code=status.HTTP_201_CREATED)
 async def create_project_invitation(
     invitation_in: schemas.ProjectInvitationCreate,
@@ -104,6 +105,7 @@ async def create_project_invitation(
 
     return invitation
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.ProjectInvitation])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.ProjectInvitation])
 async def read_project_invitations(
     skip: int = Query(0, ge=0),

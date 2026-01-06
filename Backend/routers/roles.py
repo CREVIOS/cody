@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
+@router.post("", response_model=schemas.Role, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.Role, status_code=status.HTTP_201_CREATED)
 async def create_role(
     role_in: schemas.RoleCreate,
@@ -23,6 +24,7 @@ async def create_role(
     
     return await crud.crud_role.create(db, obj_in=role_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.Role])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.Role])
 async def read_roles(
     skip: int = Query(0, ge=0),
@@ -39,15 +41,6 @@ async def read_roles(
         size=len(roles),
         pages=(total + limit - 1) // limit
     )
-
-# Alias without trailing slash to avoid 307 redirects for clients
-@router.get("", response_model=schemas.PaginatedResponse[schemas.Role])
-async def read_roles_no_trailing_slash(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    db: AsyncSession = Depends(get_db)
-):
-    return await read_roles(skip=skip, limit=limit, db=db)
 
 @router.get("/{role_id}", response_model=schemas.Role)
 async def read_role(
@@ -111,4 +104,3 @@ async def get_role_permissions(
             detail="Role not found"
         )
     return role
-

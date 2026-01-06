@@ -8,6 +8,7 @@ from db import get_db, AsyncSessionLocal
 
 router = APIRouter(prefix="/websocket-connections", tags=["websocket-connections"])
 
+@router.post("", response_model=schemas.WebSocketConnection, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.WebSocketConnection, status_code=status.HTTP_201_CREATED)
 async def create_websocket_connection(
     connection_in: schemas.WebSocketConnectionCreate,
@@ -56,6 +57,7 @@ async def room_summary(room_name: str, db: AsyncSession = Depends(get_db)):
 
 
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.WebSocketConnection])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.WebSocketConnection])
 async def read_websocket_connections(
     skip: int = Query(0, ge=0),

@@ -32,6 +32,11 @@ interface MonacoBindingOptions {
    * Awareness instance for cursor/selection sync
    */
   awareness?: any;
+
+  /**
+   * Enable verbose logging
+   */
+  logging?: boolean;
 }
 
 export class MonacoBinding extends EventTarget {
@@ -39,6 +44,7 @@ export class MonacoBinding extends EventTarget {
   private model: any;
   private yText: Y.Text;
   private awareness: any;
+  private logging: boolean;
 
   private _modelContentChangedListener: any | null = null;
   private _textObserver: ((event: Y.YTextEvent, transaction: Y.Transaction) => void) | null = null;
@@ -54,6 +60,7 @@ export class MonacoBinding extends EventTarget {
     this.editor = options.editor;
     this.yText = options.yText;
     this.awareness = options.awareness;
+    this.logging = options.logging === true;
 
     const model = this.editor.getModel();
     if (!model) {
@@ -71,6 +78,12 @@ export class MonacoBinding extends EventTarget {
     // Setup awareness (cursor/selection tracking)
     if (this.awareness) {
       this._setupAwareness();
+    }
+  }
+
+  private log(...args: any[]) {
+    if (this.logging) {
+      console.log(...args);
     }
   }
 
@@ -221,7 +234,7 @@ export class MonacoBinding extends EventTarget {
 
       try {
         // Log local changes for debugging
-        console.log('[MonacoBinding] Sending local changes to Yjs:', event.changes.length, 'changes');
+        this.log('[MonacoBinding] Sending local changes to Yjs:', event.changes.length, 'changes');
         
         // Use 'this' as origin to mark these changes as coming from Monaco
         // The Yjs observer will skip changes where origin === this
@@ -256,7 +269,7 @@ export class MonacoBinding extends EventTarget {
           }
         }, this); // Use 'this' as origin so Yjs observer can skip these changes
         
-        console.log('[MonacoBinding] Local changes applied to Yjs, doc length:', this.yText.length);
+        this.log('[MonacoBinding] Local changes applied to Yjs, doc length:', this.yText.length);
       } catch (error) {
         console.error('[MonacoBinding] Error applying Monaco changes to Yjs:', error);
       }
@@ -309,7 +322,7 @@ export class MonacoBinding extends EventTarget {
         // Apply deltas sequentially to avoid overlapping ranges (Monaco rejects overlapping batches)
         let currentOffset = 0;
 
-        console.log('[MonacoBinding] Applying remote changes sequentially:', event.delta.length, 'deltas');
+        this.log('[MonacoBinding] Applying remote changes sequentially:', event.delta.length, 'deltas');
 
         for (const delta of event.delta) {
           if (delta.retain !== undefined) {

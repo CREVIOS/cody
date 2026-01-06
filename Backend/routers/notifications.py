@@ -11,6 +11,7 @@ from db import get_db
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+@router.post("", response_model=schemas.Notification, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.Notification, status_code=status.HTTP_201_CREATED)
 async def create_notification(
     notification_in: schemas.NotificationCreate,
@@ -26,6 +27,7 @@ async def create_notification(
     
     return await crud.crud_notification.create(db, obj_in=notification_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.Notification])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.Notification])
 async def read_notifications(
     skip: int = Query(0, ge=0),

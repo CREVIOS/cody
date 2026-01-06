@@ -179,6 +179,7 @@ export function MonacoEditorWrapper({
   
   // CRDT-only mode: always enable CRDT if collaboration is enabled (no lock checks)
   const canEditWithLock = true;
+  const collabLogging = process.env.NEXT_PUBLIC_COLLAB_LOGGING === '1';
 
   // Setup collaboration if enabled
   // COMMENTED OUT: Lock check removed - CRDT always enabled when collaboration is enabled
@@ -193,7 +194,7 @@ export function MonacoEditorWrapper({
           user: collaboration.user,
           wsUrl: collaboration.wsUrl,
           offlineSupport: collaboration.offlineSupport,
-          logging: true,
+          logging: collabLogging,
           initialContent: content, // Pass initial content from backend/MinIO
         }
       : {

@@ -8,6 +8,7 @@ from db import get_db
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+@router.post("", response_model=schemas.Project, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=schemas.Project, status_code=status.HTTP_201_CREATED)
 async def create_project(
     project_in: schemas.ProjectCreate,
@@ -23,6 +24,7 @@ async def create_project(
     
     return await crud.crud_project.create(db, obj_in=project_in)
 
+@router.get("", response_model=schemas.PaginatedResponse[schemas.Project])
 @router.get("/", response_model=schemas.PaginatedResponse[schemas.Project])
 async def read_projects(
     skip: int = Query(0, ge=0),
@@ -105,4 +107,3 @@ async def delete_project(
             detail=permission_eval.reason or "User lacks canDeleteProject permission",
         )
     await crud.crud_project.remove(db, id=project_id)
-

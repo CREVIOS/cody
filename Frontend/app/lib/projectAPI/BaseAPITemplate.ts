@@ -70,8 +70,9 @@ export abstract class BaseAPITemplate<TResponse> {
     } catch (error) {
       // Handle network errors thrown by fetchWithRetry with a more helpful message
       if (error instanceof NetworkError) {
+        const baseLabel = API_BASE_URL || '(relative via Next.js rewrites)';
         throw new Error(
-          `Unable to connect to backend server at ${API_BASE_URL}. Please ensure the backend is running (default port 8000).`
+          `Unable to connect to backend server at ${baseLabel}. Please ensure the backend is running (default port 8000).`
         );
       }
 

@@ -19,6 +19,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { useActiveUserId } from "@/hooks/useActiveUserId";
+import { getWsBaseUrl } from "@/lib/config/endpoints";
 
 // Terminal session interface
 interface TerminalSession {
@@ -91,7 +92,7 @@ export default function EnhancedTerminal({
   
   // Configuration
   const wsConfig = useMemo(() => {
-    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+    const baseUrl = getWsBaseUrl();
     const cleanBase = baseUrl.replace(/\/$/, '');
     const url = new URL(`${cleanBase}/`);
     url.searchParams.set('type', 'terminal');
@@ -325,7 +326,7 @@ export default function EnhancedTerminal({
     connectionAttemptsRef.current += 1;
     
     // Build URL with userId
-    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+    const baseUrl = getWsBaseUrl();
     const cleanBase = baseUrl.replace(/\/$/, '');
     
     // Ensure we have a valid base URL
