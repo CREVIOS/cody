@@ -120,6 +120,7 @@ let containerService;
 let outputManager;
 let collaborationService;
 let versionRetentionManager;
+let statsInterval;
 
 async function initializeServices() {
   try {
@@ -745,6 +746,13 @@ app.post('/api/projects/:projectId/retention/apply', validateProjectId, asyncHan
     });
   }
 
+  if (!versionRetentionManager) {
+    return res.status(503).json({
+      success: false,
+      error: 'Version retention manager not initialized'
+    });
+  }
+
   const result = await versionRetentionManager.applyRetentionPolicy(projectId, filePath);
   res.json(result);
 }));
@@ -752,6 +760,13 @@ app.post('/api/projects/:projectId/retention/apply', validateProjectId, asyncHan
 // Apply retention policy to all files in a project
 app.post('/api/projects/:projectId/retention/apply-all', validateProjectId, asyncHandler(async (req, res) => {
   const { projectId } = req.params;
+
+  if (!versionRetentionManager) {
+    return res.status(503).json({
+      success: false,
+      error: 'Version retention manager not initialized'
+    });
+  }
 
   const result = await versionRetentionManager.applyRetentionPolicyToProject(projectId);
   res.json(result);
@@ -2060,14 +2075,25 @@ function validateProjectIdFormat(projectId) {
 }
 
 // Cleanup and monitoring
-setInterval(() => {
+statsInterval = setInterval(() => {
   const stats = connectionManager.getStats();
   console.log(`📊 WebSocket Stats:`, stats);
 }, 5 * 60 * 1000); // Every 5 minutes
 
+// Unref the timer so it doesn't keep the process alive
+if (statsInterval && typeof statsInterval.unref === 'function') {
+  statsInterval.unref();
+}
+
 // Graceful shutdown handling
 const gracefulShutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}, starting graceful shutdown...`);
+  
+  // Clear stats interval
+  if (statsInterval) {
+    clearInterval(statsInterval);
+    statsInterval = null;
+  }
   
   // Close WebSocket server
   wss.close(() => {
@@ -2088,6 +2114,11 @@ const gracefulShutdown = async (signal) => {
   // Shutdown container service
   if (containerService) {
     await containerService.shutdown();
+  }
+  
+  // Shutdown collaboration service
+  if (collaborationService) {
+    await collaborationService.close();
   }
   
   // Close HTTP server
@@ -2117,4 +2148,21 @@ process.on('uncaughtException', (error) => {
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
-module.exports = { app, server, wss, connectionManager };
+const serverExports = { 
+  app, 
+  server, 
+  wss, 
+  connectionManager,
+  fileSystemService,
+  containerService,
+  collaborationService,
+  get versionRetentionManager() {
+    return versionRetentionManager;
+  },
+  set versionRetentionManager(value) {
+    versionRetentionManager = value;
+  },
+  statsInterval
+};
+
+module.exports = serverExports;

@@ -5,7 +5,7 @@
  * correctly enables loose coupling between components through events.
  */
 
-import { EventBus, EventType, type FileEvent, type UserPresenceEvent } from "../EventBus";
+import { EventBus, EventType, type FileEvent, type UserPresenceEvent } from "../app/lib/events/EventBus";
 
 describe("EventBus - Observer Pattern", () => {
   let eventBus: EventBus;
@@ -561,7 +561,7 @@ describe("EventBus - Observer Pattern", () => {
   describe("useEventSubscription", () => {
     it("should be exported as a function", () => {
       // Arrange
-      const { useEventSubscription } = require("../EventBus");
+      const { useEventSubscription } = require("../app/lib/events/EventBus");
 
       // Assert
       expect(typeof useEventSubscription).toBe("function");
@@ -569,7 +569,7 @@ describe("EventBus - Observer Pattern", () => {
 
     it("should have the correct function signature", () => {
       // Arrange
-      const { useEventSubscription } = require("../EventBus");
+      const { useEventSubscription } = require("../app/lib/events/EventBus");
 
       // Assert - Function exists and can be called (even if it fails due to React context)
       expect(useEventSubscription.length).toBeGreaterThanOrEqual(2);
@@ -578,7 +578,7 @@ describe("EventBus - Observer Pattern", () => {
     it("should check for window before using React", () => {
       // Arrange - Test that the function structure is correct
       // The actual hook behavior is tested in useEventBus.test.tsx
-      const { useEventSubscription } = require("../EventBus");
+      const { useEventSubscription } = require("../app/lib/events/EventBus");
       
       // Assert - Function exists
       expect(useEventSubscription).toBeDefined();

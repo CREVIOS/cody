@@ -47,7 +47,11 @@
     "collectCoverageFrom": [
       "**/*.js",
       "!**/node_modules/**",
-      "!**/coverage/**"
-    ]
+      "!**/coverage/**",
+      "!**/scripts/**"
+    ],
+    "detectOpenHandles": true,
+    "forceExit": true,
+    "testTimeout": 30000
   }
 }

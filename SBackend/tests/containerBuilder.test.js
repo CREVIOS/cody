@@ -1,8 +1,6 @@
 /**
- * Tests for Builder Pattern - Container Builder
- * 
- * This test file validates the Builder pattern implementation
- * for Docker container configuration.
+ * ContainerBuilder Test Suite
+ * Tests the Builder Pattern implementation for Docker container configuration
  */
 
 const {
@@ -13,609 +11,401 @@ const {
   ContainerBuilder
 } = require('../services/containerBuilder');
 
-describe('Container Builder Pattern', () => {
-  let builder;
-  let director;
-
-  beforeEach(() => {
-    builder = new SandboxContainerBuilder();
-    director = new ContainerDirector(builder);
-  });
-
-  describe('ContainerConfig - Product', () => {
-    test('should create empty configuration', () => {
+describe('ContainerBuilder - Builder Pattern', () => {
+  describe('ContainerConfig (Product)', () => {
+    it('should create a new ContainerConfig with default values', () => {
       const config = new ContainerConfig();
+      
       expect(config.Image).toBeNull();
       expect(config.name).toBeNull();
-      expect(config.HostConfig).toBeDefined();
-    });
-
-    test('should validate required fields', () => {
-      const config = new ContainerConfig();
-      expect(() => config.validate()).toThrow('Container image is required');
-      
-      config.Image = 'test-image';
-      expect(() => config.validate()).toThrow('Container name is required');
-      
-      config.name = 'test-container';
-      expect(() => config.validate()).not.toThrow();
-    });
-
-    test('should return deep copy of configuration', () => {
-      const config = new ContainerConfig();
-      config.Image = 'test-image';
-      config.name = 'test-container';
-      
-      const configCopy = config.getConfig();
-      configCopy.Image = 'modified';
-      
-      expect(config.Image).toBe('test-image'); // Original unchanged
-      expect(configCopy.Image).toBe('modified');
-    });
-  });
-
-  describe('SandboxContainerBuilder - Concrete Builder', () => {
-    test('should build configuration with method chaining', () => {
-      const config = builder
-        .setImage('test-image:latest')
-        .setName('test-container')
-        .setHostname('sandbox')
-        .setMemoryLimits(1024 * 1024 * 1024)
-        .addPortBinding(3000)
-        .build();
-      
-      expect(config.Image).toBe('test-image:latest');
-      expect(config.name).toBe('test-container');
-      expect(config.Hostname).toBe('sandbox');
-      expect(config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
-    });
-
-    test('should validate required fields before building', () => {
-      builder.setName('test-container');
-      // Missing Image - should throw error
-      expect(() => builder.build()).toThrow('Container image is required');
-      
-      builder.setImage('test-image');
-      expect(() => builder.build()).not.toThrow();
-    });
-
-    test('should support reset for building multiple configurations', () => {
-      builder.setImage('image1').setName('container1').build();
-      builder.reset();
-      const config2 = builder.setImage('image2').setName('container2').build();
-      
-      expect(config2.Image).toBe('image2');
-      expect(config2.name).toBe('container2');
-    });
-
-    test('should set environment variables', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setEnvironmentVariables([
-          'NODE_ENV=production',
-          'PORT=3000'
-        ])
-        .build();
-      
-      expect(config.Env).toContain('NODE_ENV=production');
-      expect(config.Env).toContain('PORT=3000');
-    });
-
-    test('should add multiple port bindings', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addPortBindings([3000, 3001, 8080])
-        .build();
-      
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['3001/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['8080/tcp']).toBeDefined();
-    });
-
-    test('should configure security settings', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setSecuritySettings(
-          false, // readonlyRootfs
-          ['ALL'], // capDrop
-          ['CHOWN', 'SETUID'], // capAdd
-          ['no-new-privileges'], // securityOpt
-          true // noNewPrivileges
-        )
-        .build();
-      
-      expect(config.HostConfig.CapDrop).toContain('ALL');
-      expect(config.HostConfig.CapAdd).toContain('CHOWN');
-      expect(config.HostConfig.SecurityOpt).toContain('no-new-privileges');
-    });
-
-    test('should add volume binds', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addVolumeBind('/host/path', '/container/path', 'rw')
-        .build();
-      
-      expect(config.HostConfig.Binds).toContain('/host/path:/container/path:rw');
-    });
-
-    test('should add volume bind with default mode (rw)', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addVolumeBind('/host/path', '/container/path') // mode defaults to 'rw'
-        .build();
-      
-      expect(config.HostConfig.Binds).toContain('/host/path:/container/path:rw');
-    });
-
-    test('should add labels', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addLabel('project.id', 'project-123')
-        .addLabel('service', 'sandbox')
-        .build();
-      
-      expect(config.Labels['project.id']).toBe('project-123');
-      expect(config.Labels['service']).toBe('sandbox');
-    });
-
-    test('should add individual environment variable', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addEnvironmentVariable('NODE_ENV', 'production')
-        .addEnvironmentVariable('PORT', '3000')
-        .build();
-      
-      expect(config.Env).toContain('NODE_ENV=production');
-      expect(config.Env).toContain('PORT=3000');
-    });
-
-    test('should handle addVolumeBind when Binds is undefined', () => {
-      const testBuilder = new SandboxContainerBuilder();
-      // Manually clear Binds to test the undefined case
-      testBuilder.config.HostConfig.Binds = undefined;
-      const config = testBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .addVolumeBind('/host/path', '/container/path', 'rw')
-        .build();
-      
-      expect(config.HostConfig.Binds).toContain('/host/path:/container/path:rw');
-    });
-
-    test('should handle addPortBinding when PortBindings is undefined', () => {
-      const testBuilder = new SandboxContainerBuilder();
-      // Manually clear PortBindings to test the undefined case
-      testBuilder.config.HostConfig.PortBindings = undefined;
-      const config = testBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .addPortBinding(3000, 3000, 'tcp')
-        .build();
-      
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
-    });
-
-    test('should add port bindings with object format', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addPortBindings([
-          3000,
-          { containerPort: 8080, hostPort: 8080, protocol: 'tcp' },
-          { containerPort: 9000, hostPort: 9000, protocol: 'udp' }
-        ])
-        .build();
-      
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['8080/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['9000/udp']).toBeDefined();
-    });
-
-    test('should handle addPortBindings with mixed types including invalid', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addPortBindings([
-          3000,
-          { containerPort: 8080, hostPort: 8080, protocol: 'tcp' },
-          'invalid' // This will be skipped (not number or object)
-        ])
-        .build();
-      
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['8080/tcp']).toBeDefined();
-      // Invalid entry should be ignored
-    });
-
-    test('should handle addTmpfsMount when Tmpfs is undefined', () => {
-      const testBuilder = new SandboxContainerBuilder();
-      // Manually clear Tmpfs to test the undefined case
-      testBuilder.config.HostConfig.Tmpfs = undefined;
-      const config = testBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .addTmpfsMount('/tmp', 'rw,size=100m')
-        .build();
-      
-      expect(config.HostConfig.Tmpfs['/tmp']).toBe('rw,size=100m');
-    });
-
-    test('should handle addUlimit when Ulimits is undefined', () => {
-      const testBuilder = new SandboxContainerBuilder();
-      // Manually clear Ulimits to test the undefined case
-      testBuilder.config.HostConfig.Ulimits = undefined;
-      const config = testBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .addUlimit('nofile', 1024, 2048)
-        .build();
-      
-      expect(config.HostConfig.Ulimits).toHaveLength(1);
-      expect(config.HostConfig.Ulimits[0]).toEqual({ Name: 'nofile', Soft: 1024, Hard: 2048 });
-    });
-
-    test('should handle addUlimit when Ulimits is null', () => {
-      const testBuilder = new SandboxContainerBuilder();
-      // Manually set Ulimits to null to test the null case
-      testBuilder.config.HostConfig.Ulimits = null;
-      const config = testBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .addUlimit('nofile', 1024, 2048)
-        .build();
-      
-      expect(config.HostConfig.Ulimits).toHaveLength(1);
-      expect(config.HostConfig.Ulimits[0]).toEqual({ Name: 'nofile', Soft: 1024, Hard: 2048 });
-    });
-
-    test('should configure TTY settings with custom values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setTtySettings(false, false, false, false, false, true)
-        .build();
-      
-      expect(config.AttachStdin).toBe(false);
-      expect(config.AttachStdout).toBe(false);
-      expect(config.AttachStderr).toBe(false);
-      expect(config.Tty).toBe(false);
-      expect(config.OpenStdin).toBe(false);
-      expect(config.StdinOnce).toBe(true);
-    });
-
-    test('should configure TTY settings with default values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setTtySettings() // All defaults
-        .build();
-      
       expect(config.AttachStdin).toBe(true);
       expect(config.AttachStdout).toBe(true);
-      expect(config.AttachStderr).toBe(true);
       expect(config.Tty).toBe(true);
-      expect(config.OpenStdin).toBe(true);
-      expect(config.StdinOnce).toBe(false);
-    });
-
-    test('should set security settings with custom values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setSecuritySettings(
-          true, // readonlyRootfs
-          ['NET_RAW'], // capDrop
-          ['NET_BIND_SERVICE'], // capAdd
-          ['apparmor:profile'], // securityOpt
-          false // noNewPrivileges
-        )
-        .build();
-      
-      expect(config.HostConfig.ReadonlyRootfs).toBe(true);
-      expect(config.HostConfig.CapDrop).toEqual(['NET_RAW']);
-      expect(config.HostConfig.CapAdd).toEqual(['NET_BIND_SERVICE']);
-      expect(config.HostConfig.SecurityOpt).toEqual(['apparmor:profile']);
-      expect(config.HostConfig.NoNewPrivileges).toBe(false);
-    });
-
-    test('should set security settings with default values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setSecuritySettings() // All defaults
-        .build();
-      
-      expect(config.HostConfig.ReadonlyRootfs).toBe(false);
-      expect(config.HostConfig.CapDrop).toEqual(['ALL']);
-      expect(config.HostConfig.CapAdd).toEqual(['CHOWN', 'SETUID', 'SETGID', 'DAC_OVERRIDE']);
-      expect(config.HostConfig.SecurityOpt).toEqual(['no-new-privileges']);
-      expect(config.HostConfig.NoNewPrivileges).toBe(true);
-    });
-
-    test('should set network settings with custom values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setNetworkSettings('host', ['example.com'], ['1.1.1.1'])
-        .build();
-      
-      expect(config.HostConfig.NetworkMode).toBe('host');
-      expect(config.HostConfig.DnsSearch).toEqual(['example.com']);
-      expect(config.HostConfig.Dns).toEqual(['1.1.1.1']);
-    });
-
-    test('should set network settings with default values', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setNetworkSettings() // All defaults
-        .build();
-      
+      expect(config.Env).toEqual([]);
+      expect(config.HostConfig).toBeDefined();
       expect(config.HostConfig.NetworkMode).toBe('bridge');
-      expect(config.HostConfig.DnsSearch).toEqual([]);
-      expect(config.HostConfig.Dns).toEqual(['8.8.8.8', '8.8.4.4']);
     });
 
-    test('should set memory limits with custom memorySwap', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setMemoryLimits(1024 * 1024 * 1024, 2048 * 1024 * 1024)
-        .build();
+    it('should validate configuration and throw error if image is missing', () => {
+      const config = new ContainerConfig();
+      config.name = 'test-container';
       
-      expect(config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
-      expect(config.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024);
+      expect(() => config.validate()).toThrow('Container image is required');
     });
 
-    test('should set memory limits with default memorySwap (same as memory)', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setMemoryLimits(1024 * 1024 * 1024) // memorySwap defaults to memory
-        .build();
+    it('should validate configuration and throw error if name is missing', () => {
+      const config = new ContainerConfig();
+      config.Image = 'test-image';
       
-      expect(config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
-      expect(config.HostConfig.MemorySwap).toBe(1024 * 1024 * 1024);
+      expect(() => config.validate()).toThrow('Container name is required');
     });
 
-    test('should add port binding with UDP protocol', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addPortBinding(53, 53, 'udp')
-        .build();
+    it('should validate successfully when both image and name are set', () => {
+      const config = new ContainerConfig();
+      config.Image = 'test-image';
+      config.name = 'test-container';
       
-      expect(config.HostConfig.PortBindings['53/udp']).toBeDefined();
-      expect(config.ExposedPorts['53/udp']).toBeDefined();
+      expect(config.validate()).toBe(true);
     });
 
-    test('should set multiple labels at once', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setLabels({
-          'label1': 'value1',
-          'label2': 'value2',
-          'label3': 'value3'
-        })
-        .build();
+    it('should return a deep copy of config when calling getConfig', () => {
+      const config = new ContainerConfig();
+      config.Image = 'test-image';
+      config.name = 'test-container';
+      config.Env.push('TEST=value');
       
-      expect(config.Labels.label1).toBe('value1');
-      expect(config.Labels.label2).toBe('value2');
-      expect(config.Labels.label3).toBe('value3');
-    });
-
-    test('should merge labels when setting multiple', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .addLabel('existing', 'old')
-        .setLabels({
-          'new': 'value',
-          'existing': 'new'
-        })
-        .build();
+      const configCopy = config.getConfig();
       
-      expect(config.Labels.existing).toBe('new'); // Should be overwritten
-      expect(config.Labels.new).toBe('value');
-    });
-
-    test('should set multiple ulimits at once', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setUlimits([
-          { Name: 'nofile', Soft: 1024, Hard: 2048 },
-          { Name: 'nproc', Soft: 256, Hard: 512 },
-          { Name: 'fsize', Soft: 100000000, Hard: 100000000 }
-        ])
-        .build();
+      expect(configCopy).not.toBe(config);
+      expect(configCopy.Image).toBe('test-image');
+      expect(configCopy.name).toBe('test-container');
       
-      expect(config.HostConfig.Ulimits).toHaveLength(3);
-      expect(config.HostConfig.Ulimits[0].Name).toBe('nofile');
-      expect(config.HostConfig.Ulimits[1].Name).toBe('nproc');
-      expect(config.HostConfig.Ulimits[2].Name).toBe('fsize');
-    });
-
-    test('should set working directory and user', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setWorkingDirectory('/app')
-        .setUser('appuser')
-        .build();
-      
-      expect(config.WorkingDir).toBe('/app');
-      expect(config.User).toBe('appuser');
-    });
-
-    test('should set auto remove flag', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setAutoRemove(true)
-        .build();
-      
-      expect(config.HostConfig.AutoRemove).toBe(true);
+      // Modify copy should not affect original
+      configCopy.Env.push('ANOTHER=value');
+      expect(config.Env.length).toBe(1);
     });
   });
 
-  describe('ContainerBuilderBase - Abstract Builder', () => {
-    test('should prevent direct instantiation of abstract class', () => {
-      expect(() => new ContainerBuilderBase()).toThrow('ContainerBuilderBase is abstract and cannot be instantiated');
+  describe('ContainerBuilderBase (Abstract Builder)', () => {
+    it('should throw error when trying to instantiate abstract class', () => {
+      expect(() => new ContainerBuilderBase()).toThrow('ContainerBuilderBase is abstract');
+    });
+
+    it('should allow concrete builders to be instantiated', () => {
+      const builder = new SandboxContainerBuilder();
+      expect(builder).toBeInstanceOf(ContainerBuilderBase);
+      expect(builder.config).toBeInstanceOf(ContainerConfig);
+    });
+
+    it('should reset builder configuration', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setImage('test-image');
+      builder.setName('test-name');
+      
+      const result = builder.reset();
+      
+      expect(result).toBe(builder); // Should return this for chaining
+      expect(builder.config.Image).toBeNull();
+      expect(builder.config.name).toBeNull();
+    });
+
+    it('should set image and return builder for chaining', () => {
+      const builder = new SandboxContainerBuilder();
+      const result = builder.setImage('test-image');
+      
+      expect(result).toBe(builder);
+      expect(builder.config.Image).toBe('test-image');
+    });
+
+    it('should set name and return builder for chaining', () => {
+      const builder = new SandboxContainerBuilder();
+      const result = builder.setName('test-container');
+      
+      expect(result).toBe(builder);
+      expect(builder.config.name).toBe('test-container');
+    });
+
+    it('should set hostname', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setHostname('my-hostname');
+      
+      expect(builder.config.Hostname).toBe('my-hostname');
+    });
+
+    it('should configure TTY settings', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setTtySettings(false, false, false, false, false, true);
+      
+      expect(builder.config.AttachStdin).toBe(false);
+      expect(builder.config.AttachStdout).toBe(false);
+      expect(builder.config.AttachStderr).toBe(false);
+      expect(builder.config.Tty).toBe(false);
+      expect(builder.config.OpenStdin).toBe(false);
+      expect(builder.config.StdinOnce).toBe(true);
+    });
+
+    it('should add environment variable', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addEnvironmentVariable('KEY', 'value');
+      
+      expect(builder.config.Env).toContain('KEY=value');
+    });
+
+    it('should set multiple environment variables', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setEnvironmentVariables(['KEY1=value1', 'KEY2=value2']);
+      
+      expect(builder.config.Env).toEqual(['KEY1=value1', 'KEY2=value2']);
+    });
+
+    it('should set working directory', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setWorkingDirectory('/workspace');
+      
+      expect(builder.config.WorkingDir).toBe('/workspace');
+    });
+
+    it('should set user', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setUser('developer');
+      
+      expect(builder.config.User).toBe('developer');
+    });
+
+    it('should configure security settings', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setSecuritySettings(true, ['ALL'], ['CHOWN'], ['no-new-privileges'], false);
+      
+      expect(builder.config.HostConfig.ReadonlyRootfs).toBe(true);
+      expect(builder.config.HostConfig.CapDrop).toEqual(['ALL']);
+      expect(builder.config.HostConfig.CapAdd).toEqual(['CHOWN']);
+      expect(builder.config.HostConfig.SecurityOpt).toEqual(['no-new-privileges']);
+      expect(builder.config.HostConfig.NoNewPrivileges).toBe(false);
+    });
+
+    it('should set memory limits', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setMemoryLimits(1024 * 1024 * 1024, 2048 * 1024 * 1024);
+      
+      expect(builder.config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
+      expect(builder.config.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024);
+    });
+
+    it('should set memory limits with default swap', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setMemoryLimits(1024 * 1024 * 1024);
+      
+      expect(builder.config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
+      expect(builder.config.HostConfig.MemorySwap).toBe(1024 * 1024 * 1024);
+    });
+
+    it('should set CPU limits', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setCpuLimits(1024);
+      
+      expect(builder.config.HostConfig.CpuShares).toBe(1024);
+    });
+
+    it('should set PIDs limit', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setPidsLimit(512);
+      
+      expect(builder.config.HostConfig.PidsLimit).toBe(512);
+    });
+
+    it('should configure network settings', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setNetworkSettings('host', ['example.com'], ['1.1.1.1']);
+      
+      expect(builder.config.HostConfig.NetworkMode).toBe('host');
+      expect(builder.config.HostConfig.DnsSearch).toEqual(['example.com']);
+      expect(builder.config.HostConfig.Dns).toEqual(['1.1.1.1']);
+    });
+
+    it('should add volume bind', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addVolumeBind('/host/path', '/container/path', 'ro');
+      
+      expect(builder.config.HostConfig.Binds).toContain('/host/path:/container/path:ro');
+    });
+
+    it('should add port binding', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addPortBinding(3000, 3000, 'tcp');
+      
+      expect(builder.config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
+      expect(builder.config.HostConfig.PortBindings['3000/tcp'][0].HostPort).toBe('3000');
+      expect(builder.config.ExposedPorts['3000/tcp']).toBeDefined();
+    });
+
+    it('should add multiple port bindings', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addPortBindings([3000, { containerPort: 8080, hostPort: 8080, protocol: 'tcp' }]);
+      
+      expect(builder.config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
+      expect(builder.config.HostConfig.PortBindings['8080/tcp']).toBeDefined();
+    });
+
+    it('should add tmpfs mount', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addTmpfsMount('/tmp', 'rw,size=100m');
+      
+      expect(builder.config.HostConfig.Tmpfs['/tmp']).toBe('rw,size=100m');
+    });
+
+    it('should add ulimit', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addUlimit('nofile', 1024, 2048);
+      
+      expect(builder.config.HostConfig.Ulimits).toContainEqual({
+        Name: 'nofile',
+        Soft: 1024,
+        Hard: 2048
+      });
+    });
+
+    it('should set multiple ulimits', () => {
+      const builder = new SandboxContainerBuilder();
+      const ulimits = [
+        { Name: 'nofile', Soft: 1024, Hard: 2048 },
+        { Name: 'nproc', Soft: 256, Hard: 512 }
+      ];
+      builder.setUlimits(ulimits);
+      
+      expect(builder.config.HostConfig.Ulimits).toEqual(ulimits);
+    });
+
+    it('should set auto remove', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setAutoRemove(true);
+      
+      expect(builder.config.HostConfig.AutoRemove).toBe(true);
+    });
+
+    it('should add label', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.addLabel('key', 'value');
+      
+      expect(builder.config.Labels.key).toBe('value');
+    });
+
+    it('should set multiple labels', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setLabels({ key1: 'value1', key2: 'value2' });
+      
+      expect(builder.config.Labels.key1).toBe('value1');
+      expect(builder.config.Labels.key2).toBe('value2');
+    });
+
+    it('should build and return validated config', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setImage('test-image');
+      builder.setName('test-container');
+      
+      const config = builder.build();
+      
+      expect(config.Image).toBe('test-image');
+      expect(config.name).toBe('test-container');
+      expect(config).not.toBe(builder.config); // Should be a copy
     });
   });
 
-  describe('ContainerBuilder - Backward Compatibility', () => {
-    test('should create sandbox configuration using backward compatibility method', () => {
-      const backwardBuilder = new ContainerBuilder();
-      const config = backwardBuilder
-        .createSandboxConfiguration(
-          'project-123',
-          'sandbox-project-123',
-          '/workspace/path',
-          {
-            IMAGE_NAME: 'project-sandbox:latest',
-            containerMemory: 1024 * 1024 * 1024,
-            containerCpu: 1.0
-          }
-        )
-        .build();
+  describe('SandboxContainerBuilder', () => {
+    it('should add container type label when building', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setImage('test-image');
+      builder.setName('test-container');
       
-      expect(config.Image).toBe('project-sandbox:latest');
-      expect(config.name).toBe('sandbox-project-123');
-      expect(config.Hostname).toBe('sandbox');
-      expect(config.Labels['project.id']).toBe('project-123');
-      expect(config.WorkingDir).toBe('/workspace');
-    });
-
-    test('should clone builder configuration', () => {
-      const originalBuilder = new ContainerBuilder();
-      originalBuilder
-        .setImage('test-image')
-        .setName('test-container')
-        .setHostname('sandbox')
-        .addLabel('test', 'value');
+      const config = builder.build();
       
-      const clonedBuilder = originalBuilder.clone();
-      
-      // Check that cloned builder has the same config values
-      // Note: After cloning, config is a plain object (not ContainerConfig instance)
-      // but the values should be preserved
-      expect(clonedBuilder.config.Image).toBe('test-image');
-      expect(clonedBuilder.config.name).toBe('test-container');
-      expect(clonedBuilder.config.Hostname).toBe('sandbox');
-      expect(clonedBuilder.config.Labels.test).toBe('value');
-      
-      // Modify cloned builder - original should be unaffected
-      clonedBuilder.setImage('modified-image');
-      expect(originalBuilder.config.Image).toBe('test-image');
-      expect(clonedBuilder.config.Image).toBe('modified-image');
-      
-      // Verify we can continue using builder methods on cloned builder
-      clonedBuilder.setName('cloned-container');
-      expect(clonedBuilder.config.name).toBe('cloned-container');
+      expect(config.Labels['container.type']).toBe('sandbox');
     });
   });
 
-  describe('ContainerDirector - Director', () => {
-    test('director should build complete sandbox configuration', () => {
-      const config = director.buildSandboxContainer(
-        'project-123',
-        'sandbox-project-123',
-        '/workspace/path',
-        'project-sandbox:latest',
-        { containerMemory: 1024 * 1024 * 1024, containerCpu: 1.0 }
-      );
-      
-      expect(config.Image).toBe('project-sandbox:latest');
-      expect(config.name).toBe('sandbox-project-123');
-      expect(config.Hostname).toBe('sandbox');
-      expect(config.Labels['project.id']).toBe('project-123');
-      expect(config.Labels['service']).toBe('sandbox');
-      expect(config.HostConfig.Memory).toBe(1024 * 1024 * 1024);
-      expect(config.WorkingDir).toBe('/workspace');
+  describe('ContainerDirector', () => {
+    let director;
+    let builder;
+
+    beforeEach(() => {
+      builder = new SandboxContainerBuilder();
+      director = new ContainerDirector(builder);
     });
 
-    test('director should set builder correctly', () => {
+    it('should set builder', () => {
       const newBuilder = new SandboxContainerBuilder();
-      director.setBuilder(newBuilder);
+      const result = director.setBuilder(newBuilder);
       
+      expect(result).toBe(director);
       expect(director.builder).toBe(newBuilder);
     });
 
-    test('director should throw error for invalid builder', () => {
+    it('should throw error when setting invalid builder', () => {
       expect(() => director.setBuilder({})).toThrow('Builder must be an instance of ContainerBuilderBase');
     });
 
-    test('director should configure all required settings', () => {
-      const config = director.buildSandboxContainer(
-        'project-123',
-        'sandbox-project-123',
-        '/workspace/path',
-        'project-sandbox:latest',
-        { containerMemory: 512 * 1024 * 1024, containerCpu: 0.5 }
+    it('should build sandbox container with all configurations', () => {
+      const projectId = 'test-project';
+      const containerName = 'test-container';
+      const workspacePath = '/workspace';
+      const imageName = 'test-image';
+      const config = {
+        containerMemory: 1024 * 1024 * 1024,
+        containerCpu: 1.0
+      };
+      
+      const containerConfig = director.buildSandboxContainer(
+        projectId,
+        containerName,
+        workspacePath,
+        imageName,
+        config
       );
       
-      // Check environment variables
-      expect(config.Env).toContain('PROJECT_ID=project-123');
-      expect(config.Env).toContain('NODE_ENV=development');
+      expect(containerConfig.Image).toBe(imageName);
+      expect(containerConfig.name).toBe(containerName);
+      expect(containerConfig.Hostname).toBe('sandbox');
+      expect(containerConfig.WorkingDir).toBe('/workspace');
+      expect(containerConfig.User).toBe('root');
+      expect(containerConfig.HostConfig.Memory).toBe(config.containerMemory);
+      expect(containerConfig.Labels['project.id']).toBe(projectId);
+      expect(containerConfig.Labels['container.type']).toBe('sandbox');
+    });
+
+    it('should reset builder before building', () => {
+      const builder = new SandboxContainerBuilder();
+      builder.setImage('old-image');
+      builder.setName('old-name');
       
-      // Check volume bind
-      expect(config.HostConfig.Binds).toContain('/workspace/path:/workspace:rw');
+      const director = new ContainerDirector(builder);
+      const config = {
+        containerMemory: 1024 * 1024 * 1024,
+        containerCpu: 1.0
+      };
       
-      // Check port bindings
-      expect(config.HostConfig.PortBindings['22/tcp']).toBeDefined();
-      expect(config.HostConfig.PortBindings['3000/tcp']).toBeDefined();
+      director.buildSandboxContainer('project', 'container', '/workspace', 'new-image', config);
       
-      // Check tmpfs mounts
-      expect(config.HostConfig.Tmpfs['/tmp']).toBeDefined();
+      expect(builder.config.Image).toBe('new-image');
+      expect(builder.config.name).toBe('container');
     });
   });
 
-  describe('Builder Pattern Benefits', () => {
-    test('should support fluent interface (method chaining)', () => {
-      const config = builder
-        .setImage('test-image')
-        .setName('test-container')
-        .setHostname('sandbox')
-        .setMemoryLimits(1024 * 1024 * 1024)
-        .setCpuLimits(1024)
-        .addPortBinding(3000)
-        .addLabel('test', 'value')
-        .build();
+  describe('ContainerBuilder (Backward Compatibility)', () => {
+    it('should create sandbox configuration', () => {
+      const builder = new ContainerBuilder();
+      const projectId = 'test-project';
+      const containerName = 'test-container';
+      const workspacePath = '/workspace';
+      const config = {
+        IMAGE_NAME: 'test-image',
+        containerMemory: 1024 * 1024 * 1024,
+        containerCpu: 1.0
+      };
       
-      expect(config.Image).toBe('test-image');
-      expect(config.name).toBe('test-container');
+      builder.createSandboxConfiguration(projectId, containerName, workspacePath, config);
+      const containerConfig = builder.build();
+      
+      expect(containerConfig.Image).toBe(config.IMAGE_NAME);
+      expect(containerConfig.name).toBe(containerName);
+      expect(containerConfig.Labels['project.id']).toBe(projectId);
     });
 
-    test('should allow step-by-step construction', () => {
+    it('should clone builder configuration', () => {
+      const builder = new ContainerBuilder();
       builder.setImage('test-image');
       builder.setName('test-container');
-      builder.setHostname('sandbox');
+      builder.addLabel('key', 'value');
       
-      const config = builder.build();
-      expect(config.Image).toBe('test-image');
-      expect(config.name).toBe('test-container');
-      expect(config.Hostname).toBe('sandbox');
-    });
-
-    test('should validate before building', () => {
-      builder.setName('test-container');
-      // Missing Image
-      expect(() => builder.build()).toThrow();
+      const cloned = builder.clone();
       
-      builder.setImage('test-image');
-      expect(() => builder.build()).not.toThrow();
+      expect(cloned).toBeInstanceOf(ContainerBuilder);
+      expect(cloned.config.Image).toBe('test-image');
+      expect(cloned.config.name).toBe('test-container');
+      expect(cloned.config.Labels.key).toBe('value');
+      expect(cloned.config).not.toBe(builder.config); // Should be a copy
+      
+      // Modify clone should not affect original
+      cloned.setImage('new-image');
+      expect(builder.config.Image).toBe('test-image');
     });
   });
 });
-

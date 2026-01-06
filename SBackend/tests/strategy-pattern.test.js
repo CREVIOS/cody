@@ -401,6 +401,75 @@ describe('Version Retention Strategies (strategy pattern)', () => {
     const result = await runAllTests();
     expect(result.testsFailed).toBe(0);
   });
+
+  describe('Additional Coverage Tests', () => {
+    const { VersionRetentionManager, KeepRecentVersionsStrategy, TimeBasedRetentionStrategy } = require('../services/versionRetentionStrategies');
+
+    it('should handle applyRetentionPolicy when listFileVersions fails', async () => {
+      const mockService = {
+        listFileVersions: jest.fn().mockResolvedValue({ success: false }),
+        deleteFileVersion: jest.fn()
+      };
+      const strategy = new KeepRecentVersionsStrategy(5);
+      const manager = new VersionRetentionManager(mockService, strategy);
+
+      await expect(manager.applyRetentionPolicy('project', 'file.txt')).rejects.toThrow('Failed to list versions');
+    });
+
+    it('should handle applyRetentionPolicy when deleteFileVersion fails', async () => {
+      const mockService = {
+        listFileVersions: jest.fn().mockResolvedValue({
+          success: true,
+          versions: [
+            { versionId: 'v1', isLatest: true, lastModified: new Date() },
+            { versionId: 'v2', isLatest: false, lastModified: new Date(Date.now() - 100000) }
+          ]
+        }),
+        deleteFileVersion: jest.fn().mockRejectedValue(new Error('Delete failed'))
+      };
+      const strategy = new KeepRecentVersionsStrategy(1);
+      const manager = new VersionRetentionManager(mockService, strategy);
+
+      const result = await manager.applyRetentionPolicy('project', 'file.txt');
+
+      expect(result.success).toBe(true);
+      expect(result.deletedVersions).toBe(0); // Failed to delete
+    });
+
+    it('should handle applyRetentionPolicyToProject', async () => {
+      const mockService = {
+        listFileVersions: jest.fn(),
+        deleteFileVersion: jest.fn()
+      };
+      const strategy = new KeepRecentVersionsStrategy(10);
+      const manager = new VersionRetentionManager(mockService, strategy);
+
+      const result = await manager.applyRetentionPolicyToProject('project');
+
+      expect(result.success).toBe(true);
+      expect(result.strategy).toBeDefined();
+    });
+
+    it('should handle TimeBasedRetentionStrategy with custom options', () => {
+      const strategy = new TimeBasedRetentionStrategy({
+        keepAllHours: 12,
+        keepDailyDays: 5,
+        keepWeeklyDays: 20
+      });
+
+      expect(strategy.getName()).toContain('12h');
+      expect(strategy.getName()).toContain('5d');
+      expect(strategy.getName()).toContain('20d');
+    });
+
+    it('should handle TimeBasedRetentionStrategy getWeekKey and getWeekNumber', () => {
+      const strategy = new TimeBasedRetentionStrategy();
+      const date = new Date('2024-01-15');
+      const weekKey = strategy.getWeekKey(date);
+      
+      expect(weekKey).toMatch(/^\d{4}-W\d+$/);
+    });
+  });
 });
 
 // Allow running directly via Node for ad-hoc debugging.

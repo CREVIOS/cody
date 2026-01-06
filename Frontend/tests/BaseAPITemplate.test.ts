@@ -11,8 +11,8 @@
  * - Network errors are properly handled
  */
 
-import { BaseAPITemplate, BaseAPITemplateWithUser, BaseAPITemplateSilentFail } from '../BaseAPITemplate';
-import { NetworkError } from '../APIConfiguration';
+import { BaseAPITemplate, BaseAPITemplateWithUser, BaseAPITemplateSilentFail } from '../app/lib/projectAPI/BaseAPITemplate';
+import { NetworkError } from '../app/lib/projectAPI/APIConfiguration';
 
 // Mock fetch globally
 global.fetch = jest.fn();

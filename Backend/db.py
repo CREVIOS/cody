@@ -50,6 +50,9 @@ def ensure_async_driver(url: str | None) -> str | None:
     """Convert postgresql:// to postgresql+asyncpg:// and strip unsupported params."""
     if not url:
         return url
+    # Skip processing for SQLite URLs - they're already in the correct format
+    if "sqlite" in url.lower():
+        return url
     if url.startswith("postgresql+asyncpg://"):
         upgraded = url
     elif url.startswith("postgresql://"):
@@ -98,13 +101,18 @@ engine_kwargs = {
     "echo": os.getenv("DB_ECHO", "false").lower() == "true",
 }
 
+# SQLite doesn't support pool configuration parameters
+# Only apply pool settings for PostgreSQL databases
+is_sqlite = "sqlite" in (DATABASE_URL_ASYNC or "").lower()
+
 if POOLING_MODE == "null":
     # NullPool: No pooling - creates new connection per request (SLOW!)
     # Only use this for debugging or if you have external connection pooling
     engine_kwargs["poolclass"] = NullPool
-else:
-    # Local connection pool - RECOMMENDED for production
+elif not is_sqlite:
+    # Local connection pool - RECOMMENDED for production (PostgreSQL only)
     # Maintains warm connections, reducing TCP/SSL handshake overhead
+    # SQLite doesn't support these parameters
     engine_kwargs.update({
         "pool_size": POOL_SIZE,
         "max_overflow": MAX_OVERFLOW,

@@ -138,7 +138,8 @@ run_python_tests() {
     
     # Set test environment variables
     export TESTING=true
-    export DATABASE_URL="sqlite:///./test.db"
+    # Note: DATABASE_URL is automatically set to sqlite+aiosqlite:///:memory: by conftest.py
+    # No need to set it manually here
     
     print_status "Running pytest with coverage..."
     pytest --cov=. --cov-report=term-missing --cov-report=html:htmlcov -v

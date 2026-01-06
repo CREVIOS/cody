@@ -471,14 +471,8 @@ async def update_file(
             detail=permission_eval.reason or "User lacks canEdit permission",
         )
 
-    # If project_id is being updated, verify the new project exists
-    if file_update.project_id:
-        project = await crud.crud_project.get(db, id=file_update.project_id)
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found"
-            )
+    # Note: project_id is not in FileUpdate schema, so files cannot be moved between projects
+    # If project_id update is needed in the future, add it to FileUpdate schema first
 
     # If directory_id is being updated, verify the new directory exists
     if file_update.directory_id:

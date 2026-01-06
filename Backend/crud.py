@@ -426,7 +426,7 @@ from schema import WebSocketConnectionCreate, WebSocketConnectionUpdate
 
 class CRUDWebSocketConnection:
     async def get(self, db: AsyncSession, id: Any) -> Optional[WebSocketConnection]:
-        result = await db.execute(select(WebSocketConnection).filter(WebSocketConnection.id == id))
+        result = await db.execute(select(WebSocketConnection).filter(WebSocketConnection.connection_id == id))
         return result.scalars().first()
 
     async def get_multi(self, db: AsyncSession, skip: int = 0, limit: int = 100, **filters) -> List[WebSocketConnection]:

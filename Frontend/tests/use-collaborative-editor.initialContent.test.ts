@@ -1,4 +1,4 @@
-import { Y } from '@/lib/collaboration/yjsSingleton';
+import { Y } from '../app/lib/collaboration/yjsSingleton';
 
 /**
  * Regression: Initial content must NOT be applied before the WebSocket sync finishes.

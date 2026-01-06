@@ -1,9 +1,11 @@
 import os
+
+# CRITICAL: Set the test database URL BEFORE any other imports
+# This must happen before db.py is imported, as it reads DATABASE_URL at module level
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+
 import asyncio
 from typing import AsyncGenerator, Generator
-
-# Set the test database URL before importing any modules that depend on it
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import pytest
 import pytest_asyncio

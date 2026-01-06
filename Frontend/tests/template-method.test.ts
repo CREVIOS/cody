@@ -5,8 +5,8 @@
  * Run with: npx ts-node Frontend/app/lib/commands/__tests__/template-method.test.ts
  */
 
-import { BaseCommand } from '../BaseCommand';
-import { CommandData } from '../Command';
+import { BaseCommand } from '../app/lib/commands/BaseCommand';
+import { CommandData } from '../app/lib/commands/Command';
 
 // Test utilities
 let testsPassed = 0;
