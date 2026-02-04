@@ -14,10 +14,10 @@ on:
   pull_request_review:
     types: [submitted]
 
-# Prevent concurrent reviews on same PR
-concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+# # Prevent concurrent reviews on same PR
+# concurrency:
+#   group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+#   cancel-in-progress: true
 
 jobs:
   claude-review:
