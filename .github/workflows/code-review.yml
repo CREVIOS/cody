@@ -47,7 +47,7 @@ jobs:
 
       - name: Run Claude PR Review with Linear
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: CREVIOS/revo2@main
         with:
           # Use OAuth token (Pro/Max users - run `claude setup-token` to generate)
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
