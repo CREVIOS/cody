@@ -3,6 +3,7 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import { encoding, decoding } from 'lib0';
 import { getWsBaseUrl } from '../config/endpoints';
+import { CRDTErrorHandler, CRDTErrorType, createErrorHandler } from './ErrorHandler';
 
 /** Local message type for awareness envelope (sync uses 0-2 in y-protocols/sync) */
 const messageAwareness = 3;
@@ -134,6 +135,20 @@ export class WebSocketProvider extends EventTarget {
   // Error tracking to prevent spam
   private _errorLogged = false;
   private _errorDispatched = false;
+  
+  // Error handler for production-grade error recovery
+  private errorHandler: CRDTErrorHandler;
+  
+  // Message size limits (production safety)
+  private readonly MAX_MESSAGE_SIZE = 5 * 1024 * 1024; // 5 MB
+  private readonly MAX_UPDATE_SIZE = 2 * 1024 * 1024; // 2 MB per update
+  private readonly MAX_AWARENESS_SIZE = 64 * 1024; // 64 KB for awareness
+  
+  // Rate limiting (client-side)
+  private messageCount = 0;
+  private rateLimitWindowStart = Date.now();
+  private readonly RATE_LIMIT_WINDOW_MS = 1000;
+  private readonly RATE_LIMIT_MAX_MESSAGES = 100;
 
   constructor(doc: Y.Doc, options: WebSocketProviderOptions) {
     super();
@@ -171,6 +186,20 @@ export class WebSocketProvider extends EventTarget {
     this.reconnectMaxDelay = options.reconnect?.maxDelay || 30000;
     this.updateBatchMs = options.updateBatchMs ?? 15;
     this.awarenessDebounceMs = options.awarenessDebounceMs ?? 16;
+    
+    // Initialize error handler
+    this.errorHandler = createErrorHandler({
+      maxRetries: 5,
+      baseDelay: 1000,
+      maxDelay: 30000,
+      logging: this.logging,
+      onError: (error) => {
+        this.dispatchEvent(new CustomEvent('error', { detail: error }));
+      },
+      onRecover: (error) => {
+        this.log('Error recovered:', error.type);
+      },
+    });
 
     // Awareness handlers
     this.awarenessUpdateHandler = (changes, origin) => {
@@ -496,6 +525,21 @@ export class WebSocketProvider extends EventTarget {
       
       // Log received update
       const updateSize = decoder.arr.length - decoder.pos;
+      
+      // Production-grade validation: Check update size before applying
+      if (updateSize > this.MAX_UPDATE_SIZE) {
+        this.errorHandler.handleError(
+          `Received update too large: ${updateSize} bytes (max: ${this.MAX_UPDATE_SIZE})`,
+          CRDTErrorType.VALIDATION_ERROR,
+          { updateSize, maxSize: this.MAX_UPDATE_SIZE }
+        );
+        // Close connection to prevent corruption
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close(1003, 'Update too large');
+        }
+        return;
+      }
+      
       this.log('Received update from server:', updateSize, 'bytes');
       
       // Read update with 'this' as origin so handleDocUpdate knows it's from server
@@ -504,7 +548,13 @@ export class WebSocketProvider extends EventTarget {
       
       this.log('Applied remote update successfully');
     } catch (error) {
-      this.log('Error reading update:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.errorHandler.handleError(
+        error instanceof Error ? error : new Error(errorMessage),
+        CRDTErrorType.SYNC_ERROR,
+        { operation: 'handleUpdate' }
+      );
+      
       // Close connection on update errors to prevent corruption
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.close(1003, 'Update decode error');
@@ -565,6 +615,16 @@ export class WebSocketProvider extends EventTarget {
       }
     }
 
+    // Production-grade validation: Check update size before queuing
+    if (update.byteLength > this.MAX_UPDATE_SIZE) {
+      this.errorHandler.handleError(
+        `Update too large: ${update.byteLength} bytes (max: ${this.MAX_UPDATE_SIZE})`,
+        CRDTErrorType.VALIDATION_ERROR,
+        { updateSize: update.byteLength, maxSize: this.MAX_UPDATE_SIZE }
+      );
+      return; // Drop oversized update
+    }
+
     // Everything else is considered a LOCAL change that should be sent to the server
     // This includes:
     // - MonacoBinding changes (origin is the MonacoBinding instance)
@@ -581,19 +641,63 @@ export class WebSocketProvider extends EventTarget {
     this.updateFlushTimer = null;
     if (this.pendingUpdates.length === 0) return;
 
-    const merged = this.pendingUpdates.length === 1
-      ? this.pendingUpdates[0]
-      : Y.mergeUpdates(this.pendingUpdates);
+    try {
+      const merged = this.pendingUpdates.length === 1
+        ? this.pendingUpdates[0]
+        : Y.mergeUpdates(this.pendingUpdates);
 
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-    encoding.writeVarUint8Array(encoder, merged);
-    
-    const message = encoding.toUint8Array(encoder);
-    this.log('Sending update to server:', merged.length, 'bytes (merged from', this.pendingUpdates.length, 'updates)');
-    this.sendMessage(message);
+      // Production-grade validation: Check merged update size
+      if (merged.byteLength > this.MAX_UPDATE_SIZE) {
+        this.errorHandler.handleError(
+          `Merged update too large: ${merged.byteLength} bytes (max: ${this.MAX_UPDATE_SIZE})`,
+          CRDTErrorType.VALIDATION_ERROR,
+          { mergedSize: merged.byteLength, updateCount: this.pendingUpdates.length }
+        );
+        // Split into smaller chunks if possible
+        if (this.pendingUpdates.length > 1) {
+          // Send updates individually instead of merging
+          for (const update of this.pendingUpdates) {
+            if (update.byteLength <= this.MAX_UPDATE_SIZE) {
+              const encoder = encoding.createEncoder();
+              encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+              encoding.writeVarUint8Array(encoder, update);
+              this.sendMessage(encoding.toUint8Array(encoder));
+            }
+          }
+        }
+        this.pendingUpdates = [];
+        return;
+      }
 
-    this.pendingUpdates = [];
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+      encoding.writeVarUint8Array(encoder, merged);
+      
+      const message = encoding.toUint8Array(encoder);
+      
+      // Final size check before sending
+      if (message.byteLength > this.MAX_MESSAGE_SIZE) {
+        this.errorHandler.handleError(
+          `Message too large: ${message.byteLength} bytes (max: ${this.MAX_MESSAGE_SIZE})`,
+          CRDTErrorType.VALIDATION_ERROR,
+          { messageSize: message.byteLength }
+        );
+        this.pendingUpdates = [];
+        return;
+      }
+      
+      this.log('Sending update to server:', merged.length, 'bytes (merged from', this.pendingUpdates.length, 'updates)');
+      this.sendMessage(message);
+
+      this.pendingUpdates = [];
+    } catch (error) {
+      this.errorHandler.handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        CRDTErrorType.SYNC_ERROR,
+        { operation: 'flushPendingUpdates' }
+      );
+      this.pendingUpdates = []; // Clear on error to prevent accumulation
+    }
   }
 
   /**
@@ -644,23 +748,96 @@ export class WebSocketProvider extends EventTarget {
     if (this.pendingAwareness.length === 0) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    const merged = this.pendingAwareness.length === 1
-      ? this.pendingAwareness[0]
-      : awarenessProtocol.encodeAwarenessUpdate(
-          this.awareness,
-          Array.from(this.awareness.getStates().keys())
-        );
+    try {
+      const merged = this.pendingAwareness.length === 1
+        ? this.pendingAwareness[0]
+        : awarenessProtocol.encodeAwarenessUpdate(
+            this.awareness,
+            Array.from(this.awareness.getStates().keys())
+          );
 
-    this.pendingAwareness = [];
-    this.sendMessage(this.createAwarenessMessage(merged));
+      // Production-grade validation: Check awareness size
+      if (merged.byteLength > this.MAX_AWARENESS_SIZE) {
+        this.errorHandler.handleError(
+          `Awareness update too large: ${merged.byteLength} bytes (max: ${this.MAX_AWARENESS_SIZE})`,
+          CRDTErrorType.VALIDATION_ERROR,
+          { awarenessSize: merged.byteLength }
+        );
+        this.pendingAwareness = [];
+        return;
+      }
+
+      this.pendingAwareness = [];
+      this.sendMessage(this.createAwarenessMessage(merged));
+    } catch (error) {
+      this.errorHandler.handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        CRDTErrorType.SYNC_ERROR,
+        { operation: 'flushAwarenessQueue' }
+      );
+      this.pendingAwareness = [];
+    }
+  }
+
+  /**
+   * Check rate limit (client-side protection)
+   */
+  private checkRateLimit(): boolean {
+    const now = Date.now();
+    
+    // Reset window if expired
+    if (now - this.rateLimitWindowStart > this.RATE_LIMIT_WINDOW_MS) {
+      this.messageCount = 0;
+      this.rateLimitWindowStart = now;
+    }
+    
+    // Check limit
+    if (this.messageCount >= this.RATE_LIMIT_MAX_MESSAGES) {
+      this.errorHandler.handleError(
+        `Rate limit exceeded: ${this.messageCount} messages in ${this.RATE_LIMIT_WINDOW_MS}ms`,
+        CRDTErrorType.NETWORK_ERROR,
+        { messageCount: this.messageCount, window: this.RATE_LIMIT_WINDOW_MS }
+      );
+      return false;
+    }
+    
+    this.messageCount++;
+    return true;
   }
 
   /**
    * Send message to server (or queue if offline)
    */
   private sendMessage(message: Uint8Array) {
+    // Production-grade validation: Check message size
+    if (message.byteLength > this.MAX_MESSAGE_SIZE) {
+      this.errorHandler.handleError(
+        `Message too large: ${message.byteLength} bytes (max: ${this.MAX_MESSAGE_SIZE})`,
+        CRDTErrorType.VALIDATION_ERROR,
+        { messageSize: message.byteLength }
+      );
+      return;
+    }
+    
+    // Check rate limit
+    if (!this.checkRateLimit()) {
+      // Queue message instead of dropping (rate limit is per-window, not permanent)
+      this.messageQueue.push(message);
+      return;
+    }
+    
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(message);
+      try {
+        this.ws.send(message);
+      } catch (error) {
+        this.errorHandler.handleError(
+          error instanceof Error ? error : new Error(String(error)),
+          CRDTErrorType.NETWORK_ERROR,
+          { operation: 'sendMessage' }
+        );
+        // Queue for retry
+        this.messageQueue.push(message);
+      }
     } else {
       // Queue message for later
       this.messageQueue.push(message);
@@ -733,22 +910,32 @@ export class WebSocketProvider extends EventTarget {
   }
 
   /**
-   * Schedule reconnection with exponential backoff
+   * Schedule reconnection with exponential backoff (production-grade)
    */
   private scheduleReconnect() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
     }
 
+    // Production-grade exponential backoff with jitter
+    const baseDelay = this.reconnectBaseDelay * Math.pow(2, this.reconnectAttempts);
+    const jitter = Math.random() * 0.3 * baseDelay; // Add up to 30% jitter to prevent thundering herd
     const delay = Math.min(
-      this.reconnectBaseDelay * Math.pow(2, this.reconnectAttempts),
+      baseDelay + jitter,
       this.reconnectMaxDelay
     );
 
     this.reconnectAttempts++;
     this.setConnectionStatus('reconnecting');
 
-    this.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    this.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+    // Use error handler for retry tracking
+    this.errorHandler.handleError(
+      `Connection lost, reconnecting (attempt ${this.reconnectAttempts})`,
+      CRDTErrorType.CONNECTION_ERROR,
+      { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts }
+    );
 
     this.reconnectTimeout = setTimeout(() => {
       // Reset error flags for new connection attempt
@@ -830,6 +1017,25 @@ export class WebSocketProvider extends EventTarget {
   public destroy() {
     this.disconnect();
 
+    // Clear all timers (production-grade cleanup)
+    if (this.updateFlushTimer) {
+      clearTimeout(this.updateFlushTimer);
+      this.updateFlushTimer = null;
+    }
+    if (this.awarenessFlushTimer) {
+      clearTimeout(this.awarenessFlushTimer);
+      this.awarenessFlushTimer = null;
+    }
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    // Clear queues
+    this.pendingUpdates = [];
+    this.pendingAwareness = [];
+    this.messageQueue = [];
+
     // Remove awareness
     awarenessProtocol.removeAwarenessStates(
       this.awareness,
@@ -848,5 +1054,8 @@ export class WebSocketProvider extends EventTarget {
     this.doc.off('update', this.handleDocUpdate);
 
     this.awareness.destroy();
+    
+    // Clear error handler
+    this.errorHandler.clearErrorHistory();
   }
 }
