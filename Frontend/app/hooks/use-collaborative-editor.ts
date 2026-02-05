@@ -67,7 +67,11 @@ export interface CollaborativeEditorOptions {
   logging?: boolean;
 
   /**
-   * Initial content to load into Y.Doc (from backend/MinIO)
+   * Initial content to load into Y.Doc (DEPRECATED - not used)
+   * 
+   * CRDT FIX: Server handles initial content via initialContentProvider.
+   * Client should NOT insert initialContent to avoid duplicate inserts.
+   * This prop is kept for backward compatibility but is ignored.
    */
   initialContent?: string;
 
@@ -170,7 +174,7 @@ export function useCollaborativeEditor(
   const monacoBindingRef = useRef<MonacoBinding | null>(null);
   const undoManagerRef = useRef<CollaborativeUndoManager | null>(null);
   const currentDocIdRef = useRef<string | null>(null);
-  const initialContentAppliedRef = useRef<boolean>(false);
+  // CRDT FIX: Removed initialContentAppliedRef - server handles initial content
   const wsSyncedRef = useRef<boolean>(false);
   const offlineReadyRef = useRef<boolean>(false);
   
@@ -182,11 +186,8 @@ export function useCollaborativeEditor(
   const maxInitAttempts = 5; // Maximum initialization attempts before giving up
   const minInitIntervalMs = 2000; // Minimum time between initialization attempts
   
-  // Memoize initialContent to prevent re-renders when content reference changes but value is same
-  const initialContentRef = useRef<string | undefined>(options.initialContent);
-  if (options.initialContent !== undefined) {
-    initialContentRef.current = options.initialContent;
-  }
+  // CRDT FIX: Removed initialContent ref - server handles initial content via initialContentProvider
+  // Client should not insert initialContent to avoid duplicate inserts
 
   // State
   const [state, setState] = useState<CollaborativeEditorState>({
@@ -214,8 +215,7 @@ export function useCollaborativeEditor(
 
     const editor = options.editor;
     const { docId, user, wsUrl, offlineSupport, logging, undoOptions, projectId, filePath } = options;
-    // Use ref for initialContent to avoid dependency-triggered re-runs
-    const initialContent = initialContentRef.current;
+    // CRDT FIX: Removed initialContent usage - server handles it
     
     // Check if we already have a provider for this docId - prevent duplicate initialization
     if (wsProviderRef.current && currentDocIdRef.current === docId) {
@@ -337,37 +337,14 @@ export function useCollaborativeEditor(
       console.log('[Collaboration] Initializing for docId:', docId);
     }
 
-    // Defer applying initialContent until AFTER server sync to avoid double-inserting.
-    // If another peer already initialized the doc, applying initial content locally will
-    // create duplicated text (both inserts are "valid" concurrent CRDT operations).
-    initialContentAppliedRef.current = false;
+    // CRDT FIX: Server handles initial content via initialContentProvider.
+    // Client should NOT insert initialContent to avoid duplicate inserts.
+    // The server loads content from file system and inserts it when doc is empty.
+    // If we also insert on client, both inserts merge and cause duplicate content.
+    // 
+    // We still track sync state for UI purposes, but don't insert content.
     wsSyncedRef.current = false;
     offlineReadyRef.current = false;
-
-    const maybeApplyInitialContent = (reason: string) => {
-      try {
-        if (initialContentAppliedRef.current) return;
-        if ((initialContent ?? null) === null) return;
-        if (!wsSyncedRef.current) return;
-        if (!offlineReadyRef.current) return;
-
-        const current = yText.toString();
-        if (current && current.length > 0) {
-          if (logging) {
-            console.log('[Collaboration] Skipped initial content:', reason, '- document already has data');
-          }
-          return;
-        }
-
-        yText.insert(0, initialContent as string);
-        initialContentAppliedRef.current = true;
-        if (logging) {
-          console.log('[Collaboration] Applied initial content:', reason, '-', (initialContent as string).length, 'chars');
-        }
-      } catch (e) {
-        console.error('[Collaboration] Failed to apply initial content:', reason, e);
-      }
-    };
 
     // Setup IndexedDB persistence (if enabled)
     let indexedDBProvider: IndexedDBProvider | null = null;
@@ -401,12 +378,12 @@ export function useCollaborativeEditor(
 
         offlineReadyRef.current = true;
         setState((prev) => ({ ...prev, offlineReady: true }));
-        maybeApplyInitialContent('indexeddb-synced');
+        // CRDT FIX: Removed initialContent insertion - server handles it
       }).catch((error) => {
         console.error('[Collaboration] Error loading from IndexedDB:', error);
         offlineReadyRef.current = true;
         setState((prev) => ({ ...prev, offlineReady: true }));
-        maybeApplyInitialContent('indexeddb-error');
+        // CRDT FIX: Removed initialContent insertion - server handles it
       });
     }
     else {
@@ -544,7 +521,7 @@ export function useCollaborativeEditor(
     const handleSync = () => {
       setState((prev) => ({ ...prev, synced: true }));
       wsSyncedRef.current = true;
-      maybeApplyInitialContent('ws-synced');
+      // CRDT FIX: Removed initialContent insertion - server handles it via initialContentProvider
       
       // Phase 7: Dev-only logging
       if (logging && process.env.NODE_ENV === 'development') {
@@ -642,7 +619,7 @@ export function useCollaborativeEditor(
       // This allows the debounce/retry guards to work properly
       // It will be updated when a new docId is provided
     };
-  // Note: initialContent is accessed via ref to prevent re-initialization when content reference changes
+  // CRDT FIX: Removed initialContent from dependencies - server handles initial content
   }, [options.editor, options.docId, options.user?.id, options.wsUrl, options.offlineSupport, options.logging]);
 
   // Actions

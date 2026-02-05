@@ -195,7 +195,8 @@ export function MonacoEditorWrapper({
           wsUrl: collaboration.wsUrl,
           offlineSupport: collaboration.offlineSupport,
           logging: collabLogging,
-          initialContent: content, // Pass initial content from backend/MinIO
+          // CRDT FIX: Removed initialContent - server handles it via initialContentProvider
+          // Passing it would cause duplicate content inserts
         }
       : {
           editor: null,
