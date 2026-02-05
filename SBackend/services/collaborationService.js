@@ -109,7 +109,7 @@ class CollaborationRoom extends EventEmitter {
       }
     })();
 
-    // Metrics
+    // Metrics (production-grade observability)
     this.metrics = {
       totalUpdates: 0,
       totalConnections: 0,
@@ -117,7 +117,14 @@ class CollaborationRoom extends EventEmitter {
       bytesOut: 0,
       lastActivity: Date.now(),
       rateLimitViolations: 0,
-      batchedUpdates: 0
+      batchedUpdates: 0,
+      rejectedUpdates: 0,
+      corruptedSnapshots: 0,
+      documentSize: 0,
+      averageUpdateSize: 0,
+      errorCount: 0,
+      reconnectCount: 0,
+      createdAt: Date.now()
     };
 
     this.logger.event('room_created', { config: this.config });
@@ -457,26 +464,115 @@ class CollaborationRoom extends EventEmitter {
       return;
     }
 
-    // Read the update bytes from the decoder BEFORE applying
-    const update = decoding.readVarUint8Array(decoder);
-    // Apply the update to the server's doc with origin to prevent re-broadcast
-    Y.applyUpdate(this.doc, update, clientId);
+    try {
+      // Read the update bytes from the decoder BEFORE applying
+      const update = decoding.readVarUint8Array(decoder);
+      
+      // Production-grade validation: Check update size
+      if (update.byteLength > WS_MAX_MESSAGE_BYTES) {
+        this.metrics.rejectedUpdates++;
+        this.logger.warn('Update too large, rejecting', {
+          clientId,
+          size: update.byteLength,
+          max: WS_MAX_MESSAGE_BYTES
+        });
+        if (conn.ws.readyState === conn.ws.OPEN) {
+          conn.ws.send(JSON.stringify({
+            type: 'error',
+            code: 'UPDATE_TOO_LARGE',
+            message: `Update too large: ${update.byteLength} bytes (max: ${WS_MAX_MESSAGE_BYTES})`,
+            timestamp: Date.now()
+          }));
+        }
+        return;
+      }
+      
+      // Update metrics
+      this.metrics.totalUpdates++;
+      const currentAvg = this.metrics.averageUpdateSize;
+      const count = this.metrics.totalUpdates;
+      this.metrics.averageUpdateSize = (currentAvg * (count - 1) + update.byteLength) / count;
+      
+      // Production-grade validation: Check document size before applying
+      const currentDocSize = Y.encodeStateAsUpdate(this.doc).byteLength;
+      const MAX_DOC_SIZE = 50 * 1024 * 1024; // 50MB server-side limit
+      if (currentDocSize > MAX_DOC_SIZE) {
+        this.logger.error('Document too large, rejecting update', {
+          clientId,
+          docSize: currentDocSize,
+          max: MAX_DOC_SIZE
+        });
+        if (conn.ws.readyState === conn.ws.OPEN) {
+          conn.ws.send(JSON.stringify({
+            type: 'error',
+            code: 'DOCUMENT_TOO_LARGE',
+            message: 'Document has exceeded maximum size limit',
+            timestamp: Date.now()
+          }));
+        }
+        return;
+      }
+      
+      // Apply the update to the server's doc with origin to prevent re-broadcast
+      Y.applyUpdate(this.doc, update, clientId);
+      
+      // Post-apply validation: Check if document is still valid
+      try {
+        const yText = this.doc.getText(this.textName);
+        const textLength = yText.length;
+        const MAX_TEXT_LENGTH = 50 * 1024 * 1024; // 50MB text limit
+        if (textLength > MAX_TEXT_LENGTH) {
+          this.metrics.rejectedUpdates++;
+          this.metrics.errorCount++;
+          this.logger.error('Document text too large after update, rejecting', {
+            clientId,
+            textLength,
+            max: MAX_TEXT_LENGTH
+          });
+          // Note: Yjs doesn't support rollback, but we can prevent further updates
+          // The document is already corrupted at this point
+          return;
+        }
+        
+        // Update document size metric
+        this.metrics.documentSize = Y.encodeStateAsUpdate(this.doc).byteLength;
+      } catch (e) {
+        this.metrics.errorCount++;
+        this.logger.error('Document validation failed after update', {
+          clientId,
+          error: e.message
+        });
+        return;
+      }
 
-    this.emit('doc-update', { docId: this.docId, origin: clientId, update });
+      this.emit('doc-update', { docId: this.docId, origin: clientId, update });
 
-    // Publish to cross-instance bridge (if enabled)
-    if (this.pubSubBridge?.enabled) {
-      this.publishUpdate(update);
-    }
+      // Publish to cross-instance bridge (if enabled)
+      if (this.pubSubBridge?.enabled) {
+        this.publishUpdate(update);
+      }
 
-    // Broadcast to all OTHER clients (exclude the sender)
-    if (this.config.batchUpdatesEnabled) {
-      this.queueUpdateForBroadcast(update, [clientId]);
-    } else {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+      // Broadcast to all OTHER clients (exclude the sender)
+      if (this.config.batchUpdatesEnabled) {
+        this.queueUpdateForBroadcast(update, [clientId]);
+      } else {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+      }
+    } catch (err) {
+      this.metrics.errorCount++;
+      this.logger.error('Error handling update', err, { clientId });
+      // Send error to client
+      if (conn && conn.ws.readyState === conn.ws.OPEN) {
+        conn.ws.send(JSON.stringify({
+          type: 'error',
+          code: 'UPDATE_ERROR',
+          message: err.message || 'Failed to process update',
+          timestamp: Date.now()
+        }));
+      }
     }
   }
 
@@ -506,17 +602,41 @@ class CollaborationRoom extends EventEmitter {
 
     const count = this.pendingUpdates.length;
 
-    for (const { update, excludeClientIds } of this.pendingUpdates) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
+    try {
+      for (const { update, excludeClientIds } of this.pendingUpdates) {
+        // Production-grade validation: Check update size before broadcasting
+        if (update.byteLength > WS_MAX_MESSAGE_BYTES) {
+          this.logger.warn('Skipping oversized update in batch', {
+            size: update.byteLength,
+            max: WS_MAX_MESSAGE_BYTES
+          });
+          continue;
+        }
+        
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        const message = encoding.toUint8Array(encoder);
+        
+        // Final size check
+        if (message.byteLength > WS_MAX_MESSAGE_BYTES) {
+          this.logger.warn('Skipping oversized message in batch', {
+            size: message.byteLength,
+            max: WS_MAX_MESSAGE_BYTES
+          });
+          continue;
+        }
+        
+        this.broadcast(message, excludeClientIds);
+      }
+
+      this.logger.debug('Flushed update batch', { count });
+    } catch (err) {
+      this.logger.error('Error flushing update batch', err);
+    } finally {
+      this.pendingUpdates = [];
+      this.batchTimer = null;
     }
-
-    this.logger.debug('Flushed update batch', { count });
-
-    this.pendingUpdates = [];
-    this.batchTimer = null;
   }
 
   /**
@@ -870,15 +990,55 @@ class CollaborationRoom extends EventEmitter {
           if (snapshotFiles.length > 0) {
             const latestSnapshot = snapshotFiles[0];
             const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
-            try {
-              Y.applyUpdate(this.doc, snapshotData, 'persistence');
-              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
-              const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-              this.lastSnapshot = snapshotTimestamp;
-              await this.loadUpdatesAfter(snapshotTimestamp, docPath);
-              return;
-            } catch (err) {
-              this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message, docPath });
+            
+            // Production-grade validation: Check snapshot size
+            const MAX_SNAPSHOT_SIZE = 50 * 1024 * 1024; // 50MB
+            if (snapshotData.length > MAX_SNAPSHOT_SIZE) {
+              this.logger.warn('Snapshot too large, skipping', {
+                snapshot: latestSnapshot,
+                size: snapshotData.length,
+                max: MAX_SNAPSHOT_SIZE,
+                docPath
+              });
+              this.metrics.corruptedSnapshots++;
+              // Try next snapshot or fall through to updates-only load
+            } else {
+              try {
+                Y.applyUpdate(this.doc, snapshotData, 'persistence');
+                
+                // Post-load validation: Check document size
+                const yText = this.doc.getText(this.textName);
+                const textLength = yText.length;
+                const MAX_TEXT_LENGTH = 50 * 1024 * 1024; // 50MB
+                if (textLength > MAX_TEXT_LENGTH) {
+                  this.logger.error('Document too large after snapshot load, resetting', {
+                    snapshot: latestSnapshot,
+                    textLength,
+                    max: MAX_TEXT_LENGTH
+                  });
+                  this.metrics.corruptedSnapshots++;
+                  // Reset document
+                  yText.delete(0, yText.length);
+                } else {
+                  this.logger.info('Loaded snapshot', { 
+                    snapshot: latestSnapshot, 
+                    docPath,
+                    textLength,
+                    snapshotSize: snapshotData.length
+                  });
+                  const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
+                  this.lastSnapshot = snapshotTimestamp;
+                  await this.loadUpdatesAfter(snapshotTimestamp, docPath);
+                  return;
+                }
+              } catch (err) {
+                this.logger.warn('Snapshot corrupted, skipping', { 
+                  snapshot: latestSnapshot, 
+                  error: err.message, 
+                  docPath 
+                });
+                this.metrics.corruptedSnapshots++;
+              }
             }
           }
 
@@ -965,25 +1125,42 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Get room metrics
+   * Get room metrics (production-grade observability)
    */
   getMetrics() {
     let totalQueue = 0;
     let maxQueue = 0;
+    let totalBufferedBytes = 0;
 
-    for (const { sendQueue = [] } of this.connections.values()) {
-      totalQueue += sendQueue.length;
-      if (sendQueue.length > maxQueue) maxQueue = sendQueue.length;
+    for (const { sendQueue = [], ws } of this.connections.values()) {
+      const queueSize = sendQueue.length;
+      totalQueue += queueSize;
+      if (queueSize > maxQueue) maxQueue = queueSize;
+      
+      // Calculate buffered bytes
+      if (ws && ws.bufferedAmount) {
+        totalBufferedBytes += ws.bufferedAmount;
+      }
     }
+
+    // Update document size metric
+    this.metrics.documentSize = Y.encodeStateAsUpdate(this.doc).byteLength;
+    
+    const yText = this.doc.getText(this.textName);
+    const textLength = yText.length;
 
     return {
       ...this.metrics,
       activeConnections: this.connections.size,
-      documentSize: Y.encodeStateAsUpdate(this.doc).byteLength,
+      documentSize: this.metrics.documentSize,
+      documentTextLength: textLength,
       updateLogSize: this.updateLog.length,
       awarenessSize: this.awareness.getStates().size,
       pendingQueueMessages: totalQueue,
-      maxQueueMessages: maxQueue
+      maxQueueMessages: maxQueue,
+      totalBufferedBytes,
+      uptime: Date.now() - (this.metrics.createdAt || Date.now()),
+      health: this.metrics.errorCount > this.metrics.totalUpdates * 0.1 ? 'degraded' : 'healthy'
     };
   }
 
@@ -999,27 +1176,60 @@ class CollaborationRoom extends EventEmitter {
    * Cleanup and close room
    */
   async close() {
-    // Flush any pending updates
+    // Production-grade cleanup: Clear all timers
     if (this.batchTimer) {
       clearTimeout(this.batchTimer);
+      this.batchTimer = null;
       this.flushUpdateBatch();
     }
+    
+    if (this.awarenessTimer) {
+      clearTimeout(this.awarenessTimer);
+      this.awarenessTimer = null;
+    }
 
-    // Disconnect all clients
-    for (const [clientId, { ws }] of this.connections) {
-      ws.close();
+    // Clear all pending updates and awareness
+    this.pendingUpdates = [];
+    this.pendingAwarenessClients.clear();
+
+    // Disconnect all clients gracefully
+    for (const [clientId, { ws, flushTimer }] of this.connections) {
+      // Clear client-specific timers
+      if (flushTimer) {
+        clearInterval(flushTimer);
+      }
+      
+      try {
+        if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) {
+          ws.close(1001, 'Room closing');
+        }
+      } catch (err) {
+        this.logger.warn('Error closing client connection', { clientId, error: err.message });
+      }
     }
 
     this.connections.clear();
 
-    // Save final snapshot
-    await this.createSnapshot();
+    // Save final snapshot (best effort)
+    try {
+      await this.createSnapshot();
+    } catch (err) {
+      this.logger.warn('Error creating final snapshot', err);
+    }
 
     // Destroy awareness
-    this.awareness.destroy();
+    try {
+      this.awareness.destroy();
+    } catch (err) {
+      this.logger.warn('Error destroying awareness', err);
+    }
 
     // Destroy document
-    this.doc.destroy();
+    try {
+      this.doc.destroy();
+    } catch (err) {
+      this.logger.warn('Error destroying document', err);
+    }
 
     this.logger.info('Room closed');
   }
@@ -1122,14 +1332,32 @@ class CollaborationService {
    * Close all rooms and shutdown service
    */
   async close() {
-    clearInterval(this.cleanupInterval);
-
-    const closePromises = [];
-    for (const [docId, room] of this.rooms) {
-      closePromises.push(room.close());
+    // Production-grade cleanup: Clear cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
     }
 
-    await Promise.all(closePromises);
+    // Close all rooms with timeout protection
+    const closePromises = [];
+    for (const [docId, room] of this.rooms) {
+      closePromises.push(
+        Promise.race([
+          room.close(),
+          new Promise((resolve) => setTimeout(() => {
+            this.logger.warn('Room close timeout', { docId });
+            resolve();
+          }, 5000)) // 5 second timeout per room
+        ])
+      );
+    }
+
+    try {
+      await Promise.all(closePromises);
+    } catch (err) {
+      this.logger.error('Error closing rooms', err);
+    }
+    
     this.rooms.clear();
 
     this.logger.info('Shut down');

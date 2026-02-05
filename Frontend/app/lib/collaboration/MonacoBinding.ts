@@ -218,17 +218,59 @@ export class MonacoBinding extends EventTarget {
         return;
       }
 
-      // Predict resulting length to catch runaway loops early
+      // Production-grade validation: Predict resulting length to catch runaway loops early
       const currentLength = this.yText.length;
       let predictedLength = currentLength;
+      let totalInsertSize = 0;
+      let totalDeleteSize = 0;
+      
       for (const change of event.changes as any[]) {
-        predictedLength -= change.rangeLength;
-        predictedLength += change.text.length;
+        const deleteLen = change.rangeLength || 0;
+        const insertLen = change.text?.length || 0;
+        
+        // Validate individual change sizes
+        if (insertLen > 1024 * 1024) { // 1MB per change
+          console.error('[MonacoBinding] Single change too large:', insertLen, 'bytes');
+          this._markCorrupted({ 
+            message: 'Single change exceeds size limit', 
+            size: insertLen 
+          });
+          return;
+        }
+        
+        predictedLength -= deleteLen;
+        predictedLength += insertLen;
+        totalInsertSize += insertLen;
+        totalDeleteSize += deleteLen;
       }
+      
+      // Validate predicted length
       const MAX_DOC_LENGTH = 10 * 1024 * 1024; // 10MB
+      if (predictedLength < 0) {
+        console.error('[MonacoBinding] Predicted negative length:', predictedLength);
+        this._markCorrupted({ 
+          message: 'Invalid predicted length (negative)', 
+          size: predictedLength 
+        });
+        return;
+      }
+      
       if (predictedLength > MAX_DOC_LENGTH) {
         console.error('[MonacoBinding] Predicted document too large from local edit:', predictedLength);
-        this._markCorrupted({ message: 'Local edit would exceed size limit', size: predictedLength });
+        this._markCorrupted({ 
+          message: 'Local edit would exceed size limit', 
+          size: predictedLength 
+        });
+        return;
+      }
+      
+      // Validate change count (prevent spam)
+      if (event.changes.length > 1000) {
+        console.error('[MonacoBinding] Too many changes in single event:', event.changes.length);
+        this._markCorrupted({ 
+          message: 'Too many changes in single event', 
+          size: event.changes.length 
+        });
         return;
       }
 
@@ -248,10 +290,30 @@ export class MonacoBinding extends EventTarget {
             const deleteLength = change.rangeLength;
             const insertText = change.text;
 
-            // Validate offset is within document bounds
+            // Production-grade validation: Validate offset is within document bounds
             const currentLength = this.yText.length;
+            if (offset < 0) {
+              console.warn('[MonacoBinding] Negative offset, skipping:', offset);
+              continue;
+            }
+            
             if (offset > currentLength) {
               console.warn('[MonacoBinding] Offset out of bounds, clamping:', offset, '>', currentLength);
+              // Clamp to end of document
+              const clampedOffset = currentLength;
+              if (deleteLength > 0) {
+                // Can't delete beyond document end
+                continue;
+              }
+              if (insertText.length > 0) {
+                this.yText.insert(clampedOffset, insertText);
+              }
+              continue;
+            }
+
+            // Validate delete length
+            if (deleteLength < 0) {
+              console.warn('[MonacoBinding] Negative delete length, skipping');
               continue;
             }
 
@@ -259,12 +321,30 @@ export class MonacoBinding extends EventTarget {
             if (deleteLength > 0) {
               const actualDeleteLength = Math.min(deleteLength, currentLength - offset);
               if (actualDeleteLength > 0) {
-                this.yText.delete(offset, actualDeleteLength);
+                try {
+                  this.yText.delete(offset, actualDeleteLength);
+                } catch (e) {
+                  console.error('[MonacoBinding] Error deleting text:', e);
+                  this._markCorrupted({ 
+                    message: `Delete operation failed: ${e instanceof Error ? e.message : String(e)}`, 
+                    size: actualDeleteLength 
+                  });
+                  return;
+                }
               }
             }
 
             if (insertText.length > 0) {
-              this.yText.insert(offset, insertText);
+              try {
+                this.yText.insert(offset, insertText);
+              } catch (e) {
+                console.error('[MonacoBinding] Error inserting text:', e);
+                this._markCorrupted({ 
+                  message: `Insert operation failed: ${e instanceof Error ? e.message : String(e)}`, 
+                  size: insertText.length 
+                });
+                return;
+              }
             }
           }
         }, this); // Use 'this' as origin so Yjs observer can skip these changes
