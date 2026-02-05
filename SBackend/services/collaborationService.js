@@ -69,8 +69,12 @@ class CollaborationRoom extends EventEmitter {
     this.pubSubBridge = options.pubSubBridge || null;
     this.initialContentProvider = options.initialContentProvider || null;
     this.connections = new Map(); // clientId -> { ws, user, rateLimitTracker }
-    this.updateLog = []; // Array of Uint8Array updates
+    this.updateLog = []; // Array of Uint8Array updates (circular buffer)
+    this.updateLogMaxSize = options.updateLogMaxSize || 1000; // Max updates in memory
     this.lastSnapshot = Date.now();
+    this.stateVector = null; // Cached state vector for optimization
+    this.stateVectorCacheTime = 0;
+    this.stateVectorCacheTTL = 5000; // Cache state vector for 5 seconds
 
     // Configuration
     this.config = {
@@ -79,6 +83,10 @@ class CollaborationRoom extends EventEmitter {
       gcEnabled: options.gcEnabled !== false,
       rateLimitEnabled: options.rateLimitEnabled !== false,
       batchUpdatesEnabled: options.batchUpdatesEnabled !== false,
+      compressionEnabled: options.compressionEnabled !== false, // Enable compression by default
+      compressionThreshold: options.compressionThreshold || 1024, // Compress if > 1KB
+      updateBatchSize: options.updateBatchSize || 50, // Batch updates before writing
+      updateBatchInterval: options.updateBatchInterval || 5000, // 5 seconds
       ...options
     };
 
@@ -90,6 +98,11 @@ class CollaborationRoom extends EventEmitter {
     this.batchTimer = null;
     this.pendingAwarenessClients = new Set();
     this.awarenessTimer = null;
+
+    // Storage optimization
+    this.pendingStorageUpdates = []; // Updates queued for batched disk write
+    this.storageBatchTimer = null;
+    this.storageWriteInProgress = false;
 
     // Setup listeners
     this.setupDocumentListeners();
@@ -117,7 +130,11 @@ class CollaborationRoom extends EventEmitter {
       bytesOut: 0,
       lastActivity: Date.now(),
       rateLimitViolations: 0,
-      batchedUpdates: 0
+      batchedUpdates: 0,
+      updateLogOverflows: 0,
+      snapshotsCreated: 0,
+      compressionSavings: 0, // Total bytes saved through compression
+      storageErrors: 0
     };
 
     this.logger.event('room_created', { config: this.config });
@@ -141,7 +158,18 @@ class CollaborationRoom extends EventEmitter {
   setupDocumentListeners() {
     this.doc.on('update', (update, origin) => {
       if (origin !== 'persistence') {
+        // Add to update log with size management
         this.updateLog.push(update);
+        if (this.updateLog.length > this.updateLogMaxSize) {
+          // Remove oldest updates (circular buffer behavior)
+          const removed = this.updateLog.shift();
+          this.metrics.updateLogOverflows = (this.metrics.updateLogOverflows || 0) + 1;
+        }
+        
+        // Invalidate state vector cache
+        this.stateVector = null;
+        this.stateVectorCacheTime = 0;
+        
         this.metrics.totalUpdates++;
         this.metrics.lastActivity = Date.now();
         this.checkSnapshot();
@@ -795,58 +823,229 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Persist a single update to disk
+   * Persist a single update to disk (queued for batched write)
    */
   async persistUpdate(update) {
-    const updatePath = path.join(this.getStorageDocPath(), 'updates');
-    await fs.mkdir(updatePath, { recursive: true });
+    if (!update || update.length === 0) return;
 
     const timestamp = Date.now();
-    const filename = `${timestamp}.update`;
-    const filepath = path.join(updatePath, filename);
+    this.pendingStorageUpdates.push({ update, timestamp });
 
-    await fs.writeFile(filepath, update);
+    // Trigger batched write if threshold reached
+    if (this.pendingStorageUpdates.length >= this.config.updateBatchSize) {
+      this.flushStorageBatch();
+    } else if (!this.storageBatchTimer) {
+      // Schedule flush after interval
+      this.storageBatchTimer = setTimeout(() => {
+        this.flushStorageBatch();
+      }, this.config.updateBatchInterval);
+    }
   }
 
   /**
-   * Create and save a snapshot
+   * Flush batched updates to disk with compression
    */
-  async createSnapshot() {
-    const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
-    await fs.mkdir(snapshotPath, { recursive: true });
-
-    // Create state vector and snapshot
-    const stateVector = Y.encodeStateVector(this.doc);
-    const snapshot = Y.encodeStateAsUpdate(this.doc);
-
-    const timestamp = Date.now();
-    const filename = `${timestamp}.snapshot`;
-    const filepath = path.join(snapshotPath, filename);
-
-    await fs.writeFile(filepath, snapshot);
-
-    // Update metadata
-    const metadata = {
-      timestamp,
-      updateCount: this.metrics.totalUpdates,
-      size: snapshot.byteLength
-    };
-
-    await fs.writeFile(
-      path.join(snapshotPath, `${timestamp}.meta.json`),
-      JSON.stringify(metadata, null, 2)
-    );
-
-    this.logger.info('Snapshot created', { filename, size: snapshot.byteLength });
-
-    this.updateLog = [];
-    this.lastSnapshot = timestamp;
-
-    if (this.config.gcEnabled) {
-      this.doc.gc = true;
+  async flushStorageBatch() {
+    if (this.storageBatchTimer) {
+      clearTimeout(this.storageBatchTimer);
+      this.storageBatchTimer = null;
     }
 
-    await this.cleanupOldSnapshots(10);
+    if (this.pendingStorageUpdates.length === 0 || this.storageWriteInProgress) {
+      return;
+    }
+
+    this.storageWriteInProgress = true;
+    const updatesToWrite = [...this.pendingStorageUpdates];
+    this.pendingStorageUpdates = [];
+
+    try {
+      const updatePath = path.join(this.getStorageDocPath(), 'updates');
+      await fs.mkdir(updatePath, { recursive: true });
+
+      // Write updates in batch
+      const writePromises = updatesToWrite.map(async ({ update, timestamp }) => {
+        try {
+          let dataToWrite = update;
+          let filename = `${timestamp}.update`;
+          let compressed = false;
+
+          // Compress if enabled and update is large enough
+          if (this.config.compressionEnabled && update.length >= this.config.compressionThreshold) {
+            try {
+              dataToWrite = await gzip(update);
+              filename = `${timestamp}.update.gz`;
+              compressed = true;
+            } catch (compressionErr) {
+              this.logger.warn('Compression failed, writing uncompressed', { error: compressionErr.message });
+              // Fall back to uncompressed
+            }
+          }
+
+          const filepath = path.join(updatePath, filename);
+          await fs.writeFile(filepath, dataToWrite);
+
+          return { timestamp, compressed, size: update.length, compressedSize: dataToWrite.length };
+        } catch (writeErr) {
+          this.logger.error('Failed to write update', writeErr, { timestamp });
+          return null;
+        }
+      });
+
+      const results = await Promise.all(writePromises);
+      const successful = results.filter(r => r !== null).length;
+      const compressed = results.filter(r => r && r.compressed).length;
+      
+      if (successful > 0) {
+        const totalOriginalSize = results.reduce((sum, r) => sum + (r?.size || 0), 0);
+        const totalCompressedSize = results.reduce((sum, r) => sum + (r?.compressedSize || 0), 0);
+        const compressionRatio = totalOriginalSize > 0 
+          ? ((1 - totalCompressedSize / totalOriginalSize) * 100).toFixed(1)
+          : 0;
+        
+        // Track compression savings
+        if (compressed > 0) {
+          const savings = totalOriginalSize - totalCompressedSize;
+          this.metrics.compressionSavings = (this.metrics.compressionSavings || 0) + savings;
+        }
+
+        this.logger.debug('Flushed storage batch', {
+          count: successful,
+          compressed,
+          totalSize: totalOriginalSize,
+          compressedSize: totalCompressedSize,
+          compressionRatio: `${compressionRatio}%`,
+          docId: this.docId
+        });
+      }
+    } catch (err) {
+      this.metrics.storageErrors = (this.metrics.storageErrors || 0) + 1;
+      this.logger.error('Error flushing storage batch', err, { docId: this.docId });
+      // Re-queue updates on error (up to a limit to prevent memory issues)
+      if (this.pendingStorageUpdates.length < 1000) {
+        this.pendingStorageUpdates.unshift(...updatesToWrite);
+      } else {
+        this.logger.error('Storage queue too large, dropping updates', { 
+          queueSize: this.pendingStorageUpdates.length,
+          docId: this.docId 
+        });
+      }
+    } finally {
+      this.storageWriteInProgress = false;
+    }
+  }
+
+  /**
+   * Get cached or compute state vector
+   */
+  getStateVector() {
+    const now = Date.now();
+    if (this.stateVector && (now - this.stateVectorCacheTime) < this.stateVectorCacheTTL) {
+      return this.stateVector;
+    }
+    this.stateVector = Y.encodeStateVector(this.doc);
+    this.stateVectorCacheTime = now;
+    return this.stateVector;
+  }
+
+  /**
+   * Create and save a snapshot with compression
+   */
+  async createSnapshot() {
+    try {
+      // Flush any pending storage updates before snapshot
+      await this.flushStorageBatch();
+
+      const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
+      await fs.mkdir(snapshotPath, { recursive: true });
+
+      // Create state vector and snapshot (use cached state vector if available)
+      const stateVector = this.getStateVector();
+      const snapshot = Y.encodeStateAsUpdate(this.doc);
+
+      const timestamp = Date.now();
+      let dataToWrite = snapshot;
+      let filename = `${timestamp}.snapshot`;
+      let compressed = false;
+      let originalSize = snapshot.byteLength;
+
+      // Compress snapshot if enabled and large enough
+      if (this.config.compressionEnabled && snapshot.length >= this.config.compressionThreshold) {
+        try {
+          dataToWrite = await gzip(snapshot);
+          filename = `${timestamp}.snapshot.gz`;
+          compressed = true;
+        } catch (compressionErr) {
+          this.logger.warn('Snapshot compression failed, saving uncompressed', { 
+            error: compressionErr.message,
+            docId: this.docId 
+          });
+          // Fall back to uncompressed
+        }
+      }
+
+      const filepath = path.join(snapshotPath, filename);
+
+      // Write snapshot atomically using temporary file + rename
+      const tempFilepath = `${filepath}.tmp`;
+      await fs.writeFile(tempFilepath, dataToWrite);
+      await fs.rename(tempFilepath, filepath);
+
+      // Update metadata
+      const metadata = {
+        timestamp,
+        updateCount: this.metrics.totalUpdates,
+        size: originalSize,
+        compressedSize: dataToWrite.byteLength,
+        compressed,
+        compressionRatio: compressed && originalSize > 0 
+          ? ((1 - dataToWrite.byteLength / originalSize) * 100).toFixed(1)
+          : 0,
+        stateVectorSize: stateVector.byteLength,
+        docId: this.docId
+      };
+
+      await fs.writeFile(
+        path.join(snapshotPath, `${timestamp}.meta.json`),
+        JSON.stringify(metadata, null, 2)
+      );
+
+      this.metrics.snapshotsCreated = (this.metrics.snapshotsCreated || 0) + 1;
+      if (compressed) {
+        const savings = originalSize - dataToWrite.byteLength;
+        this.metrics.compressionSavings = (this.metrics.compressionSavings || 0) + savings;
+      }
+
+      this.logger.info('Snapshot created', { 
+        filename, 
+        size: originalSize,
+        compressedSize: dataToWrite.byteLength,
+        compressed,
+        compressionRatio: metadata.compressionRatio,
+        updateCount: this.metrics.totalUpdates,
+        docId: this.docId
+      });
+
+      // Clear update log after successful snapshot
+      this.updateLog = [];
+      this.lastSnapshot = timestamp;
+      
+      // Invalidate state vector cache after snapshot
+      this.stateVector = null;
+      this.stateVectorCacheTime = 0;
+
+      if (this.config.gcEnabled) {
+        // Enable garbage collection to free memory
+        this.doc.gc = true;
+        // Force GC by creating a new transaction
+        this.doc.transact(() => {}, 'gc');
+      }
+
+      await this.cleanupOldSnapshots(10);
+    } catch (err) {
+      this.logger.error('Error creating snapshot', err, { docId: this.docId });
+      throw err;
+    }
   }
 
   /**
@@ -868,17 +1067,56 @@ class CollaborationRoom extends EventEmitter {
             .reverse();
 
           if (snapshotFiles.length > 0) {
-            const latestSnapshot = snapshotFiles[0];
-            const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
-            try {
-              Y.applyUpdate(this.doc, snapshotData, 'persistence');
-              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
-              const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-              this.lastSnapshot = snapshotTimestamp;
-              await this.loadUpdatesAfter(snapshotTimestamp, docPath);
-              return;
-            } catch (err) {
-              this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message, docPath });
+            // Try loading snapshots in order until one succeeds (newest first)
+            for (const snapshotFile of snapshotFiles) {
+              try {
+                let snapshotData = await fs.readFile(path.join(snapshotPath, snapshotFile));
+                
+                // Validate snapshot is not empty
+                if (!snapshotData || snapshotData.length === 0) {
+                  this.logger.warn('Empty snapshot file, trying next', { snapshot: snapshotFile });
+                  continue;
+                }
+
+                // Decompress if compressed
+                if (snapshotFile.endsWith('.gz')) {
+                  try {
+                    snapshotData = await gunzip(snapshotData);
+                  } catch (decompressionErr) {
+                    this.logger.warn('Failed to decompress snapshot, trying next', { 
+                      snapshot: snapshotFile,
+                      error: decompressionErr.message 
+                    });
+                    continue;
+                  }
+                }
+
+                // Apply snapshot with persistence origin
+                Y.applyUpdate(this.doc, snapshotData, 'persistence');
+                
+                const snapshotTimestamp = parseInt(snapshotFile.split('.')[0]);
+                this.lastSnapshot = snapshotTimestamp;
+                
+                this.logger.info('Loaded snapshot', { 
+                  snapshot: snapshotFile, 
+                  docPath,
+                  size: snapshotData.length,
+                  timestamp: snapshotTimestamp,
+                  docId: this.docId
+                });
+                
+                // Load updates after snapshot
+                await this.loadUpdatesAfter(snapshotTimestamp, docPath);
+                return; // Successfully loaded, exit
+              } catch (err) {
+                const errorMsg = err && err.message ? err.message : String(err);
+                this.logger.warn('Snapshot corrupted, trying next', { 
+                  snapshot: snapshotFile, 
+                  error: errorMsg, 
+                  docPath 
+                });
+                // Continue to next snapshot
+              }
             }
           }
 
@@ -911,22 +1149,58 @@ class CollaborationRoom extends EventEmitter {
       const updates = await fs.readdir(updatePath);
 
       const relevantUpdates = updates
-        .filter(f => f.endsWith('.update'))
-        .filter(f => parseInt(f.split('.')[0]) > timestamp)
+        .filter(f => f.endsWith('.update') || f.endsWith('.update.gz'))
+        .filter(f => {
+          const ts = parseInt(f.split('.')[0]);
+          return !isNaN(ts) && ts > timestamp;
+        })
         .sort();
 
+      let loadedCount = 0;
+      let skippedCount = 0;
+
       for (const updateFile of relevantUpdates) {
-        const updateData = await fs.readFile(path.join(updatePath, updateFile));
         try {
+          let updateData = await fs.readFile(path.join(updatePath, updateFile));
+          
+          // Validate update is not empty
+          if (!updateData || updateData.length === 0) {
+            this.logger.warn('Skipping empty update file', { file: updateFile });
+            skippedCount++;
+            continue;
+          }
+
+          // Decompress if compressed
+          if (updateFile.endsWith('.gz')) {
+            try {
+              updateData = await gunzip(updateData);
+            } catch (decompressionErr) {
+              this.logger.warn('Failed to decompress update, skipping', { 
+                file: updateFile,
+                error: decompressionErr.message,
+                docId: this.docId 
+              });
+              skippedCount++;
+              continue;
+            }
+          }
+
+          // Apply update with persistence origin (won't trigger broadcast)
           Y.applyUpdate(this.doc, updateData, 'persistence');
           this.updateLog.push(updateData);
+          loadedCount++;
         } catch (err) {
           this.logger.warn('Skipping corrupted update', { file: updateFile, error: err.message });
+          skippedCount++;
         }
       }
 
-      if (relevantUpdates.length > 0) {
-        this.logger.info('Loaded updates', { count: relevantUpdates.length });
+      if (loadedCount > 0) {
+        this.logger.info('Loaded updates', { 
+          loaded: loadedCount, 
+          skipped: skippedCount,
+          total: relevantUpdates.length 
+        });
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
@@ -944,23 +1218,41 @@ class CollaborationRoom extends EventEmitter {
       const files = await fs.readdir(snapshotPath);
 
       const snapshotFiles = files
-        .filter(f => f.endsWith('.snapshot'))
-        .sort()
-        .reverse();
+        .filter(f => f.endsWith('.snapshot') || f.endsWith('.snapshot.gz'))
+        .map(f => {
+          const timestamp = parseInt(f.split('.')[0]);
+          return { filename: f, timestamp, isCompressed: f.endsWith('.gz') };
+        })
+        .filter(f => !isNaN(f.timestamp))
+        .sort((a, b) => b.timestamp - a.timestamp); // Newest first
 
       if (snapshotFiles.length > keepCount) {
         const toDelete = snapshotFiles.slice(keepCount);
+        let deletedCount = 0;
 
-        for (const file of toDelete) {
-          const baseName = file.replace('.snapshot', '');
-          await fs.unlink(path.join(snapshotPath, file)).catch(() => {});
-          await fs.unlink(path.join(snapshotPath, `${baseName}.meta.json`)).catch(() => {});
+        for (const { filename } of toDelete) {
+          try {
+            await fs.unlink(path.join(snapshotPath, filename));
+            // Also delete metadata file if it exists
+            const baseName = filename.replace(/\.(snapshot|snapshot\.gz)$/, '');
+            await fs.unlink(path.join(snapshotPath, `${baseName}.meta.json`)).catch(() => {});
+            deletedCount++;
+          } catch (err) {
+            this.logger.warn('Failed to delete snapshot file', { filename, error: err.message });
+          }
         }
 
-        this.logger.info(`Cleaned up ${toDelete.length} old snapshots`);
+        if (deletedCount > 0) {
+          this.logger.info(`Cleaned up ${deletedCount} old snapshots`, { 
+            kept: keepCount,
+            total: snapshotFiles.length 
+          });
+        }
       }
     } catch (err) {
-      this.logger.error('Error cleaning snapshots', err);
+      if (err.code !== 'ENOENT') {
+        this.logger.error('Error cleaning snapshots', err);
+      }
     }
   }
 
@@ -976,15 +1268,20 @@ class CollaborationRoom extends EventEmitter {
       if (sendQueue.length > maxQueue) maxQueue = sendQueue.length;
     }
 
-    return {
-      ...this.metrics,
-      activeConnections: this.connections.size,
-      documentSize: Y.encodeStateAsUpdate(this.doc).byteLength,
-      updateLogSize: this.updateLog.length,
-      awarenessSize: this.awareness.getStates().size,
-      pendingQueueMessages: totalQueue,
-      maxQueueMessages: maxQueue
-    };
+      const stateVector = this.getStateVector();
+      return {
+        ...this.metrics,
+        activeConnections: this.connections.size,
+        documentSize: Y.encodeStateAsUpdate(this.doc).byteLength,
+        stateVectorSize: stateVector.byteLength,
+        updateLogSize: this.updateLog.length,
+        updateLogMaxSize: this.updateLogMaxSize,
+        awarenessSize: this.awareness.getStates().size,
+        pendingQueueMessages: totalQueue,
+        maxQueueMessages: maxQueue,
+        pendingStorageUpdates: this.pendingStorageUpdates ? this.pendingStorageUpdates.length : 0,
+        lastSnapshotAge: Date.now() - this.lastSnapshot
+      };
   }
 
   /**
