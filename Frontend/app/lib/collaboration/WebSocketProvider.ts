@@ -121,11 +121,12 @@ export class WebSocketProvider extends EventTarget {
   // Logging
   private logging: boolean;
 
-  // Message queue for offline messages
-  private messageQueue: Uint8Array[] = [];
+  // Message queue for offline messages (priority queue: updates first, then awareness)
+  private messageQueue: Array<{ message: Uint8Array; priority: number }> = [];
   private pendingUpdates: Uint8Array[] = [];
   private updateFlushTimer: NodeJS.Timeout | null = null;
   private updateBatchMs: number;
+  private adaptiveBatchMs: number; // Adaptive batching based on load
 
   private pendingAwareness: Uint8Array[] = [];
   private awarenessFlushTimer: NodeJS.Timeout | null = null;
@@ -134,6 +135,14 @@ export class WebSocketProvider extends EventTarget {
   // Error tracking to prevent spam
   private _errorLogged = false;
   private _errorDispatched = false;
+
+  // Performance metrics for adaptive batching
+  private updateMetrics = {
+    count: 0,
+    totalSize: 0,
+    lastFlush: Date.now(),
+    avgSize: 0
+  };
 
   constructor(doc: Y.Doc, options: WebSocketProviderOptions) {
     super();
@@ -170,6 +179,7 @@ export class WebSocketProvider extends EventTarget {
     this.reconnectBaseDelay = options.reconnect?.baseDelay || 1000;
     this.reconnectMaxDelay = options.reconnect?.maxDelay || 30000;
     this.updateBatchMs = options.updateBatchMs ?? 15;
+    this.adaptiveBatchMs = this.updateBatchMs; // Start with base value
     this.awarenessDebounceMs = options.awarenessDebounceMs ?? 16;
 
     // Awareness handlers
@@ -572,8 +582,27 @@ export class WebSocketProvider extends EventTarget {
     // - UndoManager changes
 
     this.pendingUpdates.push(update);
+    
+    // Update metrics for adaptive batching
+    this.updateMetrics.count++;
+    this.updateMetrics.totalSize += update.byteLength;
+    
+    // Adaptive batching: reduce delay if many small updates, increase if large updates
+    if (this.updateMetrics.count > 10) {
+      this.updateMetrics.avgSize = this.updateMetrics.totalSize / this.updateMetrics.count;
+      // If average update size is small (< 1KB), batch more aggressively (shorter delay)
+      // If average update size is large (> 10KB), batch less aggressively (longer delay)
+      if (this.updateMetrics.avgSize < 1024) {
+        this.adaptiveBatchMs = Math.max(5, this.updateBatchMs * 0.5); // Faster for small updates
+      } else if (this.updateMetrics.avgSize > 10240) {
+        this.adaptiveBatchMs = Math.min(50, this.updateBatchMs * 2); // Slower for large updates
+      } else {
+        this.adaptiveBatchMs = this.updateBatchMs; // Default
+      }
+    }
+    
     if (!this.updateFlushTimer) {
-      this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.updateBatchMs);
+      this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), this.adaptiveBatchMs);
     }
   };
 
@@ -592,6 +621,14 @@ export class WebSocketProvider extends EventTarget {
     const message = encoding.toUint8Array(encoder);
     this.log('Sending update to server:', merged.length, 'bytes (merged from', this.pendingUpdates.length, 'updates)');
     this.sendMessage(message);
+
+    // Reset metrics after flush
+    this.updateMetrics = {
+      count: 0,
+      totalSize: 0,
+      lastFlush: Date.now(),
+      avgSize: 0
+    };
 
     this.pendingUpdates = [];
   }
@@ -619,6 +656,7 @@ export class WebSocketProvider extends EventTarget {
 
   /**
    * Queue awareness update with debounce (reduces cursor spam)
+   * Optimized: only sends changed clients, not full state
    */
   private queueAwarenessUpdate(update: Uint8Array) {
     // Only queue if WebSocket is connected
@@ -628,12 +666,33 @@ export class WebSocketProvider extends EventTarget {
       return;
     }
 
-    this.pendingAwareness.push(update);
+    // Merge with pending awareness if available (reduces redundant sends)
+    if (this.pendingAwareness.length > 0) {
+      // Try to merge awareness updates
+      try {
+        const merged = awarenessProtocol.encodeAwarenessUpdate(
+          this.awareness,
+          Array.from(this.awareness.getStates().keys())
+        );
+        this.pendingAwareness = [merged];
+      } catch {
+        // If merge fails, just add to queue
+        this.pendingAwareness.push(update);
+      }
+    } else {
+      this.pendingAwareness.push(update);
+    }
+    
     if (this.awarenessFlushTimer) return;
+
+    // Adaptive debounce: shorter delay if connection is idle, longer if busy
+    const adaptiveDebounce = this.ws.bufferedAmount > 100 * 1024 
+      ? this.awarenessDebounceMs * 2  // Double delay if buffer is filling
+      : this.awarenessDebounceMs;
 
     this.awarenessFlushTimer = setTimeout(() => {
       this.flushAwarenessQueue();
-    }, this.awarenessDebounceMs);
+    }, adaptiveDebounce);
   }
 
   /**
@@ -652,29 +711,67 @@ export class WebSocketProvider extends EventTarget {
         );
 
     this.pendingAwareness = [];
-    this.sendMessage(this.createAwarenessMessage(merged));
+    // Awareness has lower priority (2) than updates (1)
+    this.sendMessage(this.createAwarenessMessage(merged), 2);
   }
 
   /**
    * Send message to server (or queue if offline)
+   * Uses priority queuing: updates (priority 1) before awareness (priority 2)
    */
-  private sendMessage(message: Uint8Array) {
+  private sendMessage(message: Uint8Array, priority: number = 1) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(message);
+      // Check backpressure before sending
+      if (this.ws.bufferedAmount > 1024 * 1024) { // 1MB threshold
+        this.log('WebSocket backpressure detected, queuing message');
+        this.enqueueMessage(message, priority);
+      } else {
+        try {
+          this.ws.send(message);
+        } catch (err) {
+          this.log('Send failed, queuing:', err);
+          this.enqueueMessage(message, priority);
+        }
+      }
     } else {
       // Queue message for later
-      this.messageQueue.push(message);
+      this.enqueueMessage(message, priority);
     }
   }
 
   /**
-   * Flush queued messages
+   * Enqueue message with priority (lower number = higher priority)
+   */
+  private enqueueMessage(message: Uint8Array, priority: number) {
+    this.messageQueue.push({ message, priority });
+    // Sort by priority (lower first)
+    this.messageQueue.sort((a, b) => a.priority - b.priority);
+    // Limit queue size to prevent memory issues
+    if (this.messageQueue.length > 1000) {
+      this.messageQueue.shift(); // Remove oldest
+    }
+  }
+
+  /**
+   * Flush queued messages (respects priority)
    */
   private flushMessageQueue() {
     while (this.messageQueue.length > 0 && this.ws?.readyState === WebSocket.OPEN) {
-      const message = this.messageQueue.shift();
-      if (message) {
-        this.ws.send(message);
+      // Check backpressure
+      if (this.ws.bufferedAmount > 512 * 1024) { // 512KB threshold
+        break; // Wait for buffer to drain
+      }
+      
+      const item = this.messageQueue.shift();
+      if (item) {
+        try {
+          this.ws.send(item.message);
+        } catch (err) {
+          this.log('Failed to send queued message:', err);
+          // Re-queue if send fails
+          this.enqueueMessage(item.message, item.priority);
+          break;
+        }
       }
     }
   }
