@@ -1356,11 +1356,25 @@ class ConnectionManager {
   broadcastLocal(projectId, message, excludeConnectionId = null) {
     const connections = this.getProjectConnections(projectId);
     
+    // Pre-serialize message once for all connections (performance optimization)
+    let serializedMessage = null;
+    
     for (const conn of connections) {
       if (conn.id !== excludeConnectionId && conn.ws.readyState === WebSocket.OPEN) {
         try {
-          conn.ws.send(JSON.stringify(message));
-          conn.lastActivity = new Date();
+          // Serialize once, reuse for all connections
+          if (!serializedMessage) {
+            serializedMessage = JSON.stringify(message);
+          }
+          
+          // Check backpressure before sending
+          if (conn.ws.bufferedAmount < 1024 * 1024) { // 1MB threshold
+            conn.ws.send(serializedMessage);
+            conn.lastActivity = new Date();
+          } else {
+            // Skip if buffer is full (prevents memory buildup)
+            console.warn(`Skipping broadcast to ${conn.id} due to backpressure`);
+          }
         } catch (error) {
           console.error(`Error broadcasting to ${conn.id}:`, error);
           this.removeConnection(conn.id);

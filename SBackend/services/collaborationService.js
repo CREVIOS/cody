@@ -12,11 +12,17 @@ const { createLogger } = require('./logger');
 const RATE_LIMIT_WINDOW_MS = 1000;
 const RATE_LIMIT_MAX_MESSAGES = 50;
 const UPDATE_BATCH_INTERVAL_MS = 50;
+const UPDATE_BATCH_MIN_MS = 10; // Minimum batch interval for high-frequency updates
+const UPDATE_BATCH_MAX_MS = 200; // Maximum batch interval for low-frequency updates
 const AWARENESS_THROTTLE_MS = 50;
+const AWARENESS_THROTTLE_MIN_MS = 16; // Minimum throttle for responsive cursors
+const AWARENESS_THROTTLE_MAX_MS = 100; // Maximum throttle when busy
 const WS_BACKPRESSURE_THRESHOLD = 1_000_000; // 1 MB buffered
+const WS_BACKPRESSURE_SOFT_THRESHOLD = 512 * 1024; // 512 KB soft threshold
 const WS_MAX_QUEUE = 500; // Max queued messages per client
 const WS_MAX_MESSAGE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap per frame
 const INITIAL_DOC_MAX_CHARS = 5 * 1024 * 1024; // 5M chars safety cap for initial file load
+const UPDATE_MERGE_THRESHOLD = 10; // Merge updates if batch size exceeds this
 
 function decodeAwarenessClientIds(update) {
   const clients = [];
@@ -85,11 +91,25 @@ class CollaborationRoom extends EventEmitter {
     // Logger
     this.logger = createLogger({ service: 'CollaborationRoom', docId });
 
-    // Update batching
+    // Update batching with adaptive intervals
     this.pendingUpdates = []; // Array of { update, excludeClientIds }
     this.batchTimer = null;
+    this.adaptiveBatchInterval = UPDATE_BATCH_INTERVAL_MS;
     this.pendingAwarenessClients = new Set();
     this.awarenessTimer = null;
+    this.adaptiveAwarenessThrottle = AWARENESS_THROTTLE_MS;
+    
+    // Performance tracking for adaptive batching
+    this.batchMetrics = {
+      updateCount: 0,
+      totalSize: 0,
+      lastFlush: Date.now(),
+      avgSize: 0
+    };
+    
+    // Batched persistence
+    this.pendingPersistence = null;
+    this.persistenceTimer = null;
 
     // Setup listeners
     this.setupDocumentListeners();
@@ -481,22 +501,41 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Queue update for batched broadcast
+   * Queue update for batched broadcast with adaptive batching
    */
   queueUpdateForBroadcast(update, excludeClientIds) {
     this.pendingUpdates.push({ update, excludeClientIds });
     this.metrics.batchedUpdates++;
+    
+    // Update metrics for adaptive batching
+    this.batchMetrics.updateCount++;
+    this.batchMetrics.totalSize += update.byteLength;
+    
+    // Adaptive batching: adjust interval based on update frequency and size
+    if (this.batchMetrics.updateCount > 5) {
+      this.batchMetrics.avgSize = this.batchMetrics.totalSize / this.batchMetrics.updateCount;
+      const timeSinceLastFlush = Date.now() - this.batchMetrics.lastFlush;
+      
+      // If many small updates coming in fast, reduce batch interval (flush more frequently)
+      if (this.batchMetrics.updateCount > UPDATE_MERGE_THRESHOLD && this.batchMetrics.avgSize < 2048) {
+        this.adaptiveBatchInterval = Math.max(UPDATE_BATCH_MIN_MS, this.adaptiveBatchInterval * 0.7);
+      }
+      // If large updates or slow rate, increase batch interval (wait longer to merge)
+      else if (this.batchMetrics.avgSize > 10240 || timeSinceLastFlush > 1000) {
+        this.adaptiveBatchInterval = Math.min(UPDATE_BATCH_MAX_MS, this.adaptiveBatchInterval * 1.3);
+      }
+    }
 
     // Start batch timer if not already running
     if (!this.batchTimer) {
       this.batchTimer = setTimeout(() => {
         this.flushUpdateBatch();
-      }, UPDATE_BATCH_INTERVAL_MS);
+      }, this.adaptiveBatchInterval);
     }
   }
 
   /**
-   * Flush batched updates
+   * Flush batched updates with intelligent merging
    */
   flushUpdateBatch() {
     if (this.pendingUpdates.length === 0) {
@@ -505,15 +544,58 @@ class CollaborationRoom extends EventEmitter {
     }
 
     const count = this.pendingUpdates.length;
-
+    
+    // Group updates by excludeClientIds to merge more efficiently
+    const updatesByExclusion = new Map();
     for (const { update, excludeClientIds } of this.pendingUpdates) {
+      const key = excludeClientIds.sort().join(',');
+      if (!updatesByExclusion.has(key)) {
+        updatesByExclusion.set(key, { updates: [], excludeClientIds });
+      }
+      updatesByExclusion.get(key).updates.push(update);
+    }
+
+    // Merge and broadcast grouped updates
+    for (const { updates, excludeClientIds } of updatesByExclusion.values()) {
+      let mergedUpdate;
+      if (updates.length === 1) {
+        mergedUpdate = updates[0];
+      } else {
+        // Merge multiple updates into one
+        try {
+          mergedUpdate = Y.mergeUpdates(updates);
+        } catch (err) {
+          this.logger.warn('Failed to merge updates, sending separately', { error: err.message });
+          // Fallback: send updates separately if merge fails
+          for (const update of updates) {
+            const encoder = encoding.createEncoder();
+            encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+            encoding.writeVarUint8Array(encoder, update);
+            this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
+          }
+          continue;
+        }
+      }
+
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
+      encoding.writeVarUint8Array(encoder, mergedUpdate);
       this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
     }
 
-    this.logger.debug('Flushed update batch', { count });
+    this.logger.debug('Flushed update batch', { 
+      count, 
+      mergedGroups: updatesByExclusion.size,
+      adaptiveInterval: this.adaptiveBatchInterval 
+    });
+
+    // Reset metrics
+    this.batchMetrics = {
+      updateCount: 0,
+      totalSize: 0,
+      lastFlush: Date.now(),
+      avgSize: 0
+    };
 
     this.pendingUpdates = [];
     this.batchTimer = null;
@@ -588,7 +670,7 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Broadcast awareness changes
+   * Broadcast awareness changes (optimized: only sends changed clients, not full state)
    */
   broadcastAwareness(changedClients) {
     // Guard against uninitialized awareness
@@ -603,13 +685,22 @@ class CollaborationRoom extends EventEmitter {
     }
 
     try {
+      // Only encode changed clients (delta compression)
       const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients);
+      
+      // Skip if update is empty (no actual changes)
+      if (!awarenessUpdate || awarenessUpdate.length === 0) {
+        return;
+      }
 
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, messageAwareness);
       encoding.writeVarUint8Array(encoder, awarenessUpdate);
 
-      this.broadcast(encoding.toUint8Array(encoder));
+      const message = encoding.toUint8Array(encoder);
+      
+      // Broadcast with priority queuing (awareness has lower priority than updates)
+      this.broadcast(message);
     } catch (err) {
       this.logger.error('Failed to encode/broadcast awareness update', err);
     }
@@ -619,6 +710,18 @@ class CollaborationRoom extends EventEmitter {
     changedClients.forEach((id) => this.pendingAwarenessClients.add(id));
     if (this.awarenessTimer) return;
 
+    // Adaptive throttling: adjust based on connection load
+    const activeConnections = this.connections.size;
+    const avgQueueSize = Array.from(this.connections.values())
+      .reduce((sum, conn) => sum + (conn.sendQueue?.length || 0), 0) / Math.max(activeConnections, 1);
+    
+    // Increase throttle if queues are filling up
+    if (avgQueueSize > 50) {
+      this.adaptiveAwarenessThrottle = Math.min(AWARENESS_THROTTLE_MAX_MS, this.adaptiveAwarenessThrottle * 1.2);
+    } else if (avgQueueSize < 10) {
+      this.adaptiveAwarenessThrottle = Math.max(AWARENESS_THROTTLE_MIN_MS, this.adaptiveAwarenessThrottle * 0.9);
+    }
+
     this.awarenessTimer = setTimeout(() => {
       const toSend = Array.from(this.pendingAwarenessClients);
       this.pendingAwarenessClients.clear();
@@ -626,19 +729,34 @@ class CollaborationRoom extends EventEmitter {
       if (toSend.length > 0) {
         this.broadcastAwareness(toSend);
       }
-    }, AWARENESS_THROTTLE_MS);
+    }, this.adaptiveAwarenessThrottle);
   }
 
   /**
-   * Broadcast message to all or some clients
+   * Broadcast message to all or some clients (optimized with early exit)
    */
   broadcast(message, excludeClientIds = []) {
+    if (this.connections.size === 0) return;
+    
     const excludeSet = new Set(excludeClientIds);
+    
+    // If excluding all connections, skip
+    if (excludeSet.size === this.connections.size && 
+        Array.from(this.connections.keys()).every(id => excludeSet.has(id))) {
+      return;
+    }
 
+    // Batch enqueue for better performance
+    const connectionsToSend = [];
     for (const [clientId, conn] of this.connections) {
-      if (!excludeSet.has(clientId)) {
-        this.enqueueSend(conn, message);
+      if (!excludeSet.has(clientId) && conn.ws.readyState === conn.ws.OPEN) {
+        connectionsToSend.push(conn);
       }
+    }
+
+    // Enqueue to all eligible connections
+    for (const conn of connectionsToSend) {
+      this.enqueueSend(conn, message);
     }
   }
 
@@ -653,15 +771,15 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Enqueue message with backpressure guard
+   * Enqueue message with improved backpressure guard
    */
   enqueueSend(conn, message) {
     const { ws, sendQueue } = conn;
 
     if (ws.readyState !== ws.OPEN) return;
 
-    // If bufferedAmount is low and queue empty, try immediate send
-    if (ws.bufferedAmount < WS_BACKPRESSURE_THRESHOLD && sendQueue.length === 0) {
+    // Optimized: Use soft threshold for immediate send (more aggressive)
+    if (ws.bufferedAmount < WS_BACKPRESSURE_SOFT_THRESHOLD && sendQueue.length === 0) {
       try {
         ws.send(message);
         this.metrics.bytesOut += message.byteLength;
@@ -671,11 +789,39 @@ class CollaborationRoom extends EventEmitter {
       }
     }
 
+    // Check hard threshold before queueing
+    if (ws.bufferedAmount >= WS_BACKPRESSURE_THRESHOLD) {
+      // If buffer is very full, drop awareness messages but keep updates
+      const messageType = message[0];
+      const isAwareness = messageType === messageAwareness;
+      
+      if (isAwareness && sendQueue.length > WS_MAX_QUEUE * 0.8) {
+        // Drop awareness messages if queue is getting full (updates are more important)
+        this.logger.debug('Dropping awareness message due to backpressure', {
+          clientId: conn.user?.id || 'unknown',
+          bufferedAmount: ws.bufferedAmount
+        });
+        return;
+      }
+    }
+
     // Queue with cap
     if (sendQueue.length >= WS_MAX_QUEUE) {
-      sendQueue.shift(); // drop oldest to keep queue bounded
-      this.logger.warn('Dropping oldest queued message due to backpressure', {
-        clientId: conn.user?.id || 'unknown'
+      // Drop oldest awareness messages first, then updates
+      let dropped = false;
+      for (let i = 0; i < sendQueue.length; i++) {
+        if (sendQueue[i][0] === messageAwareness) {
+          sendQueue.splice(i, 1);
+          dropped = true;
+          break;
+        }
+      }
+      if (!dropped) {
+        sendQueue.shift(); // drop oldest if no awareness messages found
+      }
+      this.logger.warn('Dropping queued message due to backpressure', {
+        clientId: conn.user?.id || 'unknown',
+        droppedAwareness: dropped
       });
     }
 
@@ -694,12 +840,35 @@ class CollaborationRoom extends EventEmitter {
         return;
       }
 
-      // Flush while buffered under threshold
-      while (sendQueue.length > 0 && ws.bufferedAmount < WS_BACKPRESSURE_THRESHOLD) {
-        const msg = sendQueue.shift();
+      // Prioritize updates over awareness when flushing
+      const updates = [];
+      const awareness = [];
+      
+      // Separate by priority
+      for (const msg of sendQueue) {
+        if (msg[0] === messageAwareness) {
+          awareness.push(msg);
+        } else {
+          updates.push(msg);
+        }
+      }
+      
+      // Flush updates first, then awareness
+      const prioritizedQueue = [...updates, ...awareness];
+      
+      // Flush while buffered under soft threshold (more aggressive)
+      let flushed = 0;
+      while (prioritizedQueue.length > 0 && ws.bufferedAmount < WS_BACKPRESSURE_SOFT_THRESHOLD && flushed < 10) {
+        const msg = prioritizedQueue.shift();
+        const originalIndex = sendQueue.indexOf(msg);
+        if (originalIndex !== -1) {
+          sendQueue.splice(originalIndex, 1);
+        }
+        
         try {
           ws.send(msg);
           this.metrics.bytesOut += msg.byteLength;
+          flushed++;
         } catch (err) {
           this.logger.warn('Failed to flush queued message', { error: err.message });
           break;
@@ -710,7 +879,7 @@ class CollaborationRoom extends EventEmitter {
         clearInterval(conn.flushTimer);
         conn.flushTimer = null;
       }
-    }, 10); // small tick to drain
+    }, 5); // Smaller tick for more responsive draining
   }
 
   /**
@@ -795,58 +964,110 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Persist a single update to disk
+   * Persist a single update to disk (batched for performance)
    */
   async persistUpdate(update) {
-    const updatePath = path.join(this.getStorageDocPath(), 'updates');
-    await fs.mkdir(updatePath, { recursive: true });
-
-    const timestamp = Date.now();
-    const filename = `${timestamp}.update`;
-    const filepath = path.join(updatePath, filename);
-
-    await fs.writeFile(filepath, update);
+    // Batch writes: accumulate updates and write in batches
+    if (!this.pendingPersistence) {
+      this.pendingPersistence = [];
+      this.persistenceTimer = setTimeout(() => {
+        this.flushPersistence().catch(err => {
+          this.logger.error('Persistence flush error', err);
+        });
+      }, 1000); // Flush every second
+    }
+    
+    this.pendingPersistence.push({ update, timestamp: Date.now() });
+    
+    // Flush immediately if batch is getting large
+    if (this.pendingPersistence.length > 50) {
+      clearTimeout(this.persistenceTimer);
+      this.persistenceTimer = null;
+      await this.flushPersistence();
+    }
   }
 
   /**
-   * Create and save a snapshot
+   * Flush pending persistence writes
+   */
+  async flushPersistence() {
+    if (!this.pendingPersistence || this.pendingPersistence.length === 0) {
+      this.persistenceTimer = null;
+      return;
+    }
+
+    const updatePath = path.join(this.getStorageDocPath(), 'updates');
+    await fs.mkdir(updatePath, { recursive: true });
+
+    // Write all pending updates in parallel
+    const writePromises = this.pendingPersistence.map(({ update, timestamp }) => {
+      const filename = `${timestamp}.update`;
+      const filepath = path.join(updatePath, filename);
+      return fs.writeFile(filepath, update).catch(err => {
+        this.logger.warn('Failed to persist update', { filename, error: err.message });
+      });
+    });
+
+    await Promise.all(writePromises);
+    
+    this.pendingPersistence = [];
+    this.persistenceTimer = null;
+  }
+
+  /**
+   * Create and save a snapshot (optimized with async cleanup)
    */
   async createSnapshot() {
+    // Flush any pending persistence before snapshot
+    if (this.pendingPersistence && this.pendingPersistence.length > 0) {
+      await this.flushPersistence();
+    }
+
     const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
     await fs.mkdir(snapshotPath, { recursive: true });
 
     // Create state vector and snapshot
-    const stateVector = Y.encodeStateVector(this.doc);
+    // Use encodeStateAsUpdate which is more efficient than full encode
     const snapshot = Y.encodeStateAsUpdate(this.doc);
 
     const timestamp = Date.now();
     const filename = `${timestamp}.snapshot`;
     const filepath = path.join(snapshotPath, filename);
 
-    await fs.writeFile(filepath, snapshot);
-
-    // Update metadata
+    // Write snapshot and metadata in parallel
     const metadata = {
       timestamp,
       updateCount: this.metrics.totalUpdates,
-      size: snapshot.byteLength
+      size: snapshot.byteLength,
+      connections: this.connections.size
     };
 
-    await fs.writeFile(
-      path.join(snapshotPath, `${timestamp}.meta.json`),
-      JSON.stringify(metadata, null, 2)
-    );
+    await Promise.all([
+      fs.writeFile(filepath, snapshot),
+      fs.writeFile(
+        path.join(snapshotPath, `${timestamp}.meta.json`),
+        JSON.stringify(metadata, null, 2)
+      )
+    ]);
 
-    this.logger.info('Snapshot created', { filename, size: snapshot.byteLength });
+    this.logger.info('Snapshot created', { 
+      filename, 
+      size: snapshot.byteLength,
+      updateCount: this.metrics.totalUpdates 
+    });
 
     this.updateLog = [];
     this.lastSnapshot = timestamp;
 
+    // Enable GC after snapshot (don't block on cleanup)
     if (this.config.gcEnabled) {
       this.doc.gc = true;
     }
 
-    await this.cleanupOldSnapshots(10);
+    // Cleanup old snapshots asynchronously (don't block)
+    this.cleanupOldSnapshots(10).catch(err => {
+      this.logger.warn('Snapshot cleanup error', { error: err.message });
+    });
   }
 
   /**
@@ -1005,9 +1226,19 @@ class CollaborationRoom extends EventEmitter {
       this.flushUpdateBatch();
     }
 
+    // Flush pending persistence
+    if (this.persistenceTimer) {
+      clearTimeout(this.persistenceTimer);
+      await this.flushPersistence();
+    }
+
     // Disconnect all clients
     for (const [clientId, { ws }] of this.connections) {
-      ws.close();
+      try {
+        ws.close();
+      } catch (err) {
+        // Ignore close errors
+      }
     }
 
     this.connections.clear();
