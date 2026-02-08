@@ -140,7 +140,9 @@ class CollaborationRoom extends EventEmitter {
 
   setupDocumentListeners() {
     this.doc.on('update', (update, origin) => {
-      if (origin !== 'persistence') {
+      // Only process updates from local clients, not from persistence or remote instances
+      // This prevents loops and duplicate persistence
+      if (origin !== 'persistence' && origin !== 'remote' && origin !== 'init') {
         this.updateLog.push(update);
         this.metrics.totalUpdates++;
         this.metrics.lastActivity = Date.now();
@@ -207,17 +209,20 @@ class CollaborationRoom extends EventEmitter {
       if (!this.connections.has(clientId)) return;
       if (ws.readyState !== ws.OPEN) return;
 
-      // Seed awareness so other clients see the user immediately
+      // Send initial sync first (document state)
+      this.sendSyncStep1(ws);
+
+      // Then send awareness state so other clients see the user
       // NOTE: We store user awareness state keyed by clientId (connection ID)
       // The client's doc.clientID is different from our connectionId
       try {
-        // Ensure awareness is initialized
+        // Ensure awareness is initialized (should always be true, but guard against edge cases)
         if (!this.awareness) {
           this.logger.warn('Awareness not initialized, reinitializing', { clientId });
           this.awareness = new awarenessProtocol.Awareness(this.doc);
         }
 
-        // For now, just send any existing awareness states to the new client
+        // Send any existing awareness states to the new client
         this.sendAwarenessToClient(ws);
       } catch (err) {
         this.logger.warn('Failed to setup initial awareness for client', {
@@ -225,12 +230,6 @@ class CollaborationRoom extends EventEmitter {
           error: err.message
         });
       }
-
-      // Send initial sync
-      this.sendSyncStep1(ws);
-
-      // Send current awareness state (only if properly initialized)
-      this.sendAwarenessToClient(ws);
     });
   }
 
@@ -444,10 +443,21 @@ class CollaborationRoom extends EventEmitter {
   }
 
   /**
-   * Handle sync step 2: server sends missing updates
+   * Handle sync step 2: client sends state vector, server responds with missing updates
    */
   handleSyncStep2(clientId, decoder) {
-    syncProtocol.readSyncStep2(decoder, this.doc, 'sync');
+    const conn = this.connections.get(clientId);
+    if (!conn) return;
+
+    // Create encoder for response
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+    
+    // Read client's state vector and write missing updates to encoder
+    syncProtocol.readSyncStep2(decoder, encoder, this.doc);
+    
+    // Send the missing updates back to the client
+    this.sendMessage(conn.ws, encoding.toUint8Array(encoder));
   }
 
   async handleUpdate(clientId, decoder) {
@@ -459,24 +469,47 @@ class CollaborationRoom extends EventEmitter {
 
     // Read the update bytes from the decoder BEFORE applying
     const update = decoding.readVarUint8Array(decoder);
-    // Apply the update to the server's doc with origin to prevent re-broadcast
-    Y.applyUpdate(this.doc, update, clientId);
-
-    this.emit('doc-update', { docId: this.docId, origin: clientId, update });
-
-    // Publish to cross-instance bridge (if enabled)
-    if (this.pubSubBridge?.enabled) {
-      this.publishUpdate(update);
+    
+    // Validate update is not empty
+    if (!update || update.byteLength === 0) {
+      this.logger.warn('Received empty update from client', { clientId });
+      return;
     }
 
-    // Broadcast to all OTHER clients (exclude the sender)
-    if (this.config.batchUpdatesEnabled) {
-      this.queueUpdateForBroadcast(update, [clientId]);
-    } else {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+    try {
+      // Apply the update to the server's doc with origin to prevent re-broadcast
+      // The origin parameter ensures Yjs doesn't trigger 'update' event for this origin
+      // but we still need to manually broadcast to other clients
+      Y.applyUpdate(this.doc, update, clientId);
+
+      this.emit('doc-update', { docId: this.docId, origin: clientId, update });
+
+      // Publish to cross-instance bridge (if enabled) - exclude our own instance
+      if (this.pubSubBridge?.enabled) {
+        this.publishUpdate(update);
+      }
+
+      // Broadcast to all OTHER clients (exclude the sender)
+      // This is safe because we applied with origin=clientId, so the sender won't receive it back
+      if (this.config.batchUpdatesEnabled) {
+        this.queueUpdateForBroadcast(update, [clientId]);
+      } else {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+      }
+    } catch (err) {
+      this.logger.error('Failed to apply update from client', err, { clientId });
+      // Send error back to client
+      if (conn.ws.readyState === conn.ws.OPEN) {
+        conn.ws.send(JSON.stringify({
+          type: 'error',
+          code: 'UPDATE_APPLY_FAILED',
+          message: 'Failed to apply update',
+          timestamp: Date.now()
+        }));
+      }
     }
   }
 
@@ -526,26 +559,49 @@ class CollaborationRoom extends EventEmitter {
     const conn = this.connections.get(clientId);
     if (!conn) return;
 
-    const update = decoding.readVarUint8Array(decoder);
-    const entries = decodeAwarenessClientIds(update);
-    if (entries.length > 0) {
-      for (const entry of entries) {
-        if (entry.state === null) {
-          conn.controlledAwarenessIds.delete(entry.clientId);
-        } else {
-          conn.controlledAwarenessIds.add(entry.clientId);
-        }
-      }
+    // Guard against uninitialized awareness
+    if (!this.awareness) {
+      this.logger.warn('Cannot handle awareness: awareness not initialized', { clientId });
+      return;
     }
 
-    awarenessProtocol.applyAwarenessUpdate(
-      this.awareness,
-      update,
-      clientId
-    );
+    const update = decoding.readVarUint8Array(decoder);
+    
+    // Validate update
+    if (!update || update.byteLength === 0) {
+      this.logger.warn('Received empty awareness update', { clientId });
+      return;
+    }
 
-    if (this.pubSubBridge?.enabled) {
-      this.publishAwareness(update, clientId);
+    try {
+      const entries = decodeAwarenessClientIds(update);
+      if (entries.length > 0) {
+        for (const entry of entries) {
+          if (entry.state === null) {
+            conn.controlledAwarenessIds.delete(entry.clientId);
+          } else {
+            conn.controlledAwarenessIds.add(entry.clientId);
+          }
+        }
+      }
+
+      // Apply awareness update with clientId as origin
+      awarenessProtocol.applyAwarenessUpdate(
+        this.awareness,
+        update,
+        clientId
+      );
+
+      // Publish to cross-instance bridge (if enabled)
+      if (this.pubSubBridge?.enabled) {
+        this.publishAwareness(update, clientId);
+      }
+
+      // Broadcast to other clients (awareness protocol handles exclusion automatically)
+      // But we need to manually broadcast since we're using custom origin
+      this.scheduleAwarenessBroadcast(entries.map(e => e.clientId));
+    } catch (err) {
+      this.logger.error('Failed to handle awareness update', err, { clientId });
     }
   }
 
@@ -751,19 +807,30 @@ class CollaborationRoom extends EventEmitter {
    * Apply remote Yjs update received via pub/sub
    */
   applyRemoteUpdate(update) {
-    // Apply with a fixed origin to avoid echo logic
-    Y.applyUpdate(this.doc, update, 'remote');
+    // Validate update
+    if (!update || update.byteLength === 0) {
+      this.logger.warn('Received empty remote update');
+      return;
+    }
 
-    this.emit('doc-update', { docId: this.docId, origin: 'remote', update });
+    try {
+      // Apply with a fixed origin 'remote' to avoid echo logic and prevent re-publishing
+      // This ensures the update is applied but won't trigger our own publishUpdate
+      Y.applyUpdate(this.doc, update, 'remote');
 
-    // Broadcast to all local clients
-    if (this.config.batchUpdatesEnabled) {
-      this.queueUpdateForBroadcast(update, []);
-    } else {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), []);
+      this.emit('doc-update', { docId: this.docId, origin: 'remote', update });
+
+      // Broadcast to all local clients (no exclusions since this is from another instance)
+      if (this.config.batchUpdatesEnabled) {
+        this.queueUpdateForBroadcast(update, []);
+      } else {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), []);
+      }
+    } catch (err) {
+      this.logger.error('Failed to apply remote update', err);
     }
   }
 
@@ -771,11 +838,34 @@ class CollaborationRoom extends EventEmitter {
    * Apply remote awareness update received via pub/sub
    */
   applyRemoteAwareness(update) {
-    awarenessProtocol.applyAwarenessUpdate(
-      this.awareness,
-      update,
-      'remote'
-    );
+    // Guard against uninitialized awareness
+    if (!this.awareness) {
+      this.logger.warn('Cannot apply remote awareness: awareness not initialized');
+      return;
+    }
+
+    // Validate update
+    if (!update || update.byteLength === 0) {
+      this.logger.warn('Received empty remote awareness update');
+      return;
+    }
+
+    try {
+      // Apply awareness update with 'remote' origin
+      awarenessProtocol.applyAwarenessUpdate(
+        this.awareness,
+        update,
+        'remote'
+      );
+
+      // Extract client IDs from update to broadcast
+      const entries = decodeAwarenessClientIds(update);
+      if (entries.length > 0) {
+        this.scheduleAwarenessBroadcast(entries.map(e => e.clientId));
+      }
+    } catch (err) {
+      this.logger.error('Failed to apply remote awareness update', err);
+    }
   }
 
   /**
@@ -861,6 +951,16 @@ class CollaborationRoom extends EventEmitter {
       for (const docPath of candidates) {
         try {
           const snapshotPath = path.join(docPath, 'snapshots');
+          
+          // Check if snapshot directory exists
+          try {
+            await fs.access(snapshotPath);
+          } catch {
+            // Directory doesn't exist, try loading updates only
+            await this.loadUpdatesAfter(0, docPath);
+            return;
+          }
+
           const snapshots = await fs.readdir(snapshotPath);
           const snapshotFiles = snapshots
             .filter(f => f.endsWith('.snapshot'))
@@ -870,15 +970,35 @@ class CollaborationRoom extends EventEmitter {
           if (snapshotFiles.length > 0) {
             const latestSnapshot = snapshotFiles[0];
             const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
+            
+            // Validate snapshot data
+            if (!snapshotData || snapshotData.byteLength === 0) {
+              this.logger.warn('Snapshot file is empty', { snapshot: latestSnapshot, docPath });
+              await this.loadUpdatesAfter(0, docPath);
+              return;
+            }
+
             try {
+              // Apply snapshot with 'persistence' origin to prevent broadcasting
               Y.applyUpdate(this.doc, snapshotData, 'persistence');
-              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
+              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath, size: snapshotData.byteLength });
               const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-              this.lastSnapshot = snapshotTimestamp;
+              
+              // Validate timestamp
+              if (isNaN(snapshotTimestamp) || snapshotTimestamp <= 0) {
+                this.logger.warn('Invalid snapshot timestamp, using current time', { snapshot: latestSnapshot });
+                this.lastSnapshot = Date.now();
+              } else {
+                this.lastSnapshot = snapshotTimestamp;
+              }
+              
               await this.loadUpdatesAfter(snapshotTimestamp, docPath);
               return;
             } catch (err) {
               this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message, docPath });
+              // Try loading updates without snapshot
+              await this.loadUpdatesAfter(0, docPath);
+              return;
             }
           }
 
@@ -908,25 +1028,51 @@ class CollaborationRoom extends EventEmitter {
   async loadUpdatesAfter(timestamp, docPath = this.getStorageDocPath()) {
     try {
       const updatePath = path.join(docPath, 'updates');
+      
+      // Check if update directory exists
+      try {
+        await fs.access(updatePath);
+      } catch {
+        // Directory doesn't exist, no updates to load
+        return;
+      }
+
       const updates = await fs.readdir(updatePath);
 
       const relevantUpdates = updates
         .filter(f => f.endsWith('.update'))
-        .filter(f => parseInt(f.split('.')[0]) > timestamp)
+        .filter(f => {
+          const fileTimestamp = parseInt(f.split('.')[0]);
+          return !isNaN(fileTimestamp) && fileTimestamp > timestamp;
+        })
         .sort();
 
+      let loadedCount = 0;
+      let skippedCount = 0;
+
       for (const updateFile of relevantUpdates) {
-        const updateData = await fs.readFile(path.join(updatePath, updateFile));
         try {
+          const updateData = await fs.readFile(path.join(updatePath, updateFile));
+          
+          // Validate update data
+          if (!updateData || updateData.byteLength === 0) {
+            this.logger.warn('Skipping empty update file', { file: updateFile });
+            skippedCount++;
+            continue;
+          }
+
+          // Apply update with 'persistence' origin to prevent broadcasting
           Y.applyUpdate(this.doc, updateData, 'persistence');
           this.updateLog.push(updateData);
+          loadedCount++;
         } catch (err) {
           this.logger.warn('Skipping corrupted update', { file: updateFile, error: err.message });
+          skippedCount++;
         }
       }
 
-      if (relevantUpdates.length > 0) {
-        this.logger.info('Loaded updates', { count: relevantUpdates.length });
+      if (loadedCount > 0) {
+        this.logger.info('Loaded updates', { count: loadedCount, skipped: skippedCount });
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
@@ -1140,31 +1286,45 @@ class CollaborationService {
    */
   handlePubSubUpdate(msg) {
     if (!msg || !msg.docId || !msg.type) {
+      this.logger.warn('Invalid pub/sub message', { msg });
       return;
     }
 
+    // Only process messages from other instances
+    if (msg.originId === this.pubSubBridge?.instanceId) {
+      return;
+    }
+
+    // Get room (will create if doesn't exist, which is fine for cross-instance sync)
     const room = this.getRoom(msg.docId);
-    if (!room) return;
+    if (!room) {
+      this.logger.warn('Failed to get room for pub/sub update', { docId: msg.docId });
+      return;
+    }
 
     try {
       const update = msg.update ? Buffer.from(msg.update, 'base64') : null;
 
       switch (msg.type) {
         case 'update':
-          if (update) {
+          if (update && update.byteLength > 0) {
             room.applyRemoteUpdate(update);
+          } else {
+            this.logger.warn('Received empty update from pub/sub', { docId: msg.docId });
           }
           break;
         case 'awareness':
-          if (update) {
+          if (update && update.byteLength > 0) {
             room.applyRemoteAwareness(update);
+          } else {
+            this.logger.warn('Received empty awareness update from pub/sub', { docId: msg.docId });
           }
           break;
         default:
-          this.logger.warn('Unknown pub/sub message type', { type: msg.type });
+          this.logger.warn('Unknown pub/sub message type', { type: msg.type, docId: msg.docId });
       }
     } catch (err) {
-      this.logger.error('Failed to process pub/sub update', err);
+      this.logger.error('Failed to process pub/sub update', err, { docId: msg.docId, type: msg.type });
     }
   }
 }
