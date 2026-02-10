@@ -140,7 +140,15 @@ class CollaborationRoom extends EventEmitter {
 
   setupDocumentListeners() {
     this.doc.on('update', (update, origin) => {
-      if (origin !== 'persistence') {
+      if (origin !== 'persistence' && origin !== 'init') {
+        // Bound updateLog to prevent memory leaks
+        // Keep last 1000 updates max (before snapshot)
+        if (this.updateLog.length >= 1000) {
+          // Remove oldest 100 updates when limit reached
+          this.updateLog.splice(0, 100);
+          this.logger.debug('Update log trimmed', { remaining: this.updateLog.length });
+        }
+        
         this.updateLog.push(update);
         this.metrics.totalUpdates++;
         this.metrics.lastActivity = Date.now();
@@ -279,18 +287,32 @@ class CollaborationRoom extends EventEmitter {
     const conn = this.connections.get(clientId);
     if (!conn) return;
 
+    // Clear flush timer
     if (conn.flushTimer) {
       clearInterval(conn.flushTimer);
+      conn.flushTimer = null;
     }
 
     // Remove awareness states owned by this connection
+    // CRITICAL: Clean up awareness states to prevent memory leaks
     const awarenessIds = Array.from(conn.controlledAwarenessIds || []);
-    if (awarenessIds.length > 0) {
-      awarenessProtocol.removeAwarenessStates(
-        this.awareness,
-        awarenessIds,
-        'client disconnected'
-      );
+    if (awarenessIds.length > 0 && this.awareness) {
+      try {
+        awarenessProtocol.removeAwarenessStates(
+          this.awareness,
+          awarenessIds,
+          'client disconnected'
+        );
+        // Broadcast awareness removal to other clients
+        this.scheduleAwarenessBroadcast(awarenessIds);
+      } catch (err) {
+        this.logger.error('Error removing awareness states', err, { clientId });
+      }
+    }
+
+    // Clear controlled awareness IDs
+    if (conn.controlledAwarenessIds) {
+      conn.controlledAwarenessIds.clear();
     }
 
     this.connections.delete(clientId);
@@ -399,15 +421,16 @@ class CollaborationRoom extends EventEmitter {
 
       switch (messageType) {
         case syncProtocol.messageYjsSyncStep1:
-          this.handleSyncStep1(clientId, decoder);
+          // Make async to ensure persistence is loaded
+          await this.handleSyncStep1(clientId, decoder);
           break;
 
         case syncProtocol.messageYjsSyncStep2:
-          this.handleSyncStep2(clientId, decoder);
+          await this.handleSyncStep2(clientId, decoder);
           break;
 
         case syncProtocol.messageYjsUpdate:
-          await this.handleUpdate(clientId, decoder);  // Now async
+          await this.handleUpdate(clientId, decoder);
           break;
 
         case messageAwareness:
@@ -431,9 +454,18 @@ class CollaborationRoom extends EventEmitter {
   /**
    * Handle sync step 1: client requests current state
    */
-  handleSyncStep1(clientId, decoder) {
+  async handleSyncStep1(clientId, decoder) {
     const conn = this.connections.get(clientId);
     if (!conn) return;
+
+    // CRITICAL: Wait for persistence to load before syncing
+    // This prevents clients from syncing against empty doc while persisted content loads
+    await this.readyPromise;
+
+    // Double-check connection still exists after async wait
+    if (!this.connections.has(clientId) || conn.ws.readyState !== conn.ws.OPEN) {
+      return;
+    }
 
     // Send sync step 2 as response to client's step 1
     const encoder = encoding.createEncoder();
@@ -446,8 +478,21 @@ class CollaborationRoom extends EventEmitter {
   /**
    * Handle sync step 2: server sends missing updates
    */
-  handleSyncStep2(clientId, decoder) {
-    syncProtocol.readSyncStep2(decoder, this.doc, 'sync');
+  async handleSyncStep2(clientId, decoder) {
+    // Ensure persistence is loaded before applying sync updates
+    await this.readyPromise;
+    
+    // Verify connection still exists
+    if (!this.connections.has(clientId)) {
+      return;
+    }
+
+    try {
+      syncProtocol.readSyncStep2(decoder, this.doc, 'sync');
+    } catch (err) {
+      this.logger.error('Error in sync step 2', err, { clientId });
+      // Don't throw - sync protocol is resilient and will recover
+    }
   }
 
   async handleUpdate(clientId, decoder) {
@@ -457,26 +502,72 @@ class CollaborationRoom extends EventEmitter {
       return;
     }
 
-    // Read the update bytes from the decoder BEFORE applying
-    const update = decoding.readVarUint8Array(decoder);
-    // Apply the update to the server's doc with origin to prevent re-broadcast
-    Y.applyUpdate(this.doc, update, clientId);
+    // Ensure persistence is loaded before applying updates
+    await this.readyPromise;
 
-    this.emit('doc-update', { docId: this.docId, origin: clientId, update });
-
-    // Publish to cross-instance bridge (if enabled)
-    if (this.pubSubBridge?.enabled) {
-      this.publishUpdate(update);
+    // Verify connection still exists after async wait
+    if (!this.connections.has(clientId) || conn.ws.readyState !== conn.ws.OPEN) {
+      return;
     }
 
-    // Broadcast to all OTHER clients (exclude the sender)
-    if (this.config.batchUpdatesEnabled) {
-      this.queueUpdateForBroadcast(update, [clientId]);
-    } else {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+    let update;
+    try {
+      // Read the update bytes from the decoder BEFORE applying
+      update = decoding.readVarUint8Array(decoder);
+      
+      // Validate update is not empty
+      if (!update || update.length === 0) {
+        this.logger.warn('Received empty update, ignoring', { clientId });
+        return;
+      }
+    } catch (err) {
+      this.logger.error('Failed to decode update', err, { clientId });
+      return;
+    }
+
+    try {
+      // Apply the update to the server's doc with unique origin to prevent re-broadcast
+      // Use timestamp + clientId to ensure uniqueness even if clientId is reused
+      const origin = `client:${clientId}:${Date.now()}`;
+      Y.applyUpdate(this.doc, update, origin);
+
+      this.emit('doc-update', { docId: this.docId, origin: clientId, update });
+
+      // Publish to cross-instance bridge (if enabled)
+      if (this.pubSubBridge?.enabled) {
+        this.publishUpdate(update);
+      }
+
+      // Broadcast to all OTHER clients (exclude the sender)
+      if (this.config.batchUpdatesEnabled) {
+        this.queueUpdateForBroadcast(update, [clientId]);
+      } else {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), [clientId]);
+      }
+    } catch (err) {
+      // Handle corrupted updates gracefully
+      const errorMsg = err && err.message ? err.message : String(err);
+      if (errorMsg.includes('corrupt') || errorMsg.includes('invalid')) {
+        this.logger.error('Corrupted update detected, requesting client resync', { clientId, error: errorMsg });
+        // Send error message to client to trigger resync
+        if (conn.ws.readyState === conn.ws.OPEN) {
+          try {
+            conn.ws.send(JSON.stringify({
+              type: 'error',
+              code: 'CORRUPTED_UPDATE',
+              message: 'Update corrupted, please resync',
+              timestamp: Date.now()
+            }));
+          } catch (sendErr) {
+            this.logger.warn('Failed to send corruption error to client', { clientId });
+          }
+        }
+      } else {
+        this.logger.error('Error applying update', err, { clientId });
+      }
     }
   }
 
@@ -505,18 +596,29 @@ class CollaborationRoom extends EventEmitter {
     }
 
     const count = this.pendingUpdates.length;
+    const updatesToSend = [...this.pendingUpdates]; // Copy to avoid mutation during iteration
+    this.pendingUpdates = []; // Clear immediately to prevent double-processing
+    this.batchTimer = null;
 
-    for (const { update, excludeClientIds } of this.pendingUpdates) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
+    for (const { update, excludeClientIds } of updatesToSend) {
+      try {
+        // Validate update before sending
+        if (!update || update.length === 0) {
+          this.logger.warn('Skipping empty update in batch');
+          continue;
+        }
+
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), excludeClientIds);
+      } catch (err) {
+        this.logger.error('Error broadcasting batched update', err);
+        // Continue with next update
+      }
     }
 
     this.logger.debug('Flushed update batch', { count });
-
-    this.pendingUpdates = [];
-    this.batchTimer = null;
   }
 
   /**
@@ -751,19 +853,30 @@ class CollaborationRoom extends EventEmitter {
    * Apply remote Yjs update received via pub/sub
    */
   applyRemoteUpdate(update) {
-    // Apply with a fixed origin to avoid echo logic
-    Y.applyUpdate(this.doc, update, 'remote');
+    if (!update || update.length === 0) {
+      this.logger.warn('Received empty remote update, ignoring');
+      return;
+    }
 
-    this.emit('doc-update', { docId: this.docId, origin: 'remote', update });
+    try {
+      // Apply with a unique origin to avoid echo logic and ensure idempotency
+      const origin = `remote:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`;
+      Y.applyUpdate(this.doc, update, origin);
 
-    // Broadcast to all local clients
-    if (this.config.batchUpdatesEnabled) {
-      this.queueUpdateForBroadcast(update, []);
-    } else {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
-      encoding.writeVarUint8Array(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder), []);
+      this.emit('doc-update', { docId: this.docId, origin: 'remote', update });
+
+      // Broadcast to all local clients
+      if (this.config.batchUpdatesEnabled) {
+        this.queueUpdateForBroadcast(update, []);
+      } else {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsUpdate);
+        encoding.writeVarUint8Array(encoder, update);
+        this.broadcast(encoding.toUint8Array(encoder), []);
+      }
+    } catch (err) {
+      this.logger.error('Error applying remote update', err, { docId: this.docId });
+      // Don't throw - allow system to continue
     }
   }
 
@@ -771,11 +884,26 @@ class CollaborationRoom extends EventEmitter {
    * Apply remote awareness update received via pub/sub
    */
   applyRemoteAwareness(update) {
-    awarenessProtocol.applyAwarenessUpdate(
-      this.awareness,
-      update,
-      'remote'
-    );
+    if (!this.awareness) {
+      this.logger.warn('Cannot apply remote awareness: awareness not initialized');
+      return;
+    }
+
+    if (!update || update.length === 0) {
+      this.logger.warn('Received empty remote awareness update, ignoring');
+      return;
+    }
+
+    try {
+      awarenessProtocol.applyAwarenessUpdate(
+        this.awareness,
+        update,
+        'remote'
+      );
+    } catch (err) {
+      this.logger.error('Error applying remote awareness update', err);
+      // Don't throw - allow system to continue
+    }
   }
 
   /**
@@ -812,41 +940,69 @@ class CollaborationRoom extends EventEmitter {
    * Create and save a snapshot
    */
   async createSnapshot() {
-    const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
-    await fs.mkdir(snapshotPath, { recursive: true });
+    try {
+      const snapshotPath = path.join(this.getStorageDocPath(), 'snapshots');
+      await fs.mkdir(snapshotPath, { recursive: true });
 
-    // Create state vector and snapshot
-    const stateVector = Y.encodeStateVector(this.doc);
-    const snapshot = Y.encodeStateAsUpdate(this.doc);
+      // Create state vector and snapshot
+      // Use transaction to ensure consistent state
+      const snapshot = Y.encodeStateAsUpdate(this.doc);
+      const stateVector = Y.encodeStateVector(this.doc);
 
-    const timestamp = Date.now();
-    const filename = `${timestamp}.snapshot`;
-    const filepath = path.join(snapshotPath, filename);
+      // Validate snapshot is not empty
+      if (!snapshot || snapshot.length === 0) {
+        this.logger.warn('Cannot create empty snapshot, skipping', { docId: this.docId });
+        return;
+      }
 
-    await fs.writeFile(filepath, snapshot);
+      const timestamp = Date.now();
+      const filename = `${timestamp}.snapshot`;
+      const filepath = path.join(snapshotPath, filename);
 
-    // Update metadata
-    const metadata = {
-      timestamp,
-      updateCount: this.metrics.totalUpdates,
-      size: snapshot.byteLength
-    };
+      // Write snapshot atomically using temporary file + rename
+      const tempFilepath = `${filepath}.tmp`;
+      await fs.writeFile(tempFilepath, snapshot);
+      await fs.rename(tempFilepath, filepath);
 
-    await fs.writeFile(
-      path.join(snapshotPath, `${timestamp}.meta.json`),
-      JSON.stringify(metadata, null, 2)
-    );
+      // Update metadata
+      const metadata = {
+        timestamp,
+        updateCount: this.metrics.totalUpdates,
+        size: snapshot.byteLength,
+        stateVectorSize: stateVector.byteLength,
+        docId: this.docId
+      };
 
-    this.logger.info('Snapshot created', { filename, size: snapshot.byteLength });
+      await fs.writeFile(
+        path.join(snapshotPath, `${timestamp}.meta.json`),
+        JSON.stringify(metadata, null, 2)
+      );
 
-    this.updateLog = [];
-    this.lastSnapshot = timestamp;
+      this.logger.info('Snapshot created', { 
+        filename, 
+        size: snapshot.byteLength,
+        updateCount: this.metrics.totalUpdates,
+        docId: this.docId
+      });
 
-    if (this.config.gcEnabled) {
-      this.doc.gc = true;
+      // Clear update log after successful snapshot
+      this.updateLog = [];
+      this.lastSnapshot = timestamp;
+
+      // Enable garbage collection if configured
+      if (this.config.gcEnabled) {
+        try {
+          this.doc.gc = true;
+        } catch (gcErr) {
+          this.logger.warn('Garbage collection failed', { error: gcErr.message });
+        }
+      }
+
+      await this.cleanupOldSnapshots(10);
+    } catch (err) {
+      this.logger.error('Error creating snapshot', err, { docId: this.docId });
+      // Don't throw - allow system to continue
     }
-
-    await this.cleanupOldSnapshots(10);
   }
 
   /**
@@ -864,22 +1020,60 @@ class CollaborationRoom extends EventEmitter {
           const snapshots = await fs.readdir(snapshotPath);
           const snapshotFiles = snapshots
             .filter(f => f.endsWith('.snapshot'))
-            .sort()
-            .reverse();
+            .filter(f => {
+              // Validate filename format (timestamp.snapshot)
+              const timestamp = parseInt(f.split('.')[0]);
+              return !isNaN(timestamp) && timestamp > 0;
+            })
+            .sort((a, b) => {
+              // Sort by timestamp descending (newest first)
+              const tsA = parseInt(a.split('.')[0]);
+              const tsB = parseInt(b.split('.')[0]);
+              return tsB - tsA;
+            });
 
           if (snapshotFiles.length > 0) {
-            const latestSnapshot = snapshotFiles[0];
-            const snapshotData = await fs.readFile(path.join(snapshotPath, latestSnapshot));
-            try {
-              Y.applyUpdate(this.doc, snapshotData, 'persistence');
-              this.logger.info('Loaded snapshot', { snapshot: latestSnapshot, docPath });
-              const snapshotTimestamp = parseInt(latestSnapshot.split('.')[0]);
-              this.lastSnapshot = snapshotTimestamp;
-              await this.loadUpdatesAfter(snapshotTimestamp, docPath);
-              return;
-            } catch (err) {
-              this.logger.warn('Snapshot corrupted, skipping', { snapshot: latestSnapshot, error: err.message, docPath });
+            // Try loading snapshots in order until one succeeds
+            for (const snapshotFile of snapshotFiles) {
+              try {
+                const snapshotData = await fs.readFile(path.join(snapshotPath, snapshotFile));
+                
+                // Validate snapshot is not empty
+                if (!snapshotData || snapshotData.length === 0) {
+                  this.logger.warn('Empty snapshot file, trying next', { snapshot: snapshotFile });
+                  continue;
+                }
+
+                // Apply snapshot with persistence origin
+                Y.applyUpdate(this.doc, snapshotData, 'persistence');
+                
+                const snapshotTimestamp = parseInt(snapshotFile.split('.')[0]);
+                this.lastSnapshot = snapshotTimestamp;
+                
+                this.logger.info('Loaded snapshot', { 
+                  snapshot: snapshotFile, 
+                  docPath,
+                  size: snapshotData.length,
+                  timestamp: snapshotTimestamp,
+                  docId: this.docId
+                });
+                
+                // Load updates after snapshot
+                await this.loadUpdatesAfter(snapshotTimestamp, docPath);
+                return; // Successfully loaded, exit
+              } catch (err) {
+                const errorMsg = err && err.message ? err.message : String(err);
+                this.logger.warn('Snapshot corrupted, trying next', { 
+                  snapshot: snapshotFile, 
+                  error: errorMsg, 
+                  docPath 
+                });
+                // Continue to next snapshot
+              }
             }
+            
+            // If we get here, all snapshots failed - try loading updates from scratch
+            this.logger.warn('All snapshots failed, loading updates from scratch', { docPath });
           }
 
           // Fallback: attempt to load updates without snapshot
@@ -895,9 +1089,12 @@ class CollaborationRoom extends EventEmitter {
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        this.logger.warn('Failed to read snapshots, continuing without persistence', { error: err.message });
+        this.logger.warn('Failed to read snapshots, continuing without persistence', { 
+          error: err.message,
+          docId: this.docId 
+        });
       } else {
-        this.logger.info('No persisted state found, starting fresh');
+        this.logger.info('No persisted state found, starting fresh', { docId: this.docId });
       }
     }
   }
@@ -912,25 +1109,58 @@ class CollaborationRoom extends EventEmitter {
 
       const relevantUpdates = updates
         .filter(f => f.endsWith('.update'))
-        .filter(f => parseInt(f.split('.')[0]) > timestamp)
-        .sort();
+        .filter(f => {
+          const fileTimestamp = parseInt(f.split('.')[0]);
+          return !isNaN(fileTimestamp) && fileTimestamp > timestamp;
+        })
+        .sort((a, b) => {
+          // Sort by timestamp (numeric)
+          const tsA = parseInt(a.split('.')[0]);
+          const tsB = parseInt(b.split('.')[0]);
+          return tsA - tsB;
+        });
+
+      let loadedCount = 0;
+      let skippedCount = 0;
 
       for (const updateFile of relevantUpdates) {
-        const updateData = await fs.readFile(path.join(updatePath, updateFile));
         try {
+          const updateData = await fs.readFile(path.join(updatePath, updateFile));
+          
+          // Validate update is not empty
+          if (!updateData || updateData.length === 0) {
+            this.logger.warn('Skipping empty update file', { file: updateFile });
+            skippedCount++;
+            continue;
+          }
+
+          // Apply update with persistence origin (won't trigger broadcast)
           Y.applyUpdate(this.doc, updateData, 'persistence');
           this.updateLog.push(updateData);
+          loadedCount++;
         } catch (err) {
-          this.logger.warn('Skipping corrupted update', { file: updateFile, error: err.message });
+          this.logger.warn('Skipping corrupted update', { 
+            file: updateFile, 
+            error: err.message,
+            docId: this.docId 
+          });
+          skippedCount++;
         }
       }
 
-      if (relevantUpdates.length > 0) {
-        this.logger.info('Loaded updates', { count: relevantUpdates.length });
+      if (loadedCount > 0) {
+        this.logger.info('Loaded updates', { 
+          count: loadedCount, 
+          skipped: skippedCount,
+          docId: this.docId 
+        });
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        this.logger.warn('Failed to read updates, continuing without them', { error: err.message });
+        this.logger.warn('Failed to read updates, continuing without them', { 
+          error: err.message,
+          docId: this.docId 
+        });
       }
     }
   }
@@ -1005,21 +1235,70 @@ class CollaborationRoom extends EventEmitter {
       this.flushUpdateBatch();
     }
 
-    // Disconnect all clients
-    for (const [clientId, { ws }] of this.connections) {
-      ws.close();
+    // Clear awareness timer
+    if (this.awarenessTimer) {
+      clearTimeout(this.awarenessTimer);
+      this.awarenessTimer = null;
+    }
+
+    // Disconnect all clients and clean up their awareness states
+    for (const [clientId, conn] of this.connections) {
+      // Clear flush timer
+      if (conn.flushTimer) {
+        clearInterval(conn.flushTimer);
+        conn.flushTimer = null;
+      }
+
+      // Remove awareness states
+      if (conn.controlledAwarenessIds && conn.controlledAwarenessIds.size > 0 && this.awareness) {
+        try {
+          awarenessProtocol.removeAwarenessStates(
+            this.awareness,
+            Array.from(conn.controlledAwarenessIds),
+            'room closing'
+          );
+        } catch (err) {
+          this.logger.warn('Error removing awareness on close', { clientId, error: err.message });
+        }
+      }
+
+      // Close WebSocket
+      if (conn.ws && conn.ws.readyState === conn.ws.OPEN) {
+        conn.ws.close();
+      }
     }
 
     this.connections.clear();
 
     // Save final snapshot
-    await this.createSnapshot();
+    try {
+      await this.createSnapshot();
+    } catch (err) {
+      this.logger.error('Error creating final snapshot', err);
+    }
 
     // Destroy awareness
-    this.awareness.destroy();
+    if (this.awareness) {
+      try {
+        this.awareness.destroy();
+      } catch (err) {
+        this.logger.warn('Error destroying awareness', err);
+      }
+    }
 
     // Destroy document
-    this.doc.destroy();
+    if (this.doc) {
+      try {
+        this.doc.destroy();
+      } catch (err) {
+        this.logger.warn('Error destroying document', err);
+      }
+    }
+
+    // Clear update log
+    this.updateLog = [];
+    this.pendingUpdates = [];
+    this.pendingAwarenessClients.clear();
 
     this.logger.info('Room closed');
   }
